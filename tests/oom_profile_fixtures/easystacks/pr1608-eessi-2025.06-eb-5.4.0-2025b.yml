@@ -1,0 +1,4 @@
+# The line EESSI/software-layer#1608 adds to
+# easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.0-2025b.yml.
+easyconfigs:
+  - slepc4py-3.24.0-foss-2025b.eb

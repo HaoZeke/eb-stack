@@ -175,6 +175,7 @@ jobs:
             --test llms_txt \
             --test mcp_registry \
             --test mcp_stdio \
+            --test oom_profile \
             --test optimisation_criteria \
             --test pr_merge_order \
             --test pr_overlap \

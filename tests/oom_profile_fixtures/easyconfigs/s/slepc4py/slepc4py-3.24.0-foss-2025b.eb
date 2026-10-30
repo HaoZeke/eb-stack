@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'slepc4py'
+version = '3.24.0'
+
+homepage = 'https://example.org/slepc4py'
+description = """Fixture. slepc4py builds SLEPc and PETSc, as in EESSI/software-layer#1608."""
+
+toolchain = {'name': 'foss', 'version': '2025b'}
+
+source_urls = ['https://example.org/slepc4py/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('SLEPc', '3.24.0')]
+
+moduleclass = 'lib'

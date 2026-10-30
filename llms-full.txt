@@ -92,6 +92,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md).
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
+    [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -3821,6 +3822,193 @@ See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.h
 [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/arch-unsupported.html.md)
 for entries that cannot build at all.
 
+# Warn before a bot job runs out of memory
+
+What it does: `stack oom` reads an easystack as a plan. For each entry
+and each EESSI bot build node, it estimates the peak build memory at the
+parallel level the bot will use. When that estimate reaches the job's
+memory, it prints a warning with remedies. The remedies are text only.
+The command never edits a recipe or a hook, and it always exits 0.
+
+Why you'd use it: a bot job that runs out of memory fails late and
+quietly. Software-layer pull request 1772 added
+`libxc-7.0.0-GCC-15.2.0.eb`. The build was killed for lack of memory on
+zen4 twice, at 8 processes on a 32 GiB job, before anyone changed the
+parallel level. The same thing happened to Highway in #1692, to
+hipBLASLt and rocBLAS in #1549, and to PETSc in #1608. Run the check
+before you open the pull request or ask the bot to build.
+
+```bash
+eb-stack stack oom \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+The command prints:
+
+```
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+  parallel 8: 16 cores, eb_hooks.py divides libxc by 2
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
+  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+oom=1 fits=14 builds=5 nodes=15
+```
+
+How to read it:
+
+- The first line names the entry, the target, the bot instance and the
+  node, and the estimate against the job's memory. The pull request
+  numbers are where the figure was measured.
+- `parallel 8` is how the bot gets to 8. The node has 16 cores, and the
+  EESSI `post_ready_hook` halves libxc.
+- `why` says what used the memory in the real job.
+- Each `remedy` is a separate way out: a lower `maxparallel` or hook
+  limit, a node with more memory for the same target, and what the
+  maintainers did or asked for.
+- The count line says one entry and node pair may run out of memory, 14
+  pairs have a profile and fit, the plan has 5 builds, and 15 nodes were
+  checked. Without `--arch`, every node in the bot resource table is
+  checked.
+
+# A dependency the easystack does not name
+
+With `--easyconfigs`, the command closes the plan's dependencies, so a
+dependency that is not installed yet is checked too. Pull request 1692
+added only eOn. Highway came in as a dependency and failed on
+aarch64/generic:
+
+```bash
+eb-stack stack oom \
+  --arch aarch64/generic \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1692-eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+```
+
+```
+Highway-1.4.0-GCCcore-15.2.0.eb may run out of memory on aarch64/generic (eessi-bot-mc-aws generic): 16 x 1.9 GiB = 30.4 GiB, the job has 29.8 GiB (software-layer #1692, software-layer-scripts #317) (required by eOn-3.6.0-foss-2026.1.eb)
+  parallel 16: 16 cores, no eb_hooks.py limit for Highway
+  why: compiling the hwy/tests sources exhausts virtual memory
+  remedy: maxparallel = 15 in Highway-1.4.0-GCCcore-15.2.0.eb, or a Highway limit of 15 for aarch64/generic in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 1.9 GiB per process is a lower bound, so 15 may still be too many
+  remedy: no other aarch64/generic node in the bot resource table has room for it
+  remedy: software-layer-scripts #317 halves Highway on every target and keeps A64FX at a quarter
+oom=1 fits=0 builds=2 nodes=1
+```
+
+`(required by eOn-3.6.0-foss-2026.1.eb)` says which easystack entry
+pulled Highway in. Add `--installed` with one `name/version-toolchain`
+module per line to skip what the target already has.
+
+# When fewer cores do not help
+
+Some builds need a fixed amount of memory whatever the parallel level.
+Pull request 1549 built rocBLAS for ROCm 6.4.1, and hipBLASLt came in as
+its dependency:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen2 \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1549-eessi-2025.06-eb-5.3.1-2025a.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+```
+
+```
+hipBLASLt-0.12.1-rocm-compilers-19.0.0-ROCm-6.4.1.eb may run out of memory on x86_64/amd/zen2 (eessi-bot-mc-aws amd-zen2): 90.0 GiB at any parallel level, the job has 27.9 GiB (software-layer-scripts #281, software-layer #1549) (required by rocBLAS-4.4.0-rocm-compilers-19.0.0-ROCm-6.4.1.eb)
+  parallel 8: 16 cores, eb_hooks.py caps hipBLASLt at 8
+  why: Tensile kernel generation for gfx942 holds about 90 GiB whatever the parallel level
+  remedy: a lower parallel level does not help: one process already needs 90.0 GiB
+  remedy: no other x86_64/amd/zen2 node in the bot resource table has room for it
+  remedy: the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)
+rocBLAS-4.4.0-rocm-compilers-19.0.0-ROCm-6.4.1.eb may run out of memory on x86_64/amd/zen2 (eessi-bot-mc-aws amd-zen2): 50.0 GiB at any parallel level, the job has 27.9 GiB (software-layer-scripts #302, software-layer #1549)
+  parallel 8: 16 cores, eb_hooks.py caps rocBLAS at 8
+  why: Tensile kernel generation for gfx942 needs more than 50-60 GB
+  remedy: a lower parallel level does not help: one process already needs 50.0 GiB
+  remedy: no other x86_64/amd/zen2 node in the bot resource table has room for it
+  remedy: the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)
+oom=2 fits=0 builds=2 nodes=1
+```
+
+The estimate says `at any parallel level`, so the only remedy is a
+bigger node.
+
+# Check a hook change
+
+The parallel level comes from the hook limits in
+`data/eessi-bot-resources.toml`. Pass `--resources` to try other limits
+or other nodes. Pull request 1608 ran out of memory in the PETSc test
+step on zen5 before software-layer-scripts #298 halved PETSc. With the
+current hooks, PETSc fits:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen5 \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1608-eessi-2025.06-eb-5.4.0-2025b.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+```
+
+```
+oom=0 fits=1 builds=3 nodes=1
+```
+
+The fixture `resources-before-298.toml` has the zen5 node and the hooks
+as they were before #298:
+
+```bash
+eb-stack stack oom \
+  --resources tests/oom_profile_fixtures/resources-before-298.toml \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1608-eessi-2025.06-eb-5.4.0-2025b.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+```
+
+```
+PETSc-3.24.0-foss-2025b.eb may run out of memory on x86_64/amd/zen5 (eessi-bot-aws-eu-south amd-zen5): 16 x 2.0 GiB = 32.0 GiB, the job has 31.5 GiB (software-layer #1608, software-layer-scripts #298) (required by slepc4py-3.24.0-foss-2025b.eb)
+  parallel 16: 16 cores, no eb_hooks.py limit for PETSc
+  why: the test step runs make -j <parallel> test, and that is what ran out
+  remedy: maxparallel = 15 in PETSc-3.24.0-foss-2025b.eb, or a PETSc limit of 15 for x86_64/amd/zen5 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 2.0 GiB per process is a lower bound, so 15 may still be too many
+  remedy: no other x86_64/amd/zen5 node in the bot resource table has room for it
+  remedy: software-layer-scripts #298 halves PETSc on every target
+oom=1 fits=0 builds=3 nodes=1
+```
+
+# Where the numbers come from
+
+Two data files hold the numbers, and every row cites a real pull request
+or bot configuration.
+
+- `data/build-memory.toml` holds the peak build memory per software and
+  version family. An entry may be narrowed to a toolchain family and a
+  target. The estimate is `base_gib + per_process_gib * parallel`. Each
+  entry lists the bot jobs it came from, with the parallel level, the
+  job's memory, and whether it ran out. The table is refused when
+  loading if it does not reproduce every one of those jobs, so a new
+  figure cannot contradict an old observation. A figure marked
+  `lower_bound` is the least that explains a failure. The real peak may
+  be higher.
+- `data/eessi-bot-resources.toml` holds each bot build node: the
+  instance, the node, the target, the cores and the job's memory. It
+  also holds EasyBuild's default maximum parallel level of 16 and the
+  `PARALLELISM_LIMITS` table from the EESSI `eb_hooks.py`.
+
+The parallel level is the smallest of these: the node's cores,
+EasyBuild's maximum, the hook limit applied to the cores, and a
+top-level `maxparallel` in the recipe. A software name in the hook table
+uses its limit for the target, then its `'*'` limit. Only software with
+no hook entry gets the target's default, which divides by 4 on A64FX.
+
+When more than one entry matches a build, the highest estimate wins.
+
+# Limits
+
+- Software with no entry in `data/build-memory.toml` is not checked.
+  The count line shows how many pairs had a profile: `fits` plus `oom`.
+- A target with no node in the bot resource table gets a note and is not
+  checked.
+- The model is linear in the parallel level. It does not model link
+  steps, test steps that run with a different parallel level, or memory
+  that other jobs on the node use.
+- The MCP tool `eb_stack_oom` returns the same lines and each warning as
+  JSON.
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -3837,7 +4025,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -3865,6 +4053,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack generation` | Refuse easystack entries outside their EESSI version's toolchain generations |
 | `stack cuda-cc` | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
 | `stack known-failures` | Warn about known per-architecture test, build, fetch and sanity failures in a plan, with the easyconfig remedy |
+| `stack oom` | Warn about plan entries likely to run out of memory in a bot job, with remedies |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -4254,6 +4443,8 @@ eb-stack stack batch \
   [--arch riscv64]... \
   [--unsupported LIST.toml] \
   [--known-failures TABLE.toml] \
+  [--oom-profile BUILD-MEMORY.toml] \
+  [--oom-resources BOT-RESOURCES.toml] \
   --out-dir BATCHES
 
 eb-stack stack arch \
@@ -4297,6 +4488,14 @@ eb-stack stack known-failures \
   [--installed INSTALLED.txt] \
   [--known-failures TABLE.toml] \
   [--eessi-version 2025.06] [--easybuild-version 5.4.0]
+
+eb-stack stack oom \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--arch x86_64/amd/zen4]... \
+  [--easyconfigs TREE]... \
+  [--installed INSTALLED.txt] \
+  [--profile BUILD-MEMORY.toml] \
+  [--resources BOT-RESOURCES.toml]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -4435,6 +4634,10 @@ with each warning and its remedy, `batch.json` lists them under
 `known_failures`, and `plan.md` counts them per batch. A failure whose
 remedy is already pinned or in the easyconfig is left out.
 `--known-failures` replaces `data/arch-known-failures.toml`.
+The same plan is checked with `stack oom` and its warnings are written to
+`pr-body.md`, `batch.json` (`oom.warnings`), and `plan.md`. `--oom-profile`
+and `--oom-resources` replace the bundled build-memory and bot-resource
+tables for those warnings.
 
 ## `stack arch`
 
@@ -4685,6 +4888,51 @@ zero, and also when the check itself fails. `--rewrite` drops each
 `released` pin with `blob=same` from the easystacks in place, keeps the
 others, and exits 0. `--json` prints the same report as JSON. See
 [find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/../howto/from-commit-released.html.md).
+
+## `stack oom`
+
+What it does: estimate the peak memory of every build in a plan on each
+EESSI bot node, at the parallel level the bot job gives it, and warn
+where the estimate reaches the job's memory. Each warning names the
+remedies the maintainers have used. Nothing is changed.
+
+Why you'd use it: software-layer pull request 1772 lost two zen4 bot
+runs to a killed `cc1` while building libxc. The check names that build
+before the first run.
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+  parallel 8: 16 cores, eb_hooks.py divides libxc by 2
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
+  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+oom=1 fits=1 builds=5 nodes=2
+```
+
+The first line is the warning: the build, the target, the bot instance
+and node, the estimate, and the job's memory. `parallel` is how the
+level was reached. The parallel level starts at the node's cores, capped
+at EasyBuild's `max-parallel` of 16, then lowered by the EESSI
+`PARALLELISM_LIMITS` and by `maxparallel` in the easyconfig.
+`oom`` counts warnings. `fits`` counts build and node pairs with a
+memory figure that fit. `builds`` and `nodes`` are what was checked.
+
+`--easystack` is the plan. `--easyconfigs` adds the dependency closure,
+names the plan entry that pulled a build in with `(required by ...)`,
+and reads `maxparallel` from each recipe. `--installed` drops modules
+already installed. `--arch` repeats and takes a target or a prefix such
+as `aarch64`. No `--arch` checks every node in the table; a target with
+no node is reported and skipped. `--profile` replaces
+`data/build-memory.toml`. `--resources` replaces
+`data/eessi-bot-resources.toml`. The command exits 0 when it warns. See
+[warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/../howto/oom-profile.html.md).
 
 # `pr-overlap`
 
@@ -5221,9 +5469,12 @@ needs one `easystack` or `pr`. It returns the same report as
 `easyconfigs`, `installed`, `known_failures`, `eessi_version`, and
 `easybuild_version`. It returns `text`, the `stack known-failures`
 stdout, and `hits`, one object per line. Warnings are not a tool error.
-`eb_stack_batch` takes `arch`, `unsupported`,
-and `known_failures`. It refuses an unsupported plan the same way and
-writes the same warnings.
+`eb_stack_oom` requires `easystack` and takes `arch`, `easyconfigs`,
+`installed`, `profile`, and `resources`. It returns the `stack oom` text
+and one object per warning; a warning is not a tool error.
+`eb_stack_batch` takes `arch`, `unsupported`, `known_failures`,
+`oom_profile`, and `oom_resources`. It refuses an unsupported plan the same way and writes
+known-failures and oom warnings.
 `eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it
@@ -9067,6 +9318,7 @@ eb_stack_files
 eb_stack_generation
 eb_stack_cuda_cc
 eb_stack_known_failures
+eb_stack_oom
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach

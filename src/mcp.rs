@@ -413,6 +413,8 @@ fn tool_catalog() -> Vec<Value> {
                 ("arch", "array"),
                 ("unsupported", "string"),
                 ("known_failures", "string"),
+                ("oom_profile", "string"),
+                ("oom_resources", "string"),
             ],
         ),
         tool_with_optional(
@@ -477,6 +479,18 @@ fn tool_catalog() -> Vec<Value> {
                 ("known_failures", "string"),
                 ("eessi_version", "string"),
                 ("easybuild_version", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_oom",
+            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A warning is not an error.",
+            &[("easystack", "array_min1")],
+            &[
+                ("arch", "array"),
+                ("easyconfigs", "array"),
+                ("installed", "string"),
+                ("profile", "string"),
+                ("resources", "string"),
             ],
         ),
         tool_with_optional(
@@ -759,6 +773,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_generation" => stack_generation_tool(arguments),
         "eb_stack_cuda_cc" => stack_cuda_cc_tool(arguments),
         "eb_stack_known_failures" => stack_known_failures_tool(arguments),
+        "eb_stack_oom" => stack_oom_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -2977,6 +2992,8 @@ fn stack_batch_tool(arguments: &Value) -> Result<Value, String> {
         arches: string_array(arguments, "arch")?,
         unsupported: optional_path(arguments, "unsupported"),
         known_failures: optional_path(arguments, "known_failures"),
+        oom_profile: optional_path(arguments, "oom_profile"),
+        oom_resources: optional_path(arguments, "oom_resources"),
         command_line: batch_command_line(arguments),
         out_dir: required_path(arguments, "out_dir")?,
     };
@@ -3013,6 +3030,8 @@ fn batch_command_line(arguments: &Value) -> String {
         ("arch", "--arch"),
         ("unsupported", "--unsupported"),
         ("known_failures", "--known-failures"),
+        ("oom_profile", "--oom-profile"),
+        ("oom_resources", "--oom-resources"),
         ("out_dir", "--out-dir"),
     ];
     for (key, flag) in flags {
@@ -3169,6 +3188,40 @@ fn stack_known_failures_tool(arguments: &Value) -> Result<Value, String> {
     Ok(json!({
         "text": report.stdout,
         "hits": report.hits,
+    }))
+}
+
+fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::oom_profile::run_oom_check(&crate::oom_profile::OomCheckRequest {
+        arches: string_array(arguments, "arch")?,
+        easystacks: path_array(arguments, "easystack")?,
+        easyconfigs: optional_paths(arguments, "easyconfigs")?,
+        installed: optional_path(arguments, "installed"),
+        profile: optional_path(arguments, "profile"),
+        resources: optional_path(arguments, "resources"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "warnings": report
+            .warnings
+            .iter()
+            .map(|warning| json!({
+                "file": warning.file,
+                "target": warning.partition.target,
+                "instance": warning.partition.instance,
+                "node": warning.partition.node,
+                "parallel": warning.parallel.level,
+                "peak_gib": warning.peak_gib,
+                "memory_gib": warning.partition.memory_gib,
+                "message": warning.message(),
+                "remedies": warning.remedies,
+            }))
+            .collect::<Vec<_>>(),
+        "fits": report.fits,
+        "builds": report.builds,
+        "nodes": report.partitions,
+        "unknown_arch": report.unknown_arches,
     }))
 }
 

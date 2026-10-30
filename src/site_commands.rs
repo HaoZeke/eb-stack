@@ -1231,6 +1231,10 @@ pub struct StackBatchRequest {
     pub unsupported: Option<PathBuf>,
     /// Replace the bundled known-failure table.
     pub known_failures: Option<PathBuf>,
+    /// Replace the bundled build-memory profile table used by `stack oom`.
+    pub oom_profile: Option<PathBuf>,
+    /// Replace the bundled bot-resource table used by `stack oom`.
+    pub oom_resources: Option<PathBuf>,
     /// The command line, written into every reproduce script.
     pub command_line: String,
     /// Output directory.
@@ -1496,6 +1500,19 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
         for (rel, yaml) in &stacks {
             crate::write_text(&dir.join("software-layer").join(rel), yaml)?;
         }
+        let easystack_paths: Vec<PathBuf> = stacks
+            .keys()
+            .map(|rel| dir.join("software-layer").join(rel))
+            .collect();
+        let oom = crate::oom_profile::run_oom_check(&crate::oom_profile::OomCheckRequest {
+            arches: args.arches.clone(),
+            easystacks: easystack_paths,
+            easyconfigs: args.easyconfigs.clone(),
+            installed: Some(args.installed.clone()),
+            profile: args.oom_profile.clone(),
+            resources: args.oom_resources.clone(),
+        })?
+        .warnings;
 
         let mut packages: Vec<LockPackage> = batch
             .modules
@@ -1585,6 +1602,16 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             }
             body.push_str("```\n");
         }
+        if !oom.is_empty() {
+            body.push_str("\nPotential out-of-memory builds, from `eb-stack stack oom`:\n\n```\n");
+            for warning in &oom {
+                for line in warning.lines() {
+                    body.push_str(&line);
+                    body.push('\n');
+                }
+            }
+            body.push_str("```\n");
+        }
         crate::write_text(&dir.join("pr-body.md"), &body)?;
         crate::write_json_pretty(
             &dir.join("batch.json"),
@@ -1595,6 +1622,10 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
                 "modules": batch.modules,
                 "pins": pins,
                 "known_failures": known,
+                "oom": {
+                    "warnings": oom.iter().map(crate::oom_profile::OomWarning::lines).collect::<Vec<_>>(),
+                    "count": oom.len(),
+                },
                 "easystacks": stacks.keys().collect::<Vec<_>>(),
                 "digest": digest,
                 "command": args.command_line,
@@ -1608,6 +1639,12 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             plan_md.push_str(&format!(
                 "{} known per-architecture failure(s); `pr-body.md` has the remedies.\n\n",
                 known.len()
+            ));
+        }
+        if !oom.is_empty() {
+            plan_md.push_str(&format!(
+                "{} out-of-memory warning(s); `pr-body.md` has the remedies.\n\n",
+                oom.len()
             ));
         }
     }

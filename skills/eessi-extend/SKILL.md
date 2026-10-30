@@ -315,6 +315,27 @@ already carries the fix. The command exits 0. The table is
 `data/arch-known-failures.toml`, and the how-to is
 `docs/orgmode/howto/arch-known-failures.org`.
 
+## Memory check, before the bot
+
+A bot build job has a fixed amount of memory, and some builds need more
+at the parallel level the bot uses. Check the easystack before asking the
+bot to build:
+
+```sh
+eb-stack stack oom \
+  --easystack easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --installed installed-zen4.txt
+```
+
+A warning names the entry, the target and node, the parallel level and
+the estimate against the job's memory. The libxc build in software-layer
+#1772 was killed twice on zen4 at 8 processes on 32 GiB. The remedies are
+text only: a `maxparallel` in the recipe, a limit in `PARALLELISM_LIMITS`
+in software-layer-scripts `eb_hooks.py`, or a node with more memory. Put
+the change in the pull request yourself. The command exits 0. The how-to
+is `docs/orgmode/howto/oom-profile.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening

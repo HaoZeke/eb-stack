@@ -1,0 +1,18 @@
+easyblock = 'ConfigureMake'
+
+name = 'rocBLAS'
+version = '4.4.0'
+versionsuffix = '-ROCm-6.4.1'
+
+homepage = 'https://example.org/rocBLAS'
+description = """Fixture. rocBLAS builds hipBLASLt, as in EESSI/software-layer#1549."""
+
+toolchain = {'name': 'rocm-compilers', 'version': '19.0.0'}
+
+source_urls = ['https://example.org/rocBLAS/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('hipBLASLt', '0.12.1', versionsuffix)]
+
+moduleclass = 'lib'

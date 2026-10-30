@@ -1,0 +1,187 @@
+#+TITLE: Warn before a bot job runs out of memory
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack oom~ reads an easystack as a plan. For each entry
+and each EESSI bot build node, it estimates the peak build memory at the
+parallel level the bot will use. When that estimate reaches the job's
+memory, it prints a warning with remedies. The remedies are text only.
+The command never edits a recipe or a hook, and it always exits 0.
+
+Why you'd use it: a bot job that runs out of memory fails late and
+quietly. Software-layer pull request 1772 added
+~libxc-7.0.0-GCC-15.2.0.eb~. The build was killed for lack of memory on
+zen4 twice, at 8 processes on a 32 GiB job, before anyone changed the
+parallel level. The same thing happened to Highway in #1692, to
+hipBLASLt and rocBLAS in #1549, and to PETSc in #1608. Run the check
+before you open the pull request or ask the bot to build.
+
+#+begin_src bash
+eb-stack stack oom \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+#+end_src
+
+The command prints:
+
+#+begin_example
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+  parallel 8: 16 cores, eb_hooks.py divides libxc by 2
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
+  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+oom=1 fits=14 builds=5 nodes=15
+#+end_example
+
+How to read it:
+
+- The first line names the entry, the target, the bot instance and the
+  node, and the estimate against the job's memory. The pull request
+  numbers are where the figure was measured.
+- ~parallel 8~ is how the bot gets to 8. The node has 16 cores, and the
+  EESSI ~post_ready_hook~ halves libxc.
+- ~why~ says what used the memory in the real job.
+- Each ~remedy~ is a separate way out: a lower ~maxparallel~ or hook
+  limit, a node with more memory for the same target, and what the
+  maintainers did or asked for.
+- The count line says one entry and node pair may run out of memory, 14
+  pairs have a profile and fit, the plan has 5 builds, and 15 nodes were
+  checked. Without ~--arch~, every node in the bot resource table is
+  checked.
+
+* A dependency the easystack does not name
+
+With ~--easyconfigs~, the command closes the plan's dependencies, so a
+dependency that is not installed yet is checked too. Pull request 1692
+added only eOn. Highway came in as a dependency and failed on
+aarch64/generic:
+
+#+begin_src bash
+eb-stack stack oom \
+  --arch aarch64/generic \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1692-eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+Highway-1.4.0-GCCcore-15.2.0.eb may run out of memory on aarch64/generic (eessi-bot-mc-aws generic): 16 x 1.9 GiB = 30.4 GiB, the job has 29.8 GiB (software-layer #1692, software-layer-scripts #317) (required by eOn-3.6.0-foss-2026.1.eb)
+  parallel 16: 16 cores, no eb_hooks.py limit for Highway
+  why: compiling the hwy/tests sources exhausts virtual memory
+  remedy: maxparallel = 15 in Highway-1.4.0-GCCcore-15.2.0.eb, or a Highway limit of 15 for aarch64/generic in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 1.9 GiB per process is a lower bound, so 15 may still be too many
+  remedy: no other aarch64/generic node in the bot resource table has room for it
+  remedy: software-layer-scripts #317 halves Highway on every target and keeps A64FX at a quarter
+oom=1 fits=0 builds=2 nodes=1
+#+end_example
+
+~(required by eOn-3.6.0-foss-2026.1.eb)~ says which easystack entry
+pulled Highway in. Add ~--installed~ with one ~name/version-toolchain~
+module per line to skip what the target already has.
+
+* When fewer cores do not help
+
+Some builds need a fixed amount of memory whatever the parallel level.
+Pull request 1549 built rocBLAS for ROCm 6.4.1, and hipBLASLt came in as
+its dependency:
+
+#+begin_src bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen2 \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1549-eessi-2025.06-eb-5.3.1-2025a.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+hipBLASLt-0.12.1-rocm-compilers-19.0.0-ROCm-6.4.1.eb may run out of memory on x86_64/amd/zen2 (eessi-bot-mc-aws amd-zen2): 90.0 GiB at any parallel level, the job has 27.9 GiB (software-layer-scripts #281, software-layer #1549) (required by rocBLAS-4.4.0-rocm-compilers-19.0.0-ROCm-6.4.1.eb)
+  parallel 8: 16 cores, eb_hooks.py caps hipBLASLt at 8
+  why: Tensile kernel generation for gfx942 holds about 90 GiB whatever the parallel level
+  remedy: a lower parallel level does not help: one process already needs 90.0 GiB
+  remedy: no other x86_64/amd/zen2 node in the bot resource table has room for it
+  remedy: the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)
+rocBLAS-4.4.0-rocm-compilers-19.0.0-ROCm-6.4.1.eb may run out of memory on x86_64/amd/zen2 (eessi-bot-mc-aws amd-zen2): 50.0 GiB at any parallel level, the job has 27.9 GiB (software-layer-scripts #302, software-layer #1549)
+  parallel 8: 16 cores, eb_hooks.py caps rocBLAS at 8
+  why: Tensile kernel generation for gfx942 needs more than 50-60 GB
+  remedy: a lower parallel level does not help: one process already needs 50.0 GiB
+  remedy: no other x86_64/amd/zen2 node in the bot resource table has room for it
+  remedy: the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)
+oom=2 fits=0 builds=2 nodes=1
+#+end_example
+
+The estimate says ~at any parallel level~, so the only remedy is a
+bigger node.
+
+* Check a hook change
+
+The parallel level comes from the hook limits in
+~data/eessi-bot-resources.toml~. Pass ~--resources~ to try other limits
+or other nodes. Pull request 1608 ran out of memory in the PETSc test
+step on zen5 before software-layer-scripts #298 halved PETSc. With the
+current hooks, PETSc fits:
+
+#+begin_src bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen5 \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1608-eessi-2025.06-eb-5.4.0-2025b.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+oom=0 fits=1 builds=3 nodes=1
+#+end_example
+
+The fixture ~resources-before-298.toml~ has the zen5 node and the hooks
+as they were before #298:
+
+#+begin_src bash
+eb-stack stack oom \
+  --resources tests/oom_profile_fixtures/resources-before-298.toml \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1608-eessi-2025.06-eb-5.4.0-2025b.yml \
+  --easyconfigs tests/oom_profile_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+PETSc-3.24.0-foss-2025b.eb may run out of memory on x86_64/amd/zen5 (eessi-bot-aws-eu-south amd-zen5): 16 x 2.0 GiB = 32.0 GiB, the job has 31.5 GiB (software-layer #1608, software-layer-scripts #298) (required by slepc4py-3.24.0-foss-2025b.eb)
+  parallel 16: 16 cores, no eb_hooks.py limit for PETSc
+  why: the test step runs make -j <parallel> test, and that is what ran out
+  remedy: maxparallel = 15 in PETSc-3.24.0-foss-2025b.eb, or a PETSc limit of 15 for x86_64/amd/zen5 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 2.0 GiB per process is a lower bound, so 15 may still be too many
+  remedy: no other x86_64/amd/zen5 node in the bot resource table has room for it
+  remedy: software-layer-scripts #298 halves PETSc on every target
+oom=1 fits=0 builds=3 nodes=1
+#+end_example
+
+* Where the numbers come from
+
+Two data files hold the numbers, and every row cites a real pull request
+or bot configuration.
+
+- ~data/build-memory.toml~ holds the peak build memory per software and
+  version family. An entry may be narrowed to a toolchain family and a
+  target. The estimate is ~base_gib + per_process_gib * parallel~. Each
+  entry lists the bot jobs it came from, with the parallel level, the
+  job's memory, and whether it ran out. The table is refused when
+  loading if it does not reproduce every one of those jobs, so a new
+  figure cannot contradict an old observation. A figure marked
+  ~lower_bound~ is the least that explains a failure. The real peak may
+  be higher.
+- ~data/eessi-bot-resources.toml~ holds each bot build node: the
+  instance, the node, the target, the cores and the job's memory. It
+  also holds EasyBuild's default maximum parallel level of 16 and the
+  ~PARALLELISM_LIMITS~ table from the EESSI ~eb_hooks.py~.
+
+The parallel level is the smallest of these: the node's cores,
+EasyBuild's maximum, the hook limit applied to the cores, and a
+top-level ~maxparallel~ in the recipe. A software name in the hook table
+uses its limit for the target, then its ~'*'~ limit. Only software with
+no hook entry gets the target's default, which divides by 4 on A64FX.
+
+When more than one entry matches a build, the highest estimate wins.
+
+* Limits
+
+- Software with no entry in ~data/build-memory.toml~ is not checked.
+  The count line shows how many pairs had a profile: ~fits~ plus ~oom~.
+- A target with no node in the bot resource table gets a note and is not
+  checked.
+- The model is linear in the parallel level. It does not model link
+  steps, test steps that run with a different parallel level, or memory
+  that other jobs on the node use.
+- The MCP tool ~eb_stack_oom~ returns the same lines and each warning as
+  JSON.

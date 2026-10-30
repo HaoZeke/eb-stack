@@ -53,6 +53,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_stack_generation",
         "eb_stack_cuda_cc",
         "eb_stack_known_failures",
+        "eb_stack_oom",
         "eb_stack_sections",
         "eb_stack_from_commit",
         "eb_component_reach",
@@ -70,7 +71,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 46, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 47, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2455,6 +2456,7 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_stack_generation", "stack generation"),
         ("eb_stack_cuda_cc", "stack cuda-cc"),
         ("eb_stack_known_failures", "stack known-failures"),
+        ("eb_stack_oom", "stack oom"),
         ("eb_package_latest", "package latest"),
         ("eb_repro_summary", "repro summary"),
         ("eb_component_reach", "component-reach"),
@@ -3610,6 +3612,7 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         ("eb_stack_generation", &["stack", "generation"]),
         ("eb_stack_cuda_cc", &["stack", "cuda-cc"]),
         ("eb_stack_known_failures", &["stack", "known-failures"]),
+        ("eb_stack_oom", &["stack", "oom"]),
         ("eb_package_latest", &["package", "latest"]),
         ("eb_target_list", &["target", "list"]),
         ("eb_target_doctor", &["target", "doctor"]),

@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'PETSc'
+version = '3.24.0'
+
+homepage = 'https://example.org/PETSc'
+description = """Fixture. Its test step ran out of memory on zen5 in EESSI/software-layer#1608."""
+
+toolchain = {'name': 'foss', 'version': '2025b'}
+
+source_urls = ['https://example.org/PETSc/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = []
+
+moduleclass = 'lib'

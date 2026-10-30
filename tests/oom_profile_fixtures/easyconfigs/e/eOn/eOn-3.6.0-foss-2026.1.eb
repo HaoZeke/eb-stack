@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'eOn'
+version = '3.6.0'
+
+homepage = 'https://example.org/eOn'
+description = """Fixture. eOn builds Highway, as in EESSI/software-layer#1692."""
+
+toolchain = {'name': 'foss', 'version': '2026.1'}
+
+source_urls = ['https://example.org/eOn/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('Highway', '1.4.0', '', ('GCCcore', '15.2.0'))]
+
+moduleclass = 'lib'

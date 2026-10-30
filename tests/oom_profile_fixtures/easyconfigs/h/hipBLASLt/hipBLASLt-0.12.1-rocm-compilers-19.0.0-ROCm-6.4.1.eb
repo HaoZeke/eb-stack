@@ -1,0 +1,18 @@
+easyblock = 'ConfigureMake'
+
+name = 'hipBLASLt'
+version = '0.12.1'
+versionsuffix = '-ROCm-6.4.1'
+
+homepage = 'https://example.org/hipBLASLt'
+description = """Fixture. Needs about 90 GiB for gfx942 (EESSI/software-layer-scripts#281)."""
+
+toolchain = {'name': 'rocm-compilers', 'version': '19.0.0'}
+
+source_urls = ['https://example.org/hipBLASLt/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = []
+
+moduleclass = 'lib'

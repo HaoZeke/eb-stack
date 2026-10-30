@@ -949,6 +949,14 @@ struct BatchArgs {
     /// pull-request body.
     #[arg(long)]
     known_failures: Option<PathBuf>,
+    /// Replace the bundled build-memory profile table used by `stack oom`
+    /// when `stack batch` writes OOM warnings.
+    #[arg(long = "oom-profile")]
+    oom_profile: Option<PathBuf>,
+    /// Replace the bundled bot-resource table used by `stack oom` when
+    /// `stack batch` writes OOM warnings.
+    #[arg(long = "oom-resources")]
+    oom_resources: Option<PathBuf>,
     /// easybuild-easyconfigs checkout with release tags: a root the
     /// release lacks gets a `from-commit` pin.
     #[arg(long)]
@@ -1281,6 +1289,41 @@ enum StackCommand {
         /// easystack file name.
         #[arg(long)]
         easybuild_version: Option<String>,
+    },
+    /// Warn about plan entries likely to run out of memory in a bot job.
+    ///
+    /// Each build's peak is estimated from `data/build-memory.toml` at the
+    /// parallel level the bot job gives it: the node's cores, EasyBuild's
+    /// max-parallel, the EESSI `PARALLELISM_LIMITS`, and `maxparallel` in
+    /// the easyconfig. An estimate that reaches the job's memory in
+    /// `data/eessi-bot-resources.toml` is a warning with remedies. The
+    /// command does not fail on a warning.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack oom --easystack eessi-2026.06-eb-5.4.0-2026.1.yml\n  eb-stack stack oom --arch x86_64/amd/zen4 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt"
+    )]
+    Oom {
+        /// CPU target, `x86_64/amd/zen4`, or a prefix such as `aarch64`.
+        /// Repeatable. Absent checks every target in the bot resource table.
+        #[arg(long = "arch")]
+        arch: Vec<String>,
+        /// Easystack whose entries are the plan. Repeatable.
+        #[arg(long, required = true)]
+        easystack: Vec<PathBuf>,
+        /// Robot tree the dependency closure and `maxparallel` are read
+        /// from. Repeatable. Absent checks only the filenames the easystack
+        /// names.
+        #[arg(long)]
+        easyconfigs: Vec<PathBuf>,
+        /// Installed modules, one `Name/VersionFull` per line. These are not
+        /// built, so they are not checked.
+        #[arg(long)]
+        installed: Option<PathBuf>,
+        /// Replace the bundled build memory table.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Replace the bundled bot resource table.
+        #[arg(long)]
+        resources: Option<PathBuf>,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -2613,6 +2656,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 arch,
                 unsupported,
                 known_failures,
+                oom_profile,
+                oom_resources,
                 easyconfigs_repo,
                 generated_at,
                 out_dir,
@@ -2650,6 +2695,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     arches: arch,
                     unsupported,
                     known_failures,
+                    oom_profile,
+                    oom_resources,
                     command_line,
                     out_dir,
                 },
@@ -2809,6 +2856,26 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     easybuild_version,
                 },
             )?;
+            print!("{}", report.stdout);
+            Ok(())
+        }
+        StackCommand::Oom {
+            arch,
+            easystack,
+            easyconfigs,
+            installed,
+            profile,
+            resources,
+        } => {
+            let report =
+                eb_stack::oom_profile::run_oom_check(&eb_stack::oom_profile::OomCheckRequest {
+                    arches: arch,
+                    easystacks: easystack,
+                    easyconfigs,
+                    installed,
+                    profile,
+                    resources,
+                })?;
             print!("{}", report.stdout);
             Ok(())
         }

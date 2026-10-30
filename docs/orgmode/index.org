@@ -64,6 +64,7 @@
    *An easystack entry outside its EESSI version's generations?* → :doc:`howto/generation-lint`
    *CUDA compute-capability mismatches in a plan?* → :doc:`howto/cuda-compute-capabilities`
    *A test that fails on one architecture?* → :doc:`howto/arch-known-failures`
+   *A plan entry likely to run out of memory in a bot job?* → :doc:`howto/oom-profile`
 
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
@@ -150,6 +151,7 @@
    howto/generation-lint
    howto/cuda-compute-capabilities
    howto/arch-known-failures
+   howto/oom-profile
 
 .. toctree::
    :maxdepth: 2
@@ -280,6 +282,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/generation-lint.org][refuse entries outside the EESSI version's generations]].
     [[file:howto/cuda-compute-capabilities.org][check CUDA compute-capability mismatches in a plan]].
     [[file:howto/arch-known-failures.org][warn about known per-architecture failures]].
+    [[file:howto/oom-profile.org][warn before a bot job runs out of memory]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],

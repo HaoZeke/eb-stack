@@ -49,6 +49,7 @@ mod patch_apply;
 pub mod merge_order;
 pub mod miner;
 pub mod modulerc;
+pub mod oom_profile;
 pub mod osv;
 pub mod package;
 pub mod package_catalog;

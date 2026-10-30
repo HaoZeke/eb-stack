@@ -1,0 +1,215 @@
+# Peak build memory per EasyBuild name and version family.
+#
+# The estimate for one build is
+#
+#     base_gib + per_process_gib * parallel
+#
+# where `parallel` is what EasyBuild runs with on the bot after the EESSI
+# hooks have cut it (see data/eessi-bot-resources.toml). An estimate that
+# reaches the job's memory is a likely out-of-memory failure.
+#
+# `versions` are version families: `7.0` covers 7.0, 7.0.0 and 7.0.1, not
+# 7.01. `toolchains` are toolchain families written as in the module name,
+# `GCC-15.2` covers GCC-15.2.0. `targets` are CPU targets or a prefix of
+# one, `x86_64` covers every x86_64 target. An empty list covers all. When
+# more than one entry matches a build, the largest estimate is used.
+#
+# `bound = "lower"` means the figure is the smallest one the out-of-memory
+# failures allow; the real peak may be higher.
+#
+# Each `observation` is a bot job from a software-layer or
+# software-layer-scripts thread: the easyconfig, the target, the parallel
+# level the job ran with, the memory the job had, and whether it ran out.
+# The whole table must reproduce every observation; a test checks that.
+# Memory is GiB. "30 GB" in a source is 27.9 GiB, "32 GB" is 29.8 GiB.
+
+[[entry]]
+name = "libxc"
+versions = ["7.0"]
+toolchains = ["GCC-15.2"]
+targets = ["x86_64/amd/zen4"]
+per_process_gib = 4.0
+bound = "lower"
+reason = "cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4"
+remedy = "the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263033",
+  "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6440377764",
+]
+
+# 4.0 GiB is 32 GiB over the 8 compilers the hook leaves of 16 cores.
+# aarch64/generic built the same easyconfig at 8 on 29.8 GiB in the same
+# pull request, so the entry is scoped to zen4.
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-15.2.0.eb"
+target = "x86_64/amd/zen4"
+parallel = 8
+memory_gib = 32.0
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263033"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-15.2.0.eb"
+target = "x86_64/amd/zen4"
+parallel = 8
+memory_gib = 32.0
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6440377764"
+
+[[entry]]
+name = "libxc"
+versions = ["7.0"]
+per_process_gib = 3.0
+reason = "cc1 on the generated mgga_x_*.c sources"
+remedy = "software-layer-scripts #233 caps libxc at 6 cores on A64FX"
+sources = [
+  "https://github.com/EESSI/software-layer-scripts/pull/233",
+  "https://github.com/EESSI/software-layer/pull/1502",
+]
+
+# 12 compilers ran out of 29.3 GiB on A64FX, so a compiler needs more than
+# 2.44 GiB; 8 fitted in 27.9 GiB on zen2, so it needs less than 3.49 GiB.
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-14.3.0.eb"
+target = "aarch64/a64fx"
+parallel = 12
+memory_gib = 29.3
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer-scripts/pull/233"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-14.3.0.eb"
+target = "aarch64/a64fx"
+parallel = 6
+memory_gib = 29.3
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1502#issuecomment-4495501008"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-14.3.0.eb"
+target = "x86_64/amd/zen2"
+parallel = 8
+memory_gib = 27.9
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1502#issuecomment-4488240876"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-14.3.0.eb"
+target = "x86_64/amd/zen4"
+parallel = 8
+memory_gib = 32.0
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1502#issuecomment-4488426280"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-15.2.0.eb"
+target = "aarch64/generic"
+parallel = 8
+memory_gib = 29.8
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6112328311"
+
+[[entry]]
+name = "PETSc"
+versions = ["3.24"]
+targets = ["x86_64/amd/zen5"]
+per_process_gib = 2.0
+bound = "lower"
+reason = "the test step runs make -j <parallel> test, and that is what ran out"
+remedy = "software-layer-scripts #298 halves PETSc on every target"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1608#issuecomment-5522998822",
+  "https://github.com/EESSI/software-layer-scripts/pull/298",
+]
+
+# The zen5 job ran out at 16 and passed at 8. The 16-core AWS nodes for
+# the other x86_64 and aarch64 targets built 3.24.0 at 16 in the same pull
+# request, so the entry is scoped to zen5.
+[[entry.observation]]
+easyconfig = "PETSc-3.24.0-foss-2025b.eb"
+target = "x86_64/amd/zen5"
+parallel = 16
+memory_gib = 31.5
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1608#issuecomment-5522998822"
+
+[[entry.observation]]
+easyconfig = "PETSc-3.24.0-foss-2025b.eb"
+target = "x86_64/amd/zen5"
+parallel = 8
+memory_gib = 31.5
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1608#issuecomment-5531024287"
+
+[[entry]]
+name = "Highway"
+versions = ["1.4"]
+toolchains = ["GCCcore-15.2"]
+targets = ["aarch64/generic"]
+per_process_gib = 1.9
+bound = "lower"
+reason = "compiling the hwy/tests sources exhausts virtual memory"
+remedy = "software-layer-scripts #317 halves Highway on every target and keeps A64FX at a quarter"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1692#issuecomment-6108547048",
+  "https://github.com/EESSI/software-layer-scripts/pull/317",
+]
+
+# 16 compilers ran out of 29.8 GiB, so one needs more than 1.86 GiB. zen4
+# built the same easyconfig at 16 on 32 GiB, so the entry is scoped to
+# aarch64/generic.
+[[entry.observation]]
+easyconfig = "Highway-1.4.0-GCCcore-15.2.0.eb"
+target = "aarch64/generic"
+parallel = 16
+memory_gib = 29.8
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1692#issuecomment-6108547048"
+
+[[entry.observation]]
+easyconfig = "Highway-1.4.0-GCCcore-15.2.0.eb"
+target = "x86_64/amd/zen4"
+parallel = 16
+memory_gib = 32.0
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer/pull/1692#issuecomment-5971700292"
+
+[[entry]]
+name = "hipBLASLt"
+versions = ["0.12"]
+base_gib = 90.0
+reason = "Tensile kernel generation for gfx942 holds about 90 GiB whatever the parallel level"
+remedy = "the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)"
+sources = [
+  "https://github.com/EESSI/software-layer-scripts/pull/281#issuecomment-5357474683",
+  "https://github.com/EESSI/software-layer/pull/1549#issuecomment-5357606764",
+]
+
+# One thread still ran out on a 32 GB zen2 node. A 96 GiB c5a.12xlarge
+# instance finished at about 90 GiB.
+[[entry.observation]]
+easyconfig = "hipBLASLt-0.12.1-rocm-compilers-19.0.0-ROCm-6.4.1.eb"
+target = "x86_64/amd/zen2"
+parallel = 1
+memory_gib = 27.9
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1549#issuecomment-5357606764"
+
+[[entry.observation]]
+easyconfig = "hipBLASLt-0.12.1-rocm-compilers-19.0.0-ROCm-6.4.1.eb"
+target = "x86_64/amd/zen2"
+memory_gib = 96.0
+outcome = "ok"
+source = "https://github.com/EESSI/software-layer-scripts/pull/281#issuecomment-5357474683"
+
+[[entry]]
+name = "rocBLAS"
+versions = ["4.4"]
+base_gib = 50.0
+bound = "lower"
+reason = "Tensile kernel generation for gfx942 needs more than 50-60 GB"
+remedy = "the hipBLASLt and rocBLAS jobs ran on the larger -xl build nodes, through a temporary bot config (software-layer-scripts #302)"
+sources = [
+  "https://github.com/EESSI/software-layer-scripts/pull/302",
+  "https://github.com/EESSI/software-layer/pull/1549",
+]

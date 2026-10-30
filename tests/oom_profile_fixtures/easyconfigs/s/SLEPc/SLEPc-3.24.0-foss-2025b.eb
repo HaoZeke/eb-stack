@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'SLEPc'
+version = '3.24.0'
+
+homepage = 'https://example.org/SLEPc'
+description = """Fixture. Needs PETSc."""
+
+toolchain = {'name': 'foss', 'version': '2025b'}
+
+source_urls = ['https://example.org/SLEPc/']
+sources = ['%(name)s-%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('PETSc', '3.24.0')]
+
+moduleclass = 'lib'

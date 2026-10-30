@@ -1,0 +1,241 @@
+# What an EESSI bot build job gets, per bot instance and CPU target.
+#
+# `node` is what the bot prints as "Building on", `target` is "Building
+# for". `cores` is the CPUs the job holds and `memory_gib` the memory a
+# build in it can use. Memory is GiB; "30 GB" in a source is 27.9 GiB.
+#
+# The Magic Castle AWS figures are the partition descriptions in the EESSI
+# test suite's ReFrame config for that cluster. The bot jobs on it hold
+# all 16 cores of a node (sacct in software-layer #1772).
+
+[easybuild]
+# EasyBuild 5 runs at most 16 jobs unless max-parallel says otherwise.
+max_parallel = 16
+source = "https://github.com/easybuilders/easybuild-framework/pull/4816"
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "generic"
+target = "x86_64/generic"
+cores = 16
+memory_gib = 27.9
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L34-L36"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "intel-haswell"
+target = "x86_64/intel/haswell"
+cores = 16
+memory_gib = 27.9
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L39-L41"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "intel-skylake_avx512"
+target = "x86_64/intel/skylake_avx512"
+cores = 16
+memory_gib = 27.9
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L44-L46"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "intel-cascadelake"
+target = "x86_64/intel/cascadelake"
+cores = 16
+memory_gib = 59.6
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L49-L51"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "intel-icelake"
+target = "x86_64/intel/icelake"
+cores = 16
+memory_gib = 29.8
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L54-L56"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "intel-sapphirerapids"
+target = "x86_64/intel/sapphirerapids"
+cores = 16
+memory_gib = 29.8
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L59-L61"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "amd-zen2"
+target = "x86_64/amd/zen2"
+cores = 16
+memory_gib = 27.9
+sources = [
+  "https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L64-L66",
+  "https://github.com/EESSI/software-layer/pull/1549#issuecomment-5357606764",
+]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "amd-zen3"
+target = "x86_64/amd/zen3"
+cores = 16
+memory_gib = 30.0
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L69-L71"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "amd-zen4"
+target = "x86_64/amd/zen4"
+cores = 16
+memory_gib = 32.0
+sources = [
+  "https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L74-L76",
+  "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6425378799",
+]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "generic"
+target = "aarch64/generic"
+cores = 16
+memory_gib = 29.8
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L79-L81"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "neoverse_v1"
+target = "aarch64/neoverse_v1"
+cores = 16
+memory_gib = 29.8
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L84-L86"]
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "neoverse_n1"
+target = "aarch64/neoverse_n1"
+cores = 16
+memory_gib = 32.0
+sources = ["https://github.com/EESSI/test-suite/blob/4eaf857a92df441e9c68aef9e2e4c8942facb8b5/config/aws_mc.py#L89-L91"]
+
+# scontrol on the node: RealMemory=32768 with MemSpecLimit=512 held back.
+[[partition]]
+instance = "eessi-bot-aws-eu-south"
+node = "amd-zen5"
+target = "x86_64/amd/zen5"
+cores = 16
+memory_gib = 31.5
+sources = ["https://github.com/EESSI/software-layer/pull/1393#issuecomment-3920383731"]
+
+# The bot asks for a whole 48-core node. Slurm accepts no more than
+# --mem=30000M, about 29 GiB of the 32 GB HBM.
+[[partition]]
+instance = "eessi-bot-deucalion"
+node = "a64fx"
+target = "aarch64/a64fx"
+cores = 48
+memory_gib = 29.3
+sources = [
+  "https://github.com/EESSI/test-suite/blob/a7cd83cd67232098fbeb35d8654083d5ca76fea1/config/macc_deucalion.py#L39-L44",
+  "https://github.com/EESSI/software-layer-scripts/issues/70",
+  "https://github.com/EESSI/software-layer-scripts/pull/106#issuecomment-3389977541",
+]
+
+# sacct for a LAMMPS job: 16 CPUs, mem=180G, one H100.
+[[partition]]
+instance = "eessi-bot-surf"
+node = "amd-zen4"
+target = "x86_64/amd/zen4"
+accel = "nvidia/cc90"
+cores = 16
+memory_gib = 180.0
+sources = ["https://github.com/EESSI/software-layer/pull/1461#issuecomment-4337055573"]
+
+# PARALLELISM_LIMITS from eb_hooks.py. The hook takes the cores the job
+# has and applies the software's limit for the target, else its '*'
+# limit. Software with limits for other targets only is left alone. Without
+# a software entry the target's own limit applies. The result only ever
+# lowers EasyBuild's parallel level.
+[hooks]
+source = "https://github.com/EESSI/software-layer-scripts/blob/608fb40c88152a9b9aaefa6634c5e39526236212/eb_hooks.py#L2705-L2768"
+
+[[hooks.limit]]
+target = "aarch64/a64fx"
+divide = 4
+
+[[hooks.limit]]
+software = "hipBLASLt"
+target = "*"
+maximum = 8
+
+[[hooks.limit]]
+software = "libxc"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "libxc"
+target = "aarch64/a64fx"
+maximum = 6
+
+[[hooks.limit]]
+software = "LLVM"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "MBX"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "MBX"
+target = "aarch64/a64fx"
+maximum = 1
+
+[[hooks.limit]]
+software = "PETSc"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "QuantumESPRESSO"
+target = "aarch64/a64fx"
+maximum = 6
+
+[[hooks.limit]]
+software = "rocBLAS"
+target = "*"
+maximum = 8
+
+[[hooks.limit]]
+software = "TensorFlow"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "TensorFlow"
+target = "aarch64/a64fx"
+maximum = 8
+
+[[hooks.limit]]
+software = "Qt5"
+target = "aarch64/a64fx"
+maximum = 8
+
+[[hooks.limit]]
+software = "Qt6"
+target = "aarch64/a64fx"
+maximum = 8
+
+[[hooks.limit]]
+software = "Qt6"
+target = "*"
+divide = 2
+
+[[hooks.limit]]
+software = "ROCm-LLVM"
+target = "*"
+maximum = 12
+
+[[hooks.limit]]
+software = "jax"
+target = "*"
+divide = 2

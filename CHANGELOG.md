@@ -414,6 +414,16 @@ All notable changes to this project are documented here.
   has it, is reported as remedied. `stack batch` writes the warnings
   into each `pr-body.md` and `batch.json`. `eb_stack_known_failures`
   runs the same check.
+- `stack oom` and the MCP tool `eb_stack_oom` warn when a plan entry is
+  likely to run out of memory in an EESSI bot job. The peak build memory
+  per software and version family is in `data/build-memory.toml`, and the
+  bot build nodes and the `eb_hooks.py` parallelism limits are in
+  `data/eessi-bot-resources.toml`. Every row cites a real pull request.
+  A warning names the target, the node, the parallel level and the
+  estimate, and suggests a `maxparallel`, a hook limit or a node with
+  more memory. The command exits 0. The fixtures are the libxc build
+  killed on zen4 in software-layer #1772, Highway in #1692, hipBLASLt and
+  rocBLAS in #1549, and PETSc in #1608.
 - `eb-stack stack arch` refuses a plan that includes, or depends on, an
   entry an architecture cannot build. The message names the entry and
   the architecture. `data/arch-unsupported.toml` is the list: GDRCopy on

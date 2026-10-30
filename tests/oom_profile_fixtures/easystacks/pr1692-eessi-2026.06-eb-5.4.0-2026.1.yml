@@ -1,0 +1,10 @@
+# The last line EESSI/software-layer#1692 adds to
+# easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml.
+# The pull request also lists Highway; this file leaves it to the closure.
+easyconfigs:
+  - eOn-3.6.0-foss-2026.1.eb:
+      options:
+        # see https://github.com/easybuilders/easybuild-easyblocks/pull/4240
+        include-easyblocks-from-commit: 000538462c20e14400f82f8817667407562aa7f7
+        # see https://github.com/easybuilders/easybuild-easyconfigs/pull/26480
+        from-commit: 7f00922f19c1473200393c3708444ec98de96ecf

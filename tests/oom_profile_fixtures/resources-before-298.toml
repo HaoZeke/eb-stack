@@ -1,0 +1,22 @@
+# The zen5 node from data/eessi-bot-resources.toml, with the PETSc limit
+# that software-layer-scripts#298 added taken out of the hooks, as they
+# stood when EESSI/software-layer#1608 first ran.
+
+[easybuild]
+max_parallel = 16
+source = "https://github.com/easybuilders/easybuild-framework/pull/4816"
+
+[[partition]]
+instance = "eessi-bot-aws-eu-south"
+node = "amd-zen5"
+target = "x86_64/amd/zen5"
+cores = 16
+memory_gib = 31.5
+sources = ["https://github.com/EESSI/software-layer/pull/1393#issuecomment-3920383731"]
+
+[hooks]
+source = "https://github.com/EESSI/software-layer-scripts/pull/298"
+
+[[hooks.limit]]
+target = "aarch64/a64fx"
+divide = 4

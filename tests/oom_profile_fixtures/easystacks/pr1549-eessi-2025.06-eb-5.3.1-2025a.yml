@@ -1,0 +1,7 @@
+# The lines EESSI/software-layer#1549 adds to
+# easystacks/software.eessi.io/2025.06/accel/amd/eessi-2025.06-eb-5.3.1-2025a.yml.
+easyconfigs:
+  - rocBLAS-4.4.0-rocm-compilers-19.0.0-ROCm-6.4.1.eb:
+      options:
+        # see https://github.com/easybuilders/easybuild-easyconfigs/pull/26846
+        from-commit: 547886f9e9f5589d558edefbe64556e6074e6b77
