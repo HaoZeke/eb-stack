@@ -321,6 +321,12 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
     }
     let key = format!("{}-{}", parent.name, parent.version);
     let raw = match key.as_str() {
+        "foss-2022b" => Some(include_str!(
+            "../fixtures/toolchain_hierarchy/foss-2022b.json"
+        )),
+        "foss-2023a" => Some(include_str!(
+            "../fixtures/toolchain_hierarchy/foss-2023a.json"
+        )),
         "foss-2024a" => Some(include_str!(
             "../fixtures/toolchain_hierarchy/foss-2024a.json"
         )),
