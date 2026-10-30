@@ -599,6 +599,8 @@ eb-stack pr-overlap \
   [--merged N]... \
   [--impact N]... \
   [--repo-url URL] \
+  [--bot-build-set] \
+  [--arch-installed ARCH=FILE]... \
   [--out-dir /tmp/pr-overlap]
 #+end_src
 
@@ -608,6 +610,17 @@ pull request and it does not build. Several JSON paths may follow one
 For the given ~--eessi-version~ it keeps
 the easystack entries present at head and absent from base, finds those
 easyconfigs on the robot path, and closes them against ~--installed~.
+
+~--bot-build-set~ closes every entry at the head of each changed easystack,
+not only the added lines. With ~--installed~, that closure minus the
+installed list is ~to_build~, and ~--merge-order~ and ~--impact~ read it.
+~--arch-installed ARCH=FILE~ repeats, once per architecture, and implies
+~--bot-build-set~. It replaces ~--installed~. The name before ~=~ is the
+label, so ~--installed-label~ is not used with it. One architecture writes
+the same single ~to_build~ as ~--bot-build-set~. Two or more write a
+~[[build_sets]]~ table per architecture, and merge order and impact follow
+those tables. The command is in
+[[file:../howto/pr-overlap.org][what the bot builds on each architecture]].
 
 ~--easyconfigs~ is the release robot tree. Later trees win on the same
 name, version, toolchain, and versionsuffix. ~--commit-tree~ is the

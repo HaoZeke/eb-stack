@@ -67,6 +67,9 @@ that commit. ~--easyblocks~ is the EasyBuild release's
 For another architecture, pass that architecture's installed list and
 ~--include-path~ for its substring. Do not also exclude the same
 substring. ~--installed-label~ is the string recorded on the report.
+That is still one added-lines closure. The bot's whole-file build set,
+one per architecture, is
+[[*What the bot builds on each architecture][what the bot builds on each architecture]].
 
 * Run it on a mounted stack
 
@@ -143,6 +146,85 @@ workflow file.
 Why the files are regenerated on every run, and why a second build of a
 shared module overwrites the first binary, is covered in
 [[file:../explanation/pr-overlap.org][from one easystack line to a build set]].
+
+* What the bot builds on each architecture
+
+The EESSI bot does not build only the lines a pull request adds. For each
+changed easystack it builds every entry at the pull request head that is
+not yet installed on the target architecture, and the dependencies of those
+entries that are not installed either. An entry can sit in the shared
+easystack for months and still be missing on one architecture. The next
+pull request that touches the file makes the bot try it again.
+
+~--arch-installed ARCH=FILE~ is that build set. Repeat it once per
+architecture. The name before ~=~ is the label in the report. The file is
+the same installed-module list as ~--installed~. The flag replaces
+~--installed~, and it implies ~--bot-build-set~. Without either flag the
+command still closes only the added lines, which is what the recorded
+1585/1728 run above does.
+
+~--bot-build-set~ with the existing ~--installed~ list is the same closure
+for one architecture. ~to_build~, ~--merge-order~, and ~--impact~ then use
+that set. With two or more ~--arch-installed~ values, each architecture has
+its own ~to_build~ under ~[[build_sets]]~, and merge order and impact are
+computed from those sets.
+
+This recording is the shape of software-layer pull request 1775. The shared
+easystack already lists ~GDRCopy-2.5.2-GCCcore-15.2.0.eb~. Pull request 1775
+adds ~nvtop~, and pull request 1800 adds ~likwid~. GDRCopy is on the x86_64
+installed list and absent from the riscv64 list. Lib is a dependency of
+GDRCopy and is installed on neither architecture.
+
+#+begin_src bash
+eb-stack pr-overlap \
+  --pr tests/pr_overlap_arch/prs.json \
+  --easyconfigs tests/pr_overlap_arch/release \
+  --arch-installed x86_64=tests/pr_overlap_arch/x86_64.txt \
+  --arch-installed riscv64=tests/pr_overlap_arch/riscv64.txt \
+  --generated-at 2026-10-30T00:00:00Z \
+  --repo-url https://github.com/EESSI/software-layer \
+  --merge-order \
+  --impact 1775 \
+  --out-dir /tmp/pr-overlap-arch
+#+end_src
+
+The command prints ~prs=2 records=2 shared_modules=2 skipped_easyconfigs=0~.
+~shared_modules~ counts a shared module once per architecture, so both of
+those are on riscv64.
+
+~/tmp/pr-overlap-arch/overlap.md~ has one section per architecture. The
+x86_64 section's shared table is ~None.~ Pull request 1775 builds
+~nvtop/3.3.2-GCCcore-15.2.0~ there and nothing else. The riscv64 section
+names the two shared modules:
+
+#+begin_src text
+| `GDRCopy/2.5.2-GCCcore-15.2.0` | [#1775](https://github.com/EESSI/software-layer/pull/1775), [#1800](https://github.com/EESSI/software-layer/pull/1800) |
+| `Lib/1.0-GCCcore-15.2.0` | [#1775](https://github.com/EESSI/software-layer/pull/1775), [#1800](https://github.com/EESSI/software-layer/pull/1800) |
+#+end_src
+
+Under pull request 1775 the report says GDRCopy was already in the changed
+easystack and is not installed, and the to-build list is GDRCopy, Lib, and
+nvtop. Lib is there because GDRCopy is not installed, so the walk opens it.
+On x86_64 GDRCopy is installed, the walk stops, and Lib is not a module to
+build.
+
+The same sentence is how you tell an old entry from a line this pull
+request added. ~entries~ in ~prs/1775.toml~ is still only the nvtop line.
+~carried~ on the riscv64 build set is GDRCopy.
+
+~--merge-order~ appends a table per architecture. On riscv64, position 1 is
+1775 and it saves GDRCopy and Lib for 1800. Position 2 is 1800, which then
+builds only likwid. On x86_64 each pull request builds its own added module
+and saves nothing.
+
+~merge-impact.toml~ is the effect of merging 1775 on its own. On riscv64,
+1800 shrinks by GDRCopy and Lib. On x86_64, ~affected~ is empty. Neither
+pull request asks for the other's added module, so ~resolves~ is empty on
+both architectures.
+
+The same inputs with only ~--installed tests/pr_overlap_arch/riscv64.txt~
+and no bot flag leave GDRCopy out of ~to_build~. That is the added-lines
+report, and it is not what the riscv64 bot builds.
 
 * Order the merges
 

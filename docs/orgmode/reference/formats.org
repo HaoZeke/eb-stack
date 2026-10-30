@@ -329,6 +329,9 @@ overlap report.
 | ~unresolved~ | Requirements no easyconfig on the robot path satisfies, and ~easyblock <class> missing~ when ~--easyblocks~ was passed and no passed tree defines that class |
 | ~notes~ | Present when the run recorded one: a class supplied by an ~include-easyblocks-from-commit~ tree, a commit an entry names whose tree was not passed, or an ~include-easyblocks-from-pr~. Omitted when empty |
 | ~entries~ | The easystack lines the pull request adds |
+| ~build_scope~ | ~changed-easystack~ when ~--bot-build-set~ or ~--arch-installed~ closed every head entry. Omitted for the added-lines default |
+| ~carried~ | Head entries in ~to_build~ that this pull request did not add. Omitted when empty |
+| ~build_sets~ | One table per architecture when more than one ~--arch-installed~ was passed. Omitted for a single installed list, whose set is the top-level ~to_build~ |
 
 A module whose easyblock class is missing is left out of ~to_build~. The
 dependencies of that recipe stay. ~overlap.md~ prints each unresolved item
@@ -337,6 +340,22 @@ as ~- unresolved:~ and each note as ~- note:~.
 Each ~[[entries]]~ table has ~easystack~, ~easyconfig~, and, when the entry
 carries them, ~from_commit~ and ~eb_version~. A module name is
 ~name/version[-toolchain]versionsuffix~, with the system toolchain omitted.
+
+~--bot-build-set~ does not change ~entries~. A module that was already in
+the easystack and is still not installed is listed in ~carried~ and in
+~to_build~. Dependencies of that module that are not installed are in
+~to_build~ and are not ~carried~. With one installed list, ~to_build~ is
+that architecture's build set, and ~--merge-order~ and ~--impact~ read it.
+
+With two or more ~--arch-installed~ values, the top-level ~to_build~,
+~already_installed~, and ~unresolved~ arrays are empty.
+~installed_source~ is the architecture labels in flag order, joined by a
+comma. Each ~[[build_sets]]~ table has ~arch~, ~to_build~ (one module per
+line), ~already_installed~, ~unresolved~, and ~carried~ when any head entry
+was not installed. Merge order and impact use those ~to_build~ lists, one
+architecture at a time. ~sort | uniq -d~ across every ~to_build~ array in
+the file mixes architectures. Read one ~[[build_sets]]~ table, or the
+matching section of ~overlap.md~.
 
 ~[[revisions]]~ is each easystack or easyconfig file the pull request
 changes. ~kind~ is ~easystack~ or ~easyconfig~. ~base~ and ~head~ are the
@@ -358,6 +377,7 @@ A worked record from an open 2026.06 pull request is in
 | ~prs~ | Pull request numbers that received a record, ascending |
 | ~shared~ | Module to the pull requests that would build it, for modules more than one would build |
 | ~pairs~ | Per pull request, the other pull requests it shares modules with, and which modules |
+| ~arches~ | Present when ~build_sets~ is. One table per architecture, with ~arch~, ~shared~, and ~pairs~. The top-level ~shared~ map is empty in that case |
 
 ** ~overlap.md~
 
@@ -382,6 +402,7 @@ on). The same never-merge header. Schema ~1~.
 | ~steps~ | One step per pull request that is not in ~merged~ |
 | ~cycles~ | Strongly connected sets. Each set is sorted, and the sets are sorted |
 | ~conflicts~ | Easystack paths edited by two or more pull requests in a colliding way |
+| ~arches~ | Present when the run passed more than one ~--arch-installed~. One table per architecture, with ~arch~, ~steps~, and ~cycles~. The top-level ~steps~ array is empty in that case. ~conflicts~ stays on the top-level table |
 
 Each ~[[steps]]~ table:
 
@@ -398,7 +419,9 @@ Each ~[[steps]]~ table:
 ~easystack~, ~prs~, and ~kind~. ~kind~ is ~same-insertion~ or ~same-entry~.
 
 With ~--merge-order~, ~overlap.md~ gains a Merge order table: position,
-pull request, build count, saves, and after. Conflicts follow that table
+pull request, build count, saves, and after. With more than one
+~--arch-installed~, that table is repeated, one heading per architecture.
+Conflicts follow that table
 when any were found. Without the flag the Markdown file is unchanged.
 
 ** ~merge-impact.toml~
@@ -415,7 +438,8 @@ when N is also ~--merged~ is an error:
 |-
 | ~schema_version~ | ~1~ |
 | ~generated_at~ | Same timestamp as the overlap index |
-| ~impacts~ | One entry per requested pull request, in ascending number order |
+| ~impacts~ | One entry per requested pull request, in ascending number order. Empty when ~arches~ is present |
+| ~arches~ | Present when the run passed more than one ~--arch-installed~. One table per architecture, with ~arch~ and ~impacts~. Each impact is the same shape as the top-level ~impacts~ table |
 
 Each ~[[impacts]]~ table has ~pr~ and ~affected~. Each ~[[impacts.affected]]~
 table:

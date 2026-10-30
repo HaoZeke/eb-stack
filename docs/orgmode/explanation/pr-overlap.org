@@ -593,3 +593,27 @@ start at the top of the file. The same point is ~same-insertion~. Identical
 added lines are ~same-entry~. The record keeps that base and head text, or
 the blob ids, on ~revisions~, and the merge order reads the collisions from
 the record.
+
+* Every entry of a changed easystack
+
+The sections above close the lines a pull request adds. The EESSI bot
+builds a different set. When a pull request changes an easystack, the bot
+for one architecture builds every entry in that file at the pull request
+head that is not yet installed there, plus the dependencies those entries
+still need. An entry added by an earlier pull request stays in the file.
+If that architecture never installed it, every later pull request that
+touches the file builds it again.
+
+Software-layer pull request 1775 added entries to
+~eessi-2026.06-eb-5.4.0-2026.1.yml~. ~GDRCopy-2.5.2-GCCcore-15.2.0.eb~ was
+already on line 42 of that file. The riscv64 bot failed on GDRCopy. The
+added-lines closure does not name it, because 1775 did not add it. x86_64
+had already installed it, so the same whole-file closure on that
+architecture does not build it.
+
+~--arch-installed~ computes that set once per architecture and feeds it to
+~to_build~, the merge order, and ~--impact~. The command and the riscv64
+row are in
+[[file:../howto/pr-overlap.org][what the bot builds on each architecture]].
+~entries~ stays the lines the pull request added. A head entry that was
+already in the file and is still not installed is ~carried~.
