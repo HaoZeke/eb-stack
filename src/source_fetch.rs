@@ -44,6 +44,39 @@ pub struct SourceFetch {
     /// index rewrite reads `Cargo.lock` out of it and then drops it.
     #[serde(skip)]
     pub bytes: Option<Vec<u8>>,
+    /// The recipe's download name and the one that served the archive, when
+    /// the release tag is spelled the other way: a project that moved from
+    /// `1.0.8` to `v1.0.10` tags serves `/archive/v1.0.10.tar.gz` and 404s on
+    /// `/archive/1.0.10.tar.gz`. The recipe's `sources` entry is rewritten to
+    /// the name that served it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub respelled: Option<Respelling>,
+}
+
+/// A source download name the archive host served under the other spelling
+/// of the release tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Respelling {
+    /// Name the recipe asked for, which the host does not serve.
+    pub from: String,
+    /// Name that served the archive.
+    pub to: String,
+}
+
+/// The other spelling of a release tag in an archive download name: a
+/// leading `v` added or removed. Only archive endpoints, which name the
+/// tarball after the tag, and only names that start with the version.
+fn other_tag_spelling(bases: &[String], download: &str, version: &str) -> Option<String> {
+    if version.is_empty() || !bases.iter().any(|base| base.contains("/archive")) {
+        return None;
+    }
+    if download.starts_with(version) {
+        return Some(format!("v{download}"));
+    }
+    download
+        .strip_prefix('v')
+        .filter(|rest| rest.starts_with(version))
+        .map(str::to_string)
 }
 
 /// The URLs EasyBuild would try for `file`, in order: the entry's own
@@ -127,6 +160,7 @@ pub fn fetch_sources(recipe: &ResolvedEasyconfig, client: &dyn RegistryClient) -
                 sha256: None,
                 errors: Vec::new(),
                 bytes: None,
+                respelled: None,
             };
             if file.git {
                 fetch.errors.push(
@@ -158,9 +192,167 @@ pub fn fetch_sources(recipe: &ResolvedEasyconfig, client: &dyn RegistryClient) -
                     Err(error) => fetch.errors.push(error.to_string()),
                 }
             }
+            if fetch.sha256.is_none() {
+                try_other_tag_spelling(recipe, file, client, &mut fetch);
+            }
             fetch
         })
         .collect()
+}
+
+/// Retry an archive download under the other spelling of the release tag.
+/// The errors of the recipe's own spelling stay in the record.
+fn try_other_tag_spelling(
+    recipe: &ResolvedEasyconfig,
+    file: &SourceFile,
+    client: &dyn RegistryClient,
+    fetch: &mut SourceFetch,
+) {
+    let bases: Vec<String> = if !file.source_urls.is_empty() {
+        file.source_urls.clone()
+    } else {
+        recipe.source_urls.clone()
+    };
+    let Some(alternate) = other_tag_spelling(&bases, &file.download_filename, &recipe.version)
+    else {
+        return;
+    };
+    let respelled_file = SourceFile {
+        download_filename: alternate.clone(),
+        ..file.clone()
+    };
+    for url in source_download_urls(recipe, &respelled_file) {
+        match client.get(&url) {
+            Ok(bytes) if !bytes.is_empty() => {
+                fetch.sha256 = Some(sha256_hex(&bytes));
+                fetch.url = Some(url);
+                fetch.bytes = Some(bytes);
+                fetch.respelled = Some(Respelling {
+                    from: file.download_filename.clone(),
+                    to: alternate.clone(),
+                });
+                // A plain string entry saves the archive under the name it
+                // downloads; a dict entry keeps its own `filename`.
+                if file.filename == file.download_filename {
+                    fetch.filename = alternate;
+                }
+                fetch.errors.clear();
+                return;
+            }
+            Ok(_) => fetch.errors.push(format!("{url}: empty body")),
+            Err(error) => fetch.errors.push(error.to_string()),
+        }
+    }
+}
+
+/// Rewrite the `sources` entry, and a checksum keyed by its saved name, to
+/// the tag spelling the archive host served.
+fn apply_respellings(bundle: &mut PackageBundle, fetched: &[SourceFetch]) {
+    let Some(easyconfig) = bundle.easyconfigs.first_mut() else {
+        return;
+    };
+    let Ok(recipe) = resolve_easyconfig_str(&easyconfig.text) else {
+        return;
+    };
+    let version = recipe.version.clone();
+    for fetch in fetched {
+        let Some(respelling) = &fetch.respelled else {
+            continue;
+        };
+        let adding = respelling.to.len() > respelling.from.len();
+        for key in ["sources", "checksums"] {
+            let Ok(Some((start, end))) =
+                crate::eb_emit::easyconfig_list_span(&easyconfig.text, key)
+            else {
+                continue;
+            };
+            let body = &easyconfig.text[start..end];
+            let rewritten = respell_literals(body, &version, &respelling.from, adding);
+            if rewritten != body {
+                easyconfig.text = format!(
+                    "{}{}{}",
+                    &easyconfig.text[..start],
+                    rewritten,
+                    &easyconfig.text[end..]
+                );
+            }
+        }
+    }
+}
+
+/// Add or drop the leading `v` of every quoted literal that resolves to
+/// `from` once `%(version)s` is filled.
+fn respell_literals(body: &str, version: &str, from: &str, adding: bool) -> String {
+    let Ok(literal) = regex::Regex::new(r#"(['"])([^'"\n]*)(['"])"#) else {
+        return body.to_string();
+    };
+    literal
+        .replace_all(body, |caps: &regex::Captures| {
+            let inner = &caps[2];
+            if inner.replace("%(version)s", version) != from {
+                return caps[0].to_string();
+            }
+            let respelled = if adding {
+                format!("v{inner}")
+            } else {
+                inner.strip_prefix('v').unwrap_or(inner).to_string()
+            };
+            format!("{}{respelled}{}", &caps[1], &caps[3])
+        })
+        .into_owned()
+}
+
+/// Drop the "checksum cleared" review warnings once every checksum in the
+/// final recipe, top level and extensions alike, carries a digest.
+///
+/// The emitter warns while it clears a stale digest; the fetch then fills
+/// the entry. A warning about an entry that is no longer empty describes a
+/// recipe that was never written out.
+fn prune_settled_checksum_warnings(bundle: &mut PackageBundle) {
+    let Some(easyconfig) = bundle.easyconfigs.first() else {
+        return;
+    };
+    if has_empty_checksum(&easyconfig.text) {
+        return;
+    }
+    bundle.plan.residuals.retain(|residual| {
+        !(residual.category == "bump-warning"
+            && (residual.summary.contains("source checksum cleared")
+                || residual.summary.contains("stale digest cleared")))
+    });
+}
+
+/// Whether any `checksums` list in `text`, top level or inside an
+/// extension's options, holds an empty string.
+fn has_empty_checksum(text: &str) -> bool {
+    let Ok(header) = regex::Regex::new(r#"checksums['"]?\s*[:=]\s*\["#) else {
+        return true;
+    };
+    let Ok(empty) = regex::Regex::new(r#"(^|[\[{:,\s])(''|"")"#) else {
+        return true;
+    };
+    for found in header.find_iter(text) {
+        let open = found.end();
+        let mut depth = 1i32;
+        let mut close = text.len();
+        for (offset, byte) in text.as_bytes()[open..].iter().enumerate() {
+            match byte {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if empty.is_match(&text[open..close]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Plan a bump, then fill the source checksum the version change cleared.
@@ -172,34 +364,55 @@ pub fn fetch_sources(recipe: &ResolvedEasyconfig, client: &dyn RegistryClient) -
 /// fetched, and sources after the first, become `source:fetch` residuals; the
 /// bump never invents a digest. A request that already states a checksum, or
 /// keeps the version, is planned once and unchanged.
+///
+/// With the new source in hand, every patch the tree could not decide is
+/// tried against it (see [`crate::patch_apply`]): a patch that applies is
+/// carried, one the release already contains or whose files are gone is
+/// dropped from the recipe, and only a patch that does neither stays
+/// undecided. `strict_patches` fails on those that remain.
 pub fn plan_package_bump_fetching(
     request: &BumpPackageRequest,
     options: &PackageEmitOptions,
     client: &dyn RegistryClient,
 ) -> Result<(PackageBundle, Vec<SourceFetch>), PackageWorkflowError> {
-    let first = plan_package_bump_with(request, options)?;
     if request.version.is_none() || request.source_checksum.is_some() {
-        return Ok((first, Vec::new()));
+        return Ok((plan_package_bump_with(request, options)?, Vec::new()));
     }
+    // Strict patch mode is judged after the new source has had its say: a
+    // patch the tree cannot decide may still apply, or be upstream.
+    let mut lenient = request.clone();
+    lenient.strict_patches = false;
+    let first = plan_package_bump_with(&lenient, options)?;
     let Some(emitted) = first.easyconfigs.first() else {
         return Ok((first, Vec::new()));
     };
     let recipe = resolve_easyconfig_str(&emitted.text)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let mut fetched = fetch_sources(&recipe, client);
-    let Some(digest) = fetched.first().and_then(|fetch| fetch.sha256.clone()) else {
-        let mut bundle = first;
-        push_fetch_residuals(&mut bundle, &fetched, 0);
-        fill_empty_named_checksums(&mut bundle, client, &mut fetched);
-        apply_index_rewrites(&mut bundle, request, &fetched, client);
-        return Ok((bundle, fetched));
+    let mut bundle = match fetched.first().and_then(|fetch| fetch.sha256.clone()) {
+        Some(digest) => {
+            let mut again = lenient.clone();
+            again.source_checksum = Some(digest);
+            let mut bundle = plan_package_bump_with(&again, options)?;
+            apply_respellings(&mut bundle, &fetched);
+            push_fetch_residuals(&mut bundle, &fetched, 1);
+            bundle
+        }
+        None => {
+            let mut bundle = first;
+            push_fetch_residuals(&mut bundle, &fetched, 0);
+            bundle
+        }
     };
-    let mut again = request.clone();
-    again.source_checksum = Some(digest);
-    let mut bundle = plan_package_bump_with(&again, options)?;
-    push_fetch_residuals(&mut bundle, &fetched, 1);
     fill_empty_named_checksums(&mut bundle, client, &mut fetched);
     apply_index_rewrites(&mut bundle, request, &fetched, client);
+    prune_settled_checksum_warnings(&mut bundle);
+    let new_version = request.version.as_deref().unwrap_or_default();
+    let undecided = crate::patch_apply::decide_from_source(&mut bundle, new_version, &fetched);
+    crate::package_workflow::refresh_bump_sbom(&mut bundle)?;
+    if request.strict_patches && !undecided.is_empty() {
+        return Err(PackageWorkflowError::UndecidedPatches(undecided.join(", ")));
+    }
     Ok((bundle, fetched))
 }
 
@@ -320,6 +533,7 @@ fn fetch_empty_named_checksums(
             sha256: None,
             errors: Vec::new(),
             bytes: None,
+            respelled: None,
         };
         let file = SourceFile {
             filename: concrete.clone(),
@@ -783,6 +997,65 @@ checksums = [
         assert!(matches!(
             stated_checksum(&recipe, 1, "libatomic_ops-7.8.2.tar.gz", &"c".repeat(64)),
             StatedChecksum::EmptyNamed
+        ));
+    }
+
+    #[test]
+    fn an_archive_tag_spelled_with_a_v_is_fetched_and_the_source_respelled() {
+        let text = "\
+easyblock = 'CMakeMake'
+name = 'GOTCHA'
+version = '1.0.10'
+homepage = 'https://example.org'
+description = 'x'
+toolchain = SYSTEM
+source_urls = ['https://github.com/LLNL/GOTCHA/archive/']
+sources = ['%(version)s.tar.gz']
+checksums = ['']
+moduleclass = 'devel'
+";
+        let recipe = resolve_easyconfig_str(text).unwrap();
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://github.com/LLNL/GOTCHA/archive/v1.0.10.tar.gz".into(),
+            b"gotcha".to_vec(),
+        );
+        let fetched = fetch_sources(&recipe, &client);
+        assert_eq!(
+            fetched[0].sha256.as_deref(),
+            Some(sha256_hex(b"gotcha").as_str())
+        );
+        assert_eq!(fetched[0].filename, "v1.0.10.tar.gz");
+        let respelling = fetched[0].respelled.as_ref().expect("respelled");
+        assert_eq!(respelling.from, "1.0.10.tar.gz");
+        assert_eq!(respelling.to, "v1.0.10.tar.gz");
+        let body = "['%(version)s.tar.gz']";
+        assert_eq!(
+            respell_literals(body, "1.0.10", "1.0.10.tar.gz", true),
+            "['v%(version)s.tar.gz']"
+        );
+    }
+
+    #[test]
+    fn a_download_name_not_led_by_the_version_is_not_respelled() {
+        let bases = vec!["https://github.com/o/r/archive/".to_string()];
+        assert_eq!(other_tag_spelling(&bases, "r-1.0.tar.gz", "1.0"), None);
+        assert_eq!(
+            other_tag_spelling(&bases, "v1.0.tar.gz", "1.0").as_deref(),
+            Some("1.0.tar.gz")
+        );
+        let release = vec!["https://example.org/releases/".to_string()];
+        assert_eq!(other_tag_spelling(&release, "1.0.tar.gz", "1.0"), None);
+    }
+
+    #[test]
+    fn an_empty_checksum_anywhere_keeps_the_cleared_warning() {
+        assert!(has_empty_checksum("checksums = ['']\n"));
+        assert!(has_empty_checksum(
+            "exts_list = [(name, version, {'checksums': [{'x-1.tar.gz': ''}]})]\n"
+        ));
+        assert!(!has_empty_checksum(
+            "checksums = [{'x-1.tar.gz': 'aaaa'}]\nexts_list = [(name, version, {'checksums': ['bbbb']})]\n"
         ));
     }
 
