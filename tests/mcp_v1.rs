@@ -113,6 +113,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "strict_patches",
         "latest_secondary",
         "drop_patch",
+        "no_companions",
         "toolchain",
     ] {
         assert!(

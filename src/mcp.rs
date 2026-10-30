@@ -179,6 +179,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("strict_patches", "boolean"),
                 ("latest_secondary", "boolean"),
                 ("drop_patch", "object"),
+                ("no_companions", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -979,33 +980,52 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         strict_patches: optional_bool(arguments, "strict_patches"),
         package_layers: package_layers(arguments)?,
     };
-    let (bundle, fetched) = if optional_bool(arguments, "fetch_checksums") {
-        let latest_secondary = optional_bool(arguments, "latest_secondary");
-        let mut drop_patches: Vec<(String, String)> =
-            string_map(arguments, "drop_patch")?.into_iter().collect();
-        drop_patches.sort();
-        let decisions = crate::source_fetch::BumpDecisions {
-            drop_patches,
-            latest_secondary,
-            overrides: if latest_secondary {
-                crate::upstream::load_overrides(&path_array(arguments, "overrides")?)
-                    .map_err(|error| format!("{error:#}"))?
-            } else {
-                Default::default()
-            },
-        };
-        crate::source_fetch::plan_package_bump_fetching_with(
-            &request,
-            &options,
-            &crate::registry::UreqClient,
-            &decisions,
-        )
+    let fetch = optional_bool(arguments, "fetch_checksums");
+    let out_dir = required_path(arguments, "out_dir")?;
+    let latest_secondary = optional_bool(arguments, "latest_secondary");
+    let mut drop_patches: Vec<(String, String)> =
+        string_map(arguments, "drop_patch")?.into_iter().collect();
+    drop_patches.sort();
+    let decisions = crate::source_fetch::BumpDecisions {
+        drop_patches,
+        latest_secondary,
+        overrides: if latest_secondary {
+            crate::upstream::load_overrides(&path_array(arguments, "overrides")?)
+                .map_err(|error| format!("{error:#}"))?
+        } else {
+            Default::default()
+        },
+    };
+    let (bundle, fetched, companions) = if optional_bool(arguments, "no_companions") {
+        if fetch {
+            crate::source_fetch::plan_package_bump_fetching_with(
+                &request,
+                &options,
+                &crate::registry::UreqClient,
+                &decisions,
+            )
+        } else {
+            plan_package_bump_with(&request, &options).map(|bundle| (bundle, Vec::new()))
+        }
+        .map(|(bundle, fetched)| (bundle, fetched, Vec::new()))
     } else {
-        plan_package_bump_with(&request, &options).map(|bundle| (bundle, Vec::new()))
+        let client: Option<&dyn crate::registry::RegistryClient> =
+            fetch.then_some(&crate::registry::UreqClient);
+        crate::bump_companion::plan_package_bump_with_companions_deciding(
+            &request, &options, client, &decisions,
+        )
+        .map(|planned| (planned.root, planned.fetched, planned.companions))
     }
     .map_err(|error| error.to_string())?;
-    let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
-        .map_err(|error| error.to_string())?;
+    let companion_records = companions
+        .iter()
+        .map(crate::bump_companion::CompanionBump::record)
+        .collect::<Vec<_>>();
+    if !companions.is_empty() {
+        crate::bump_companion::write_companions(&bundle, &companions, &out_dir)
+            .map_err(|error| error.to_string())?;
+    }
+    let written = write_package_bundle(&bundle, &out_dir).map_err(|error| error.to_string())?;
     Ok(json!({
         "package": bundle.plan.package.name,
         "version": bundle.plan.package.version,
@@ -1015,6 +1035,7 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         "easyconfigs": written.easyconfigs,
         "easyblocks": written.easyblocks,
         "fetched": fetched,
+        "companions": companion_records,
         "open": bundle.plan.residuals,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
     }))
