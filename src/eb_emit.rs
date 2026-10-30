@@ -388,12 +388,8 @@ pub fn insert_runtime_dependency(
         return Ok(src.to_string());
     }
     let line = format!("    ('{name}', '{version}'),\n");
-    if let Some((_open, close)) = find_list_span(src, "dependencies")? {
-        let mut out = String::with_capacity(src.len() + line.len());
-        out.push_str(&src[..close]);
-        out.push_str(&line);
-        out.push_str(&src[close..]);
-        return Ok(out);
+    if let Some(span) = find_list_span(src, "dependencies")? {
+        return Ok(append_list_entry(src, span, &line));
     }
     if let Some(at) = src.find("\nmoduleclass") {
         let mut out = String::with_capacity(src.len() + line.len() + 32);
@@ -426,9 +422,9 @@ pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<S
         let rebuilt = if entries.is_empty() {
             format!("\n{line}")
         } else if body.contains('\n') {
-            let kept = body.trim_end();
-            let comma = if kept.ends_with(',') { "" } else { "," };
-            format!("{kept}{comma}\n{line}")
+            // The comma goes after the last entry's code, not into a comment
+            // that follows it.
+            return Ok(append_list_entry(src, (open, close), &line));
         } else {
             format!("\n    {entries},\n{line}")
         };
@@ -442,9 +438,48 @@ pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<S
         .map(|found| found.start())
         .or_else(|| src.find("\nmoduleclass").map(|at| at + 1));
     Ok(match at {
+        // Keep the recipe's own spacing: a blank line above the anchor gets a
+        // blank line below the new block too.
+        Some(at) if src[..at].ends_with("\n\n") => {
+            format!("{}{block}\n{}", &src[..at], &src[at..])
+        }
         Some(at) => format!("{}{block}{}", &src[..at], &src[at..]),
         None => format!("{src}\n{block}"),
     })
+}
+
+/// Append `line` (an indented entry ending in a newline) to the list whose
+/// body spans `open..close`, keeping the entries comma-separated: a
+/// single-line `[('binutils', '2.45')]` gains a comma and a line break first.
+fn append_list_entry(src: &str, (open, close): (usize, usize), line: &str) -> String {
+    let body = &src[open..close];
+    let kept = open + body.trim_end().len();
+    // Where the last entry's code ends, skipping comment-only lines and a
+    // trailing comment, so a missing comma goes after the code and not into
+    // the comment.
+    let mut comma_at = None;
+    let mut offset = 0usize;
+    for text in body.split_inclusive('\n') {
+        let code = text.split('#').next().unwrap_or("");
+        let trimmed = code.trim_end();
+        if !trimmed.trim_start().is_empty() {
+            comma_at = (!trimmed.ends_with(',')).then_some(open + offset + trimmed.len());
+        }
+        offset += text.len();
+    }
+    let mut out = String::with_capacity(src.len() + line.len() + 2);
+    match comma_at {
+        Some(at) => {
+            out.push_str(&src[..at]);
+            out.push(',');
+            out.push_str(&src[at..kept]);
+        }
+        None => out.push_str(&src[..kept]),
+    }
+    out.push('\n');
+    out.push_str(line);
+    out.push_str(&src[close..]);
+    out
 }
 
 /// Replace `key = ...` with `key = {rhs}`, or insert the assignment before
@@ -469,6 +504,25 @@ pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, 
         return Ok(out);
     }
     let line = format!("{key} = {rhs}\n");
+    // `configopts` belongs beside `preconfigopts`, `buildopts` beside
+    // `prebuildopts`: a reader looks for one step's options in one place.
+    if let Some((_, end)) = ["pre", "post"].iter().find_map(|prefix| {
+        find_assignment_span(src, &format!("{prefix}{key}"))
+            .ok()
+            .flatten()
+    }) {
+        let at = src[end..]
+            .find('\n')
+            .map_or(src.len(), |offset| end + offset + 1);
+        let mut out = String::with_capacity(src.len() + line.len() + 1);
+        out.push_str(&src[..at]);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        out.push_str(&src[at..]);
+        return Ok(out);
+    }
     if let Some(at) = src.find("\nmoduleclass") {
         let mut out = String::with_capacity(src.len() + line.len() + 2);
         out.push_str(&src[..at]);
@@ -726,6 +780,35 @@ fn assign_string_raw(src: &str, key: &str) -> Option<String> {
 /// its own version.
 pub(crate) fn rewrite_version_assignment(src: &str, version: &str) -> Result<String, EmitError> {
     rewrite_string_assign(src, "version", version)
+}
+
+/// The recipe text with `easyblock = '...'` naming `class`.
+pub(crate) fn rewrite_easyblock_assignment(src: &str, class: &str) -> Result<String, EmitError> {
+    rewrite_string_assign(src, "easyblock", class)
+}
+
+/// Insert `key = rhs` on the line after the `after` assignment, which must
+/// exist. Used where EasyBuild convention fixes the position: `crates` follows
+/// `sources`.
+pub(crate) fn insert_assignment_after(
+    src: &str,
+    after: &str,
+    key: &str,
+    rhs: &str,
+) -> Result<String, EmitError> {
+    let (_, end) = find_assignment_span(src, after)?
+        .ok_or_else(|| EmitError::Rewrite(format!("no {after} assignment to follow")))?;
+    let at = src[end..]
+        .find('\n')
+        .map_or(src.len(), |offset| end + offset + 1);
+    let mut out = String::with_capacity(src.len() + key.len() + rhs.len() + 4);
+    out.push_str(&src[..at]);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!("{key} = {rhs}\n"));
+    out.push_str(&src[at..]);
+    Ok(out)
 }
 
 /// Rewrite `key = '...'` or `key = "..."` keeping the original quote style.
@@ -3315,6 +3398,99 @@ moduleclass = 'tools'
         assert_eq!(
             concat_assignment_rhs("x", &["a ".to_string(), "b".to_string()]),
             "'a b'"
+        );
+    }
+
+    #[test]
+    fn a_build_dependency_joins_a_single_line_list_with_a_comma() {
+        let src = "name = 'App'\nversion = '1.0'\ntoolchain = SYSTEM\n\
+                   builddependencies = [('binutils', '2.45')]\n\nmoduleclass = 'tools'\n";
+        let out = insert_build_dependency(src, "maturin", "1.13.1").expect("insert");
+        assert!(
+            out.contains(
+                "builddependencies = [\n    ('binutils', '2.45'),\n    ('maturin', '1.13.1'),\n]"
+            ),
+            "got:\n{out}"
+        );
+        assert!(crate::eb_parse::resolve_easyconfig_str(&out)
+            .expect("still parses")
+            .builddependencies
+            .iter()
+            .any(|dependency| dependency.name == "maturin"));
+    }
+
+    #[test]
+    fn a_build_dependency_list_is_created_before_dependencies() {
+        let src = "name = 'PuLP'\nversion = '4.2.0'\n\ndependencies = [\n    ('Python', '3.14.2'),\n    ('Cbc', '2.10.13'),\n    # ('Gurobi', '9.5.0'),\n]\n\nmoduleclass = 'tools'\n";
+        let out = insert_build_dependency(src, "maturin", "1.13.1").expect("insert");
+        assert!(
+            out.contains("version = '4.2.0'\n\nbuilddependencies = [\n    ('maturin', '1.13.1'),\n]\n\ndependencies = ["),
+            "got:\n{out}"
+        );
+        let again = insert_build_dependency(&out, "Rust", "1.94.1").expect("insert");
+        assert!(
+            again.contains("    ('maturin', '1.13.1'),\n    ('Rust', '1.94.1'),\n]"),
+            "got:\n{again}"
+        );
+    }
+
+    #[test]
+    fn a_runtime_dependency_after_a_commented_entry_keeps_the_list_valid() {
+        let src = "name = 'App'\nversion = '1.0'\ntoolchain = SYSTEM\ndependencies = [\n    ('Python', '3.14.2'),\n    # ('Gurobi', '9.5.0'),\n]\nmoduleclass = 'tools'\n";
+        let out = insert_runtime_dependency(src, "orloge", "1.1.0").expect("insert");
+        let deps = crate::eb_parse::resolve_easyconfig_str(&out)
+            .expect("still parses")
+            .dependencies;
+        assert_eq!(
+            deps.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            vec!["Python", "orloge"],
+            "got:\n{out}"
+        );
+        let trailing = "name = 'App'\ndependencies = [('Python', '3.14.2')  # pinned\n]\nmoduleclass = 'tools'\n";
+        let out = insert_runtime_dependency(trailing, "orloge", "1.1.0").expect("insert");
+        assert!(
+            out.contains("('Python', '3.14.2'),  # pinned\n    ('orloge', '1.1.0'),\n]"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_inserted_step_option_lands_beside_its_pre_option() {
+        let src = "\
+name = 'ISA-L'
+version = '2.32.1'
+
+preconfigopts = \"autoreconf -i -f &&\"
+
+runtest = 'check'
+
+sanity_check_commands = ['igzip --help']
+
+moduleclass = 'lib'
+";
+        let inserted =
+            upsert_raw_assignment(src, "configopts", "'--enable-programs'").expect("insert");
+        assert!(
+            inserted.contains(
+                "preconfigopts = \"autoreconf -i -f &&\"\nconfigopts = '--enable-programs'\n\nruntest"
+            ),
+            "got:\n{inserted}"
+        );
+    }
+
+    #[test]
+    fn an_assignment_inserted_before_moduleclass_has_one_blank_line_each_side() {
+        let src = "name = 'App'\nversion = '1.0'\n\nsanity_check_commands = ['app']\n\nmoduleclass = 'tools'\n";
+        let inserted = upsert_raw_assignment(src, "configopts", "'--x'").expect("insert");
+        assert!(
+            inserted.ends_with("['app']\n\nconfigopts = '--x'\n\nmoduleclass = 'tools'\n"),
+            "got:\n{inserted}"
+        );
+        let tight = "name = 'App'\nversion = '1.0'\nmoduleclass = 'tools'\n";
+        let inserted = upsert_raw_assignment(tight, "configopts", "'--x'").expect("insert");
+        assert!(
+            inserted.ends_with("version = '1.0'\n\nconfigopts = '--x'\n\nmoduleclass = 'tools'\n"),
+            "got:\n{inserted}"
         );
     }
 
