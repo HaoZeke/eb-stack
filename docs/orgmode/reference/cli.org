@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -39,6 +39,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
 | ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
+| ~stack files~ | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -440,6 +441,14 @@ eb-stack stack arch \
   [--probe-retries N] \
   [--probe-timeout-s SECONDS]
 
+eb-stack stack files \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--easyconfigs TREE]... \
+  [--commit-tree COMMIT=DIR]... \
+  [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
+  [--sourcepath DIR]... \
+  [--path-map FROM=TO]...
+
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
@@ -619,6 +628,48 @@ architecture, and a file that fails to parse on one is a
 [[file:../howto/arch-unsupported.org][Refuse a plan an architecture cannot build]]
 shows the dependency line and the bwa-mem2 line.
 
+** ~stack files~
+
+What it does: list the files each easyconfig in an easystack will look
+for on disk, and look for them the way EasyBuild does. Patches of the
+recipe, its extensions, and its components, patch files named only in
+~checksums~, and sources no URL downloads are checked. A missing patch
+or easyconfig fails the command.
+
+Why you'd use it: software-layer pull request 1842 pinned a commit that
+lacked pip's patch, and the bot failed at the patch step on every
+target.
+
+#+begin_src bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1842/easystacks/20261022-eb-5.4.1-2022b-emSign-cert.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1842/robot-5.4.1 \
+  --commit-tree 97a4c1a9c45b3bbbea67e085ed187055f473e757=tests/stack_files_fixtures/pr1842/commit-97a4c1a
+#+end_src
+
+#+begin_example
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): patch pip-20.3.4_remove-emSign-root-cert.patch (extension pip 22.3.1) is not beside the easyconfig in p/Python/ at 97a4c1a9c45b or under p/Python/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=4
+#+end_example
+
+~--easystack~ repeats, and every pin in those easystacks is on the robot
+path, as it is for one ~eb --easystack~ run. ~--easyconfigs~ is the robot
+tree of the EasyBuild release the bot runs. ~--commit-tree COMMIT=DIR~
+names the easyconfigs directory of one pin; ~--easyconfigs-repo~ reads a
+pin no ~--commit-tree~ names from an easybuild-easyconfigs clone.
+~--sourcepath~ adds a directory EasyBuild also searches. ~--path-map
+FROM=TO~ reads an absolute easystack path, such as a ~/cvmfs~ reprod
+easyconfig, from a local copy. A ~no_url~ line is a source no URL
+downloads; it does not fail the command. An ~unchecked~ line is an entry
+that could not be read, or a filename with a template eb-stack does not
+know. A component patch beside a pinned bundle is reported as missing
+under the component's name (easybuild-framework#5133).
+
+[[file:../howto/patch-presence.org][Find a missing patch before the bot does]]
+shows the component case and the reprod case.
+
+** ~stack sections~
+
 ~stack sections~ reads the build list
 and regroups its entries under the ~#### Title ####~ headers of ~--from~.
 Each entry keeps its flags and whether it is commented out. Packages no
@@ -642,6 +693,8 @@ The recorded lists are ~tests/jenkins_sections/previous.list~ and
 #### New in this generation ####
 # CP2K-2026.1-foss-2025b.eb
 #+end_src
+
+** ~stack from-commit~
 
 ~stack from-commit~ reads each ~--easystack~ and reports every ~from-commit~
 and ~include-easyblocks-from-commit~ pin. The release is
@@ -1185,7 +1238,10 @@ requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
 ~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the
 same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
-and a hit is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
+and a hit is a tool error. ~eb_stack_files~ requires ~easystack~ and takes
+~easyconfigs~, ~commit_tree~, ~easyconfigs_repo~, ~sourcepath~, and
+~path_map~. It returns the same report as ~stack files~, and a missing
+file is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
 refuses the plan the same way. ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
 calls the same runner as the command of that name, and the text it

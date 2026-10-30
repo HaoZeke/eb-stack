@@ -430,6 +430,18 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_files",
+            "Find the patch and source files an easystack's easyconfigs need, as `stack files` does. Patches of the recipe, its extensions and its components, sources no URL downloads, and patches named only in checksums are looked up beside the easyconfig and under <letter>/<name>/ on the robot path; a from-commit pin's tree comes from commit_tree or easyconfigs_repo. A patch or easyconfig found nowhere fails the call with one line per file; a source with no download URL is returned under no_url.",
+            &[("easystack", "array_min1")],
+            &[
+                ("easyconfigs", "array"),
+                ("commit_tree", "array"),
+                ("easyconfigs_repo", "string"),
+                ("sourcepath", "array"),
+                ("path_map", "array"),
+            ],
+        ),
+        tool_with_optional(
             "eb_stack_sections",
             "Regroup a Jenkins build list under the section headers of a previous list, as `stack sections` does.",
             &[("list", "string"), ("from", "string"), ("out", "string")],
@@ -705,6 +717,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_gap" => stack_gap_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
+        "eb_stack_files" => stack_files_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -3019,6 +3032,35 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
         "unsupported": report.unsupported,
         "flagged": report.flagged,
         "source_findings": report.source_findings,
+    }))
+}
+
+fn stack_files_tool(arguments: &Value) -> Result<Value, String> {
+    let report =
+        crate::file_presence::run_file_presence(&crate::file_presence::FilePresenceRequest {
+            easystacks: path_array(arguments, "easystack")?,
+            easyconfigs: optional_paths(arguments, "easyconfigs")?,
+            commit_trees: string_array(arguments, "commit_tree")?,
+            easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
+            sourcepaths: optional_paths(arguments, "sourcepath")?,
+            path_maps: string_array(arguments, "path_map")?,
+        })
+        .map_err(workflow_error)?;
+    if !report.missing.is_empty() {
+        return Err(report
+            .missing
+            .iter()
+            .map(|missing| missing.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "missing": report.missing,
+        "no_url": report.no_url,
+        "unchecked": report.unchecked,
+        "easyconfigs": report.checked,
+        "files": report.files,
     }))
 }
 

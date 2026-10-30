@@ -1133,6 +1133,45 @@ enum StackCommand {
         )]
         probe_timeout_s: u64,
     },
+    /// Find the patch and source files an easystack's easyconfigs need
+    /// before the bot looks for them.
+    ///
+    /// Patches of the recipe, its extensions and its components, sources no
+    /// URL downloads, and patch files named only in `checksums` are looked
+    /// up the way EasyBuild does: beside the easyconfig, then under
+    /// `<letter>/<name>/` on the robot path. A `from-commit` pin puts that
+    /// commit's tree on the robot path. A patch or easyconfig found nowhere
+    /// fails the command, and the line names the easyconfig, the file, and
+    /// where it was looked for. A source with no download URL is printed as
+    /// a `no_url` line and does not fail it.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack files --easystack easystacks/software.eessi.io/2023.06/rebuilds/20261022-eb-5.4.1-2022b-emSign-cert.yml --easyconfigs easybuild-easyconfigs-5.4.1/easybuild/easyconfigs --easyconfigs-repo easybuild-easyconfigs\n  eb-stack stack files --easystack eessi-2025.06-eb-5.2.0-2025b.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-tree 7e74f85c3268=pr-25365/easybuild/easyconfigs"
+    )]
+    Files {
+        /// Easystack whose entries are checked. Repeatable.
+        #[arg(long, required = true)]
+        easystack: Vec<PathBuf>,
+        /// Robot-path easyconfig tree of the EasyBuild release the bot runs.
+        /// Repeatable.
+        #[arg(long)]
+        easyconfigs: Vec<PathBuf>,
+        /// Easyconfigs for one `from-commit` pin, as `<commit>=<dir>`.
+        /// Repeatable.
+        #[arg(long = "commit-tree")]
+        commit_trees: Vec<String>,
+        /// easybuild-easyconfigs git checkout a `from-commit` pin is read
+        /// from with `git ls-tree` and `git show`, when no `--commit-tree`
+        /// names it. The commit has to be fetched.
+        #[arg(long)]
+        easyconfigs_repo: Option<PathBuf>,
+        /// Source directory EasyBuild also searches. Repeatable.
+        #[arg(long)]
+        sourcepath: Vec<PathBuf>,
+        /// Read an easystack path that starts with `FROM` from `TO`, as
+        /// `FROM=TO`. Repeatable.
+        #[arg(long = "path-map")]
+        path_map: Vec<String>,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     #[command(
@@ -2549,6 +2588,38 @@ fn run_stack(command: StackCommand) -> Result<()> {
             }
             if !report.source_findings.is_empty() {
                 bail!("{}", report.source_findings.join("\n"));
+            }
+            Ok(())
+        }
+        StackCommand::Files {
+            easystack,
+            easyconfigs,
+            commit_trees,
+            easyconfigs_repo,
+            sourcepath,
+            path_map,
+        } => {
+            let report = eb_stack::file_presence::run_file_presence(
+                &eb_stack::file_presence::FilePresenceRequest {
+                    easystacks: easystack,
+                    easyconfigs,
+                    commit_trees,
+                    easyconfigs_repo,
+                    sourcepaths: sourcepath,
+                    path_maps: path_map,
+                },
+            )?;
+            print!("{}", report.stdout);
+            if !report.missing.is_empty() {
+                bail!(
+                    "{}",
+                    report
+                        .missing
+                        .iter()
+                        .map(|missing| missing.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
             }
             Ok(())
         }

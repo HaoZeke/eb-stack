@@ -1,0 +1,34 @@
+easyblock = 'PythonBundle'
+
+name = 'SciPy-bundle'
+version = '2023.07'
+
+homepage = 'https://python.org/'
+description = """The reprod copy EESSI kept of SciPy-bundle 2023.07, trimmed to the fields the file lookup reads."""
+
+toolchain = {'name': 'gfbf', 'version': '2023a'}
+toolchainopts = {'pic': True, 'lowopt': True}
+
+exts_default_options = {
+    'source_urls': [PYPI_SOURCE],
+}
+
+exts_list = [
+    ('scipy', '1.11.1', {
+        'patches': [
+            'scipy-1.11.1_disable-tests.patch',
+            'scipy-1.11.1_xfail-aarch64_test_maxiter_worsening.patch',
+            'scipy-1.11.1_vectorization_error.patch',
+        ],
+        'checksums': [
+            {'scipy-1.11.1.tar.gz': 'fb5b492fa035334fd249f0973cc79ecad8b09c604b42a127a677b45a9a3d4289'},
+            {'scipy-1.11.1_disable-tests.patch': '906bfb03397d94882ccdc1b93bc2c8e854e0e060c2d107c83042992394e6a4af'},
+            {'scipy-1.11.1_xfail-aarch64_test_maxiter_worsening.patch':
+             '918c8e6fa8215d459126f267764c961bde729ea4a116c7f6287cddfdc58ffcea'},
+            {'scipy-1.11.1_vectorization_error.patch':
+             'bfba00ab84d7d6d73b87e4e94ea2487058d155f845c12212552c095fea9e5cae'},
+        ],
+    }),
+]
+
+moduleclass = 'lang'

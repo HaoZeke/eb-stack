@@ -188,6 +188,7 @@ jobs:
             --test sbom_schema \
             --test skill_easyblock_fix \
             --test solver_completeness \
+            --test stack_files \
             --test stack_order_filter \
             --test source_probe \
             -- --nocapture

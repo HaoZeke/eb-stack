@@ -1,0 +1,51 @@
+name = 'Python'
+version = '3.10.8'
+
+homepage = 'https://python.org/'
+description = """Python at easybuild-easyconfigs 5837547, trimmed to the fields the file lookup reads."""
+
+toolchain = {'name': 'GCCcore', 'version': '12.2.0'}
+toolchainopts = {'pic': True}
+
+source_urls = ['https://www.python.org/ftp/%(namelower)s/%(version)s/']
+sources = [SOURCE_TGZ]
+
+patch_ctypes_ld_library_path = 'Python-3.11.5-custom-ctypes.patch'
+
+checksums = [
+    {'Python-3.10.8.tgz': 'f400c3fb394b8bef1292f6dc1292c5fadc3533039a5bc0c3e885f3e16738029a'},
+    {'Python-3.11.5-custom-ctypes.patch': 'b29c22f47587460149e05296ff09b29bf790a83e2b3b13fb2f42f5f236ad8ea7'}
+]
+
+exts_default_options = {
+    'source_urls': [PYPI_SOURCE],
+}
+
+exts_list = [
+    ('wheel', '0.38.4', {
+        'checksums': ['0000000000000000000000000000000000000000000000000000000000000000'],
+    }),
+    ('pip', '22.3.1', {
+        'patches': ['pip-20.3.4_remove-emSign-root-cert.patch'],
+        'checksums': [
+            {'pip-22.3.1.tar.gz': '65fd48317359f3af8e593943e6ae1506b66325085ea64b706a998c6e83eeaf38'},
+            {'pip-20.3.4_remove-emSign-root-cert.patch':
+             '0000000000000000000000000000000000000000000000000000000000000000'},
+        ],
+    }),
+    ('blist', '1.3.6', {
+        'patches': [
+            'Python-3_9-blist-1.3.6-fix-undefined_symbol_PyObject_GC_IS_TRACKED.patch',
+            'Python-3.10-bist-1.3.6-compatibility.patch',
+        ],
+        'checksums': [
+            {'blist-1.3.6.tar.gz': '0000000000000000000000000000000000000000000000000000000000000000'},
+            {'Python-3_9-blist-1.3.6-fix-undefined_symbol_PyObject_GC_IS_TRACKED.patch':
+             '0000000000000000000000000000000000000000000000000000000000000000'},
+            {'Python-3.10-bist-1.3.6-compatibility.patch':
+             '0000000000000000000000000000000000000000000000000000000000000000'},
+        ],
+    }),
+]
+
+moduleclass = 'lang'

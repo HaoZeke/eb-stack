@@ -1,0 +1,5 @@
+easyconfigs:
+  - Python-3.10.8-GCCcore-12.2.0.eb:
+      options:
+        # software-layer #1842 after "use merge commit so patch for pip is found"
+        from-commit: 583754772b7f526dda3a4f1443bbbd5953f7d8ea

@@ -231,6 +231,28 @@ entry has never been installed on that architecture and is not in its
 before it writes a plan. The how-to is
 `docs/orgmode/howto/arch-unsupported.org`.
 
+## Patch presence gate, before the bot
+
+A patch that is missing fails the bot at the patch step on every target.
+Check the easystack against the EasyBuild release the bot runs and the
+easyconfigs clone its pins come from:
+
+```sh
+eb-stack stack files \
+  --easystack easystacks/software.eessi.io/2023.06/rebuilds/20261022-eb-5.4.1-2022b-emSign-cert.yml \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyconfigs-repo ~/src/easybuild-easyconfigs
+```
+
+A `missing` line exits 1 and names the easyconfig, the file, and where it
+was looked for. Pin the easyconfigs PR's merge commit, not a head that
+lacks the patch (#1842). A component patch beside a pinned bundle is not
+found by the component install (easybuild-framework#5133, #1398). A
+`no_url` line is a source only sources.easybuild.io can still supply. An
+`unchecked` line is a pin the clone does not have, or a `/cvmfs` path;
+fetch the pin, or pass `--path-map`. The how-to is
+`docs/orgmode/howto/patch-presence.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening

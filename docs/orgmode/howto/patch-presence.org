@@ -1,0 +1,115 @@
+#+TITLE: Find a missing patch before the bot does
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack files~ reads each easyconfig an easystack names
+and lists the files EasyBuild will look for on disk: the patches of
+the recipe, its extensions, and its components, patch files named only
+in ~checksums~, and sources no URL downloads. It looks for each one
+the way EasyBuild does, beside the easyconfig and then under
+~<letter>/<name>/~ on the robot path. A ~from-commit~ pin puts that
+commit's tree on the robot path. A patch found nowhere fails the
+command, and the line says where it was looked for.
+
+Why you'd use it: a missing patch only shows up when the bot reaches
+the patch step, after the dependencies have built. Three
+software-layer pull requests failed that way. Pull request 1842 pinned
+the head of easyconfigs pull request 27224, which did not yet have the
+pip patch the Python 3.10.8 rebuild needed. Pull request 1398 pinned an
+Xfce bundle whose component patches EasyBuild could not find
+(easybuild-framework#5133). Pull request 1048 rebuilt SciPy-bundle from
+its reprod easyconfig, which named a patch that neither the reprod
+directory nor EasyBuild 4.9.4 had.
+
+#+begin_src bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1842/easystacks/20261022-eb-5.4.1-2022b-emSign-cert.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1842/robot-5.4.1 \
+  --commit-tree 97a4c1a9c45b3bbbea67e085ed187055f473e757=tests/stack_files_fixtures/pr1842/commit-97a4c1a
+#+end_src
+
+The command prints:
+
+#+begin_example
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): patch pip-20.3.4_remove-emSign-root-cert.patch (extension pip 22.3.1) is not beside the easyconfig in p/Python/ at 97a4c1a9c45b or under p/Python/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=4
+#+end_example
+
+The first line is the failure, and the command exits 1. It names the
+easyconfig and its pin, the patch, and the extension that lists it.
+The patch was not in ~p/Python/~ at the pinned commit, and it was not
+under ~p/Python/~ in the EasyBuild 5.4.1 tree given as ~--easyconfigs~.
+The last line counts what was found: one missing file, four files
+checked across one easyconfig. The merge commit of pull request 27224,
+583754772b7f, has the patch, and pinning it prints only
+~missing=0 no_url=0 unchecked=0 easyconfigs=1 files=4~.
+
+~--commit-tree COMMIT=DIR~ says which directory holds a pinned commit's
+easyconfigs. A clone of easybuild-easyconfigs works instead:
+~--easyconfigs-repo ~/src/easybuild-easyconfigs~ reads each pin with
+~git ls-tree~ and ~git show~, and an abbreviated pin is enough. A pin
+neither of them has is not passed. It is printed as ~unchecked~:
+
+#+begin_example
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): unchecked, no --commit-tree or --easyconfigs-repo has commit 97a4c1a9c45b3bbbea67e085ed187055f473e757
+missing=0 no_url=0 unchecked=1 easyconfigs=0 files=0
+#+end_example
+
+A pin that only exists on a fork, such as a contributor's branch, has
+to be fetched into that clone first.
+
+A bundle component is looked up twice. The patch is fetched under the
+bundle's name first, and then again under the component's name when the
+component installs. For a ~from-commit~ easyconfig, the second lookup
+skips the easyconfig's directory, so a patch that only sits beside the
+bundle fails there:
+
+#+begin_src bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1398/easystacks/eessi-2025.06-eb-5.2.0-2025b.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1398/robot-5.2.0 \
+  --commit-tree 7e74f85c32686a6c456d4978430de35751d6cefd=tests/stack_files_fixtures/pr1398/commit-7e74f85
+#+end_src
+
+#+begin_example
+Xfce-4.20-GCCcore-14.3.0.eb (from-commit 7e74f85c3268): patch xfce-terminal-1.1.5_fix_version.patch (component xfce4-terminal 1.1.5) is beside the easyconfig in x/Xfce/ at 7e74f85c3268, but for a from-commit easyconfig the component install looks only under x/xfce4-terminal/ on the robot path (easybuild-framework#5133)
+Xfce-4.20-GCCcore-14.3.0.eb (from-commit 7e74f85c3268): patch xfce-terminal-1.1.5_fix_doc.patch (component xfce4-terminal 1.1.5) is beside the easyconfig in x/Xfce/ at 7e74f85c3268, but for a from-commit easyconfig the component install looks only under x/xfce4-terminal/ on the robot path (easybuild-framework#5133)
+missing=2 no_url=0 unchecked=0 easyconfigs=1 files=2
+#+end_example
+
+Pull request 1398 worked around it by putting the two patches where
+the component lookup finds them. ~--sourcepath~ models that: with
+~--sourcepath tests/stack_files_fixtures/pr1398/sourcepath~, which has
+them under ~x/xfce4-terminal/~, the same command passes. The bundle on
+the robot path, without a pin, passes too, because without a pin the
+component lookup still includes the easyconfig's own directory.
+
+An easystack line that is an absolute path, like the ~/cvmfs~ reprod
+easyconfig in pull request 1048, is read from that path. On a machine
+without CernVM-FS, ~--path-map FROM=TO~ maps the prefix to a local copy.
+The fixture's ~cvmfs~ directory holds the reprod easyconfig at its real
+path:
+
+#+begin_src bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1048/easystacks/015-eb-4.9.4.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1048/robot-4.9.4 \
+  --path-map /cvmfs=$PWD/tests/stack_files_fixtures/pr1048/cvmfs
+#+end_src
+
+#+begin_example
+SciPy-bundle-2023.07-gfbf-2023a.eb: patch scipy-1.11.1_vectorization_error.patch (extension scipy 1.11.1) is not beside the easyconfig in /cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/intel/haswell/software/SciPy-bundle/2023.07-gfbf-2023a/easybuild/ or under s/SciPy-bundle/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=3
+#+end_example
+
+The message keeps the path as the easystack wrote it. Without the map
+the entry is ~unchecked~, with the reason ~is not readable here~.
+
+A ~no_url~ line is a source with no ~source_urls~ in the recipe and no
+URL of its own, such as a licensed tarball. It does not fail the
+command, because sources.easybuild.io can still have it. A filename
+that still holds a template eb-stack does not know, such as
+~%(orcaarch)s~, is ~unchecked~. Sources of an easyblock that supplies
+its own download URL, the PyPI default of ~PythonPackage~, are not
+checked.
+
+See [[file:../reference/cli.org][the command-line reference]].

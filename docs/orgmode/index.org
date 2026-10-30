@@ -60,6 +60,8 @@
 
    *A plan an architecture cannot build?* → :doc:`howto/arch-unsupported`
 
+   *A patch the bot will not find?* → :doc:`howto/patch-presence`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -141,6 +143,7 @@
    howto/component-reach
    howto/from-commit-released
    howto/arch-unsupported
+   howto/patch-presence
 
 .. toctree::
    :maxdepth: 2
@@ -266,7 +269,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
     [[file:howto/component-reach.org][which modules carry a component]],
     [[file:howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]],
-    [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
+    [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]],
+    [[file:howto/patch-presence.org][find a missing patch before the bot does]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],

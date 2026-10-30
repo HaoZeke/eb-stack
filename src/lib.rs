@@ -27,6 +27,7 @@ pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
 pub mod ecosystem;
+pub mod file_presence;
 pub mod findings;
 pub mod gap;
 pub use crate::ecosystem::parse_package_index;

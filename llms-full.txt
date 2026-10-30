@@ -87,7 +87,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [what an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md),
     [which modules carry a component](https://eb-stack.rgoswami.me/howto/component-reach.html.md),
     [find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md),
-    [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md).
+    [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md),
+    [find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -3437,6 +3438,121 @@ exits 1. `--probe-retries` (default 2) and `--probe-timeout-s`
 
 See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# Find a missing patch before the bot does
+
+What it does: `stack files` reads each easyconfig an easystack names
+and lists the files EasyBuild will look for on disk: the patches of
+the recipe, its extensions, and its components, patch files named only
+in `checksums`, and sources no URL downloads. It looks for each one
+the way EasyBuild does, beside the easyconfig and then under
+`<letter>/<name>/` on the robot path. A `from-commit` pin puts that
+commit's tree on the robot path. A patch found nowhere fails the
+command, and the line says where it was looked for.
+
+Why you'd use it: a missing patch only shows up when the bot reaches
+the patch step, after the dependencies have built. Three
+software-layer pull requests failed that way. Pull request 1842 pinned
+the head of easyconfigs pull request 27224, which did not yet have the
+pip patch the Python 3.10.8 rebuild needed. Pull request 1398 pinned an
+Xfce bundle whose component patches EasyBuild could not find
+(easybuild-framework#5133). Pull request 1048 rebuilt SciPy-bundle from
+its reprod easyconfig, which named a patch that neither the reprod
+directory nor EasyBuild 4.9.4 had.
+
+```bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1842/easystacks/20261022-eb-5.4.1-2022b-emSign-cert.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1842/robot-5.4.1 \
+  --commit-tree 97a4c1a9c45b3bbbea67e085ed187055f473e757=tests/stack_files_fixtures/pr1842/commit-97a4c1a
+```
+
+The command prints:
+
+```
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): patch pip-20.3.4_remove-emSign-root-cert.patch (extension pip 22.3.1) is not beside the easyconfig in p/Python/ at 97a4c1a9c45b or under p/Python/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=4
+```
+
+The first line is the failure, and the command exits 1. It names the
+easyconfig and its pin, the patch, and the extension that lists it.
+The patch was not in `p/Python/` at the pinned commit, and it was not
+under `p/Python/` in the EasyBuild 5.4.1 tree given as `--easyconfigs`.
+The last line counts what was found: one missing file, four files
+checked across one easyconfig. The merge commit of pull request 27224,
+583754772b7f, has the patch, and pinning it prints only
+`missing`0 no_url`0 unchecked`0 easyconfigs`1 files=4`.
+
+`--commit-tree COMMIT=DIR` says which directory holds a pinned commit's
+easyconfigs. A clone of easybuild-easyconfigs works instead:
+`--easyconfigs-repo `/src/easybuild-easyconfigs~ reads each pin with
+`git ls-tree` and `git show`, and an abbreviated pin is enough. A pin
+neither of them has is not passed. It is printed as `unchecked`:
+
+```
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): unchecked, no --commit-tree or --easyconfigs-repo has commit 97a4c1a9c45b3bbbea67e085ed187055f473e757
+missing=0 no_url=0 unchecked=1 easyconfigs=0 files=0
+```
+
+A pin that only exists on a fork, such as a contributor's branch, has
+to be fetched into that clone first.
+
+A bundle component is looked up twice. The patch is fetched under the
+bundle's name first, and then again under the component's name when the
+component installs. For a `from-commit` easyconfig, the second lookup
+skips the easyconfig's directory, so a patch that only sits beside the
+bundle fails there:
+
+```bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1398/easystacks/eessi-2025.06-eb-5.2.0-2025b.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1398/robot-5.2.0 \
+  --commit-tree 7e74f85c32686a6c456d4978430de35751d6cefd=tests/stack_files_fixtures/pr1398/commit-7e74f85
+```
+
+```
+Xfce-4.20-GCCcore-14.3.0.eb (from-commit 7e74f85c3268): patch xfce-terminal-1.1.5_fix_version.patch (component xfce4-terminal 1.1.5) is beside the easyconfig in x/Xfce/ at 7e74f85c3268, but for a from-commit easyconfig the component install looks only under x/xfce4-terminal/ on the robot path (easybuild-framework#5133)
+Xfce-4.20-GCCcore-14.3.0.eb (from-commit 7e74f85c3268): patch xfce-terminal-1.1.5_fix_doc.patch (component xfce4-terminal 1.1.5) is beside the easyconfig in x/Xfce/ at 7e74f85c3268, but for a from-commit easyconfig the component install looks only under x/xfce4-terminal/ on the robot path (easybuild-framework#5133)
+missing=2 no_url=0 unchecked=0 easyconfigs=1 files=2
+```
+
+Pull request 1398 worked around it by putting the two patches where
+the component lookup finds them. `--sourcepath` models that: with
+`--sourcepath tests/stack_files_fixtures/pr1398/sourcepath`, which has
+them under `x/xfce4-terminal/`, the same command passes. The bundle on
+the robot path, without a pin, passes too, because without a pin the
+component lookup still includes the easyconfig's own directory.
+
+An easystack line that is an absolute path, like the `/cvmfs` reprod
+easyconfig in pull request 1048, is read from that path. On a machine
+without CernVM-FS, `--path-map FROM=TO` maps the prefix to a local copy.
+The fixture's `cvmfs` directory holds the reprod easyconfig at its real
+path:
+
+```bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1048/easystacks/015-eb-4.9.4.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1048/robot-4.9.4 \
+  --path-map /cvmfs=$PWD/tests/stack_files_fixtures/pr1048/cvmfs
+```
+
+```
+SciPy-bundle-2023.07-gfbf-2023a.eb: patch scipy-1.11.1_vectorization_error.patch (extension scipy 1.11.1) is not beside the easyconfig in /cvmfs/software.eessi.io/versions/2023.06/software/linux/x86_64/intel/haswell/software/SciPy-bundle/2023.07-gfbf-2023a/easybuild/ or under s/SciPy-bundle/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=3
+```
+
+The message keeps the path as the easystack wrote it. Without the map
+the entry is `unchecked`, with the reason `is not readable here`.
+
+A `no_url` line is a source with no `source_urls` in the recipe and no
+URL of its own, such as a licensed tarball. It does not fail the
+command, because sources.easybuild.io can still have it. A filename
+that still holds a template eb-stack does not know, such as
+`%(orcaarch)s`, is `unchecked`. Sources of an easyblock that supplies
+its own download URL, the PyPI default of `PythonPackage`, are not
+checked.
+
+See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -3453,7 +3569,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -3477,6 +3593,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack sections` | Regroup a Jenkins build list under a previous list's headers |
 | `stack from-commit` | Report `from-commit` pins already contained in an EasyBuild release |
 | `stack arch` | Refuse a plan an architecture cannot build, and flag entries never installed there |
+| `stack files` | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -3878,6 +3995,14 @@ eb-stack stack arch \
   [--probe-retries N] \
   [--probe-timeout-s SECONDS]
 
+eb-stack stack files \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--easyconfigs TREE]... \
+  [--commit-tree COMMIT=DIR]... \
+  [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
+  [--sourcepath DIR]... \
+  [--path-map FROM=TO]...
+
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
@@ -4057,6 +4182,48 @@ architecture, and a file that fails to parse on one is a
 [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md)
 shows the dependency line and the bwa-mem2 line.
 
+## `stack files`
+
+What it does: list the files each easyconfig in an easystack will look
+for on disk, and look for them the way EasyBuild does. Patches of the
+recipe, its extensions, and its components, patch files named only in
+`checksums`, and sources no URL downloads are checked. A missing patch
+or easyconfig fails the command.
+
+Why you'd use it: software-layer pull request 1842 pinned a commit that
+lacked pip's patch, and the bot failed at the patch step on every
+target.
+
+```bash
+eb-stack stack files \
+  --easystack tests/stack_files_fixtures/pr1842/easystacks/20261022-eb-5.4.1-2022b-emSign-cert.yml \
+  --easyconfigs tests/stack_files_fixtures/pr1842/robot-5.4.1 \
+  --commit-tree 97a4c1a9c45b3bbbea67e085ed187055f473e757=tests/stack_files_fixtures/pr1842/commit-97a4c1a
+```
+
+```
+Python-3.10.8-GCCcore-12.2.0.eb (from-commit 97a4c1a9c45b): patch pip-20.3.4_remove-emSign-root-cert.patch (extension pip 22.3.1) is not beside the easyconfig in p/Python/ at 97a4c1a9c45b or under p/Python/ on the robot path
+missing=1 no_url=0 unchecked=0 easyconfigs=1 files=4
+```
+
+`--easystack` repeats, and every pin in those easystacks is on the robot
+path, as it is for one `eb --easystack` run. `--easyconfigs` is the robot
+tree of the EasyBuild release the bot runs. `--commit-tree COMMIT=DIR`
+names the easyconfigs directory of one pin; `--easyconfigs-repo` reads a
+pin no `--commit-tree` names from an easybuild-easyconfigs clone.
+`--sourcepath` adds a directory EasyBuild also searches. ~--path-map
+FROM=TO` reads an absolute easystack path, such as a `/cvmfs~ reprod
+easyconfig, from a local copy. A `no_url` line is a source no URL
+downloads; it does not fail the command. An `unchecked` line is an entry
+that could not be read, or a filename with a template eb-stack does not
+know. A component patch beside a pinned bundle is reported as missing
+under the component's name (easybuild-framework#5133).
+
+[Find a missing patch before the bot does](https://eb-stack.rgoswami.me/../howto/patch-presence.html.md)
+shows the component case and the reprod case.
+
+## `stack sections`
+
 `stack sections` reads the build list
 and regroups its entries under the `#### Title ####` headers of `--from`.
 Each entry keeps its flags and whether it is commented out. Packages no
@@ -4080,6 +4247,8 @@ The recorded lists are `tests/jenkins_sections/previous.list` and
 #### New in this generation ####
 # CP2K-2026.1-foss-2025b.eb
 ```
+
+## `stack from-commit`
 
 `stack from-commit` reads each `--easystack` and reports every `from-commit`
 and `include-easyblocks-from-commit` pin. The release is
@@ -4623,7 +4792,10 @@ requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
 `arch`, `easyconfigs`, `installed`, `additional_arch`, `unsupported`,
 `probe_sources`, `probe_retries`, and `probe_timeout_s`. It returns the
 same report as `stack arch`, with `parse_failed` and `source_findings`,
-and a hit is a tool error. `eb_stack_batch` takes `arch` and `unsupported` and
+and a hit is a tool error. `eb_stack_files` requires `easystack` and takes
+`easyconfigs`, `commit_tree`, `easyconfigs_repo`, `sourcepath`, and
+`path_map`. It returns the same report as `stack files`, and a missing
+file is a tool error. `eb_stack_batch` takes `arch` and `unsupported` and
 refuses the plan the same way. `eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it
@@ -8424,7 +8596,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 42 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 43 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -8463,6 +8635,7 @@ eb_package_latest
 eb_stack_gap
 eb_stack_batch
 eb_stack_arch
+eb_stack_files
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach
@@ -8478,7 +8651,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 42 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 43 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:

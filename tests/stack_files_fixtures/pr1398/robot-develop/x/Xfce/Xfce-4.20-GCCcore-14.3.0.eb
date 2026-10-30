@@ -1,0 +1,41 @@
+easyblock = 'Bundle'
+
+name = 'Xfce'
+version = '4.20'
+
+homepage = 'https://www.xfce.org/'
+description = """Xfce as merged into develop from ocaisa/easybuild-easyconfigs 7e74f85, trimmed to the fields the file lookup reads."""
+
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+
+default_easyblock = 'ConfigureMake'
+
+default_component_specs = {
+    'source_urls': [
+        'https://archive.xfce.org/src/apps/%(name)s/%(version_major)s.%(version_minor)s/',
+        'https://archive.xfce.org/src/xfce/%(name)s/%(version_major)s.%(version_minor)s/',
+    ],
+    'sources': [SOURCELOWER_TAR_BZ2],
+    'start_dir': '%(namelower)s-%(version)s',
+}
+
+components = [
+    ('xfce4-dev-tools', version + '.0', {
+        'checksums': ['1fba39a08a0ecc771eaa3a3b6e4272a4f0b9e7c67d0f66e780cd6090cd4466aa'],
+    }),
+    ('xfce4-terminal', '1.1.5', {
+        'easyblock': 'MesonNinja',
+        'sources': [SOURCELOWER_TAR_XZ],
+        'patches': [
+            'xfce-terminal-1.1.5_fix_version.patch',
+            'xfce-terminal-1.1.5_fix_doc.patch',
+        ],
+        'checksums': [
+            '3c5b1d3a01a9a113852ac0f77d1c85bf3a356b43de33ec805b21ceca7d6f0a63',
+            '3a5597192091e49870c0f2358b02bfe56f25b1467669212715791fc25c977dcd',
+            'd2eed99e88ea18ea608ff7cf1c7825f29c1455736d7e0e55b6a6eb37c40f2f51',
+        ],
+    }),
+]
+
+moduleclass = 'vis'

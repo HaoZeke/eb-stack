@@ -148,6 +148,18 @@ pub struct EasystackEntry {
 /// filename to `options`. Anything under the top-level `easyconfigs` key that
 /// names no `.eb` file is skipped rather than guessed at.
 pub fn parse_easystack_entries(text: &str) -> Result<Vec<EasystackEntry>, serde_yaml::Error> {
+    Ok(parse_easystack_written(text)?
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .collect())
+}
+
+/// [`parse_easystack_entries`], with each entry's easyconfig as the file
+/// writes it. EasyBuild reads a written path such as an EESSI `reprod` copy
+/// from that path rather than from the robot path.
+pub fn parse_easystack_written(
+    text: &str,
+) -> Result<Vec<(String, EasystackEntry)>, serde_yaml::Error> {
     let doc: Value = serde_yaml::from_str(text)?;
     let Some(items) = doc.get("easyconfigs").and_then(Value::as_sequence) else {
         return Ok(Vec::new());
@@ -170,12 +182,15 @@ pub fn parse_easystack_entries(text: &str) -> Result<Vec<EasystackEntry>, serde_
         let include_easyblocks_from_commit =
             option_string(options, "include-easyblocks-from-commit");
         let include_easyblocks_from_pr = option_string(options, "include-easyblocks-from-pr");
-        out.push(EasystackEntry {
-            file,
-            from_commit,
-            include_easyblocks_from_commit,
-            include_easyblocks_from_pr,
-        });
+        out.push((
+            name.trim().to_string(),
+            EasystackEntry {
+                file,
+                from_commit,
+                include_easyblocks_from_commit,
+                include_easyblocks_from_pr,
+            },
+        ));
     }
     Ok(out)
 }

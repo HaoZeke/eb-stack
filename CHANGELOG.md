@@ -363,6 +363,15 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack stack files` finds the patch and source files an easystack's
+  easyconfigs need that neither the easyconfig's directory nor the robot
+  path has. Patches of the recipe, its extensions, and its components,
+  patch files named only in `checksums`, and sources no URL downloads are
+  looked up the way EasyBuild does, with each `from-commit` pin's tree on
+  the robot path. A missing patch fails the command (software-layer #1842
+  and #1048), and a component patch beside a pinned bundle is reported
+  under easybuild-framework#5133 (#1398). A source with no URL is a
+  `no_url` warning. `eb_stack_files` runs the same check.
 - `eb-stack stack arch --easyconfigs` parses each easyconfig once per
   architecture, so a file the plan names that fails to parse on one
   architecture is a `parse_failed` line and exits 1 (software-layer

@@ -2570,7 +2570,7 @@ pub fn resolve_easyconfig_str_reporting_for_arch(
     src: &str,
     arch: &str,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
-    resolve_easyconfig_str_inner(src, arch).map(|(recipe, skipped, _)| (recipe, skipped))
+    resolve_easyconfig_str_inner(src, arch).map(|(recipe, skipped, _, _)| (recipe, skipped))
 }
 
 /// As [`resolve_easyconfig_file`], also returning the skipped statements.
@@ -2610,7 +2610,70 @@ pub fn resolve_easyconfig_str_for_arch(
     src: &str,
     arch: &str,
 ) -> Result<ResolvedEasyconfig, ParseError> {
-    resolve_easyconfig_str_inner(src, arch).map(|(resolved, _, _)| resolved)
+    resolve_easyconfig_str_inner(src, arch).map(|(resolved, _, _, _)| resolved)
+}
+
+/// Whose options name a [`LocalFile`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LocalFileOwner {
+    /// The easyconfig's own `patches`, `postinstallpatches`, `sources`, or
+    /// `checksums`.
+    Recipe,
+    /// An `exts_list` entry.
+    Extension {
+        /// Extension name.
+        name: String,
+        /// Extension version.
+        version: String,
+    },
+    /// A `components` entry of a Bundle.
+    Component {
+        /// Component name.
+        name: String,
+        /// Component version.
+        version: String,
+    },
+}
+
+/// Which field named a [`LocalFile`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalFileKind {
+    /// A `patches` or `postinstallpatches` entry.
+    Patch,
+    /// A `sources` entry with no download URL and no `git_config`.
+    Source,
+    /// A patch file named only as a `checksums` key, the way Python's
+    /// `patch_ctypes_ld_library_path` is.
+    ChecksumPatch,
+}
+
+/// A file EasyBuild has to find on disk because nothing downloads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalFile {
+    /// File name after the owner's templates are applied.
+    pub filename: String,
+    /// The field that named it.
+    pub kind: LocalFileKind,
+    /// The recipe, extension, or component whose options name it.
+    pub owner: LocalFileOwner,
+    /// `alt_location` of a patch dict: EasyBuild searches under this name
+    /// instead of the software name, and skips the easyconfig's directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_location: Option<String>,
+}
+
+/// The recipe and every file it expects EasyBuild to find rather than
+/// download: patches of the recipe, its extensions and its components,
+/// sources no URL fetches, and patch files named only in `checksums`.
+///
+/// An extension's or component's options are templated with that entry's
+/// own name and version, which is what EasyBuild does, so
+/// `'%(name)s-%(version)s_fix.patch'` inside an `exts_list` entry names the
+/// extension's file and not the parent's.
+pub fn resolve_local_files(src: &str) -> Result<(ResolvedEasyconfig, Vec<LocalFile>), ParseError> {
+    resolve_easyconfig_str_inner(src, host_arch()).map(|(recipe, _, _, files)| (recipe, files))
 }
 
 /// An extension or bundle component, and the easyblock it names itself.
@@ -2651,13 +2714,17 @@ pub fn easyblock_sites_for_arch(
     src: &str,
     arch: &str,
 ) -> Result<(ResolvedEasyconfig, EasyblockSites), ParseError> {
-    resolve_easyconfig_str_inner(src, arch).map(|(recipe, _, sites)| (recipe, sites))
+    resolve_easyconfig_str_inner(src, arch).map(|(recipe, _, sites, _)| (recipe, sites))
 }
 
-fn resolve_easyconfig_str_inner(
-    src: &str,
-    arch: &str,
-) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>, EasyblockSites), ParseError> {
+type InnerResolved = (
+    ResolvedEasyconfig,
+    Vec<SkippedStatement>,
+    EasyblockSites,
+    Vec<LocalFile>,
+);
+
+fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, ParseError> {
     let cleaned = strip_comments(src);
     let mut parser = Parser::new(&cleaned, arch);
     parser
@@ -2816,6 +2883,20 @@ fn resolve_easyconfig_str_inner(
             .skipped
             .iter()
             .any(|stmt| stmt.text.trim_start().starts_with("components"));
+    let local_files = local_files_from(
+        src,
+        &parser.env,
+        &templates,
+        &LocalFileContext {
+            versionsuffix: versionsuffix.as_deref().unwrap_or(""),
+            toolchain: &toolchain,
+            arch,
+            source_files: &source_files,
+            source_urls: &source_urls,
+            patch_names: &patch_names,
+            checksums_by_filename: &checksums_by_filename,
+        },
+    );
 
     let resolved = ResolvedEasyconfig {
         name,
@@ -2841,7 +2922,209 @@ fn resolve_easyconfig_str_inner(
     };
     let mut sites = easyblock_sites_from(&parser.env, &templates);
     recover_named_easyblocks(&mut sites, &parser.skipped);
-    Ok((resolved, parser.skipped, sites))
+    Ok((resolved, parser.skipped, sites, local_files))
+}
+
+struct LocalFileContext<'a> {
+    versionsuffix: &'a str,
+    toolchain: &'a Toolchain,
+    arch: &'a str,
+    source_files: &'a [SourceFile],
+    source_urls: &'a [String],
+    patch_names: &'a [String],
+    checksums_by_filename: &'a BTreeMap<String, String>,
+}
+
+fn is_url(name: &str) -> bool {
+    ["http://", "https://", "ftp://"]
+        .iter()
+        .any(|scheme| name.starts_with(scheme))
+}
+
+/// `patches` entries as EasyBuild's `create_patch_info` reads them: a name,
+/// a `(name, level)` or `(name, dest)` pair, or a dict with `name` and
+/// optionally `alt_location`. A URL is downloaded, not looked up.
+fn patch_specs(value: Option<&Value>) -> Vec<(String, Option<String>)> {
+    let Ok(items) = value_list_as_slice(value) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Str(s) => Some((s.clone(), None)),
+            Value::Tuple(xs) | Value::List(xs) => xs
+                .first()
+                .and_then(|x| x.as_str())
+                .map(|s| (s.to_string(), None)),
+            Value::Dict(kvs) => {
+                let get = |key: &str| {
+                    kvs.iter()
+                        .find(|(k, _)| k == key)
+                        .and_then(|(_, v)| v.as_str())
+                        .map(str::to_string)
+                };
+                get("name")
+                    .or_else(|| get("filename"))
+                    .map(|name| (name, get("alt_location")))
+            }
+            _ => None,
+        })
+        .filter(|(name, _)| !name.is_empty() && !is_url(name))
+        .collect()
+}
+
+fn dict_get<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
+    let Value::Dict(kvs) = value else {
+        return None;
+    };
+    kvs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+}
+
+/// The parent's templates with `name`, `version`, and the names derived from
+/// them taken from an extension or component instead.
+fn entry_templates(
+    parent: &HashMap<String, String>,
+    name: &str,
+    version: &str,
+    ctx: &LocalFileContext<'_>,
+) -> HashMap<String, String> {
+    let mut templates = parent.clone();
+    templates.extend(build_templates(
+        name,
+        version,
+        ctx.versionsuffix,
+        ctx.toolchain,
+        ctx.arch,
+    ));
+    templates
+}
+
+/// `(name, version, raw options)` of each `exts_list` or `components` entry.
+/// Name and version resolve with the parent's templates; the options stay raw
+/// so the caller can apply the entry's own.
+fn sub_entries(
+    raw: Option<&Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<(String, String, Option<Value>)> {
+    let Ok(items) = value_list_as_slice(raw) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Tuple(xs) | Value::List(xs) if xs.len() >= 2 => {
+                let name = apply_templates_str(xs[0].as_str()?, templates);
+                let version = apply_templates_str(&xs[1].expect_str("version").ok()?, templates);
+                Some((name, version, xs.get(2).cloned()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn local_files_from(
+    src: &str,
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+    ctx: &LocalFileContext<'_>,
+) -> Vec<LocalFile> {
+    let mut out: Vec<LocalFile> = Vec::new();
+    let mut push = |filename: String,
+                    kind: LocalFileKind,
+                    owner: LocalFileOwner,
+                    alt_location: Option<String>| {
+        let file = LocalFile {
+            filename,
+            kind,
+            owner,
+            alt_location,
+        };
+        if !out.contains(&file) {
+            out.push(file);
+        }
+    };
+
+    for key in ["patches", "postinstallpatches"] {
+        let value = env.get(key).map(|v| apply_templates_value(v, templates));
+        for (name, alt) in patch_specs(value.as_ref()) {
+            push(name, LocalFileKind::Patch, LocalFileOwner::Recipe, alt);
+        }
+    }
+
+    // A recipe whose `source_urls` statement did not parse still has URLs.
+    let recipe_has_urls = !ctx.source_urls.is_empty() || assigns_at_top_level(src, "source_urls");
+    for source in ctx.source_files {
+        if recipe_has_urls || !source.source_urls.is_empty() || source.git {
+            continue;
+        }
+        if source.filename.is_empty() || is_url(&source.filename) {
+            continue;
+        }
+        push(
+            source.filename.clone(),
+            LocalFileKind::Source,
+            LocalFileOwner::Recipe,
+            None,
+        );
+    }
+
+    for (name, version, options) in sub_entries(env.get("exts_list"), templates) {
+        let Some(options) = options else { continue };
+        let own = entry_templates(templates, &name, &version, ctx);
+        let options = apply_templates_value(&options, &own);
+        for key in ["patches", "post_install_patches", "postinstallpatches"] {
+            for (file, alt) in patch_specs(dict_get(&options, key)) {
+                push(
+                    file,
+                    LocalFileKind::Patch,
+                    LocalFileOwner::Extension {
+                        name: name.clone(),
+                        version: version.clone(),
+                    },
+                    alt,
+                );
+            }
+        }
+    }
+
+    let mut component_patches: Vec<String> = Vec::new();
+    for (name, version, options) in sub_entries(env.get("components"), templates) {
+        let Some(options) = options else { continue };
+        let own = entry_templates(templates, &name, &version, ctx);
+        let options = apply_templates_value(&options, &own);
+        for key in ["patches", "postinstallpatches"] {
+            for (file, alt) in patch_specs(dict_get(&options, key)) {
+                component_patches.push(file.clone());
+                push(
+                    file,
+                    LocalFileKind::Patch,
+                    LocalFileOwner::Component {
+                        name: name.clone(),
+                        version: version.clone(),
+                    },
+                    alt,
+                );
+            }
+        }
+    }
+
+    for key in ctx.checksums_by_filename.keys() {
+        let filename = apply_templates_str(key, templates);
+        let is_patch = filename.ends_with(".patch") || filename.ends_with(".diff");
+        let listed = ctx.patch_names.contains(&filename)
+            || component_patches.contains(&filename)
+            || ctx.source_files.iter().any(|s| s.filename == filename);
+        if !is_patch || listed || is_url(&filename) {
+            continue;
+        }
+        push(
+            filename,
+            LocalFileKind::ChecksumPatch,
+            LocalFileOwner::Recipe,
+            None,
+        );
+    }
+    out
 }
 
 /// A `components` or `exts_list` statement the parser skipped can still name
