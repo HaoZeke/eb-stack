@@ -456,17 +456,7 @@ fn run_pr_overlap_inner(
     }
     let mut prs: Vec<PrInput> = Vec::new();
     for path in &args.prs {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("--pr {}: not readable", path.display()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .with_context(|| format!("--pr {}: not JSON", path.display()))?;
-        let inputs: Vec<PrInput> = if value.is_array() {
-            serde_json::from_value(value)
-        } else {
-            serde_json::from_value(value).map(|one| vec![one])
-        }
-        .with_context(|| format!("--pr {}: pull request record", path.display()))?;
-        prs.extend(inputs);
+        prs.extend(pr_overlap::read_pr_inputs(path, "--pr")?);
     }
     if let Some(repo) = &args.open_repo {
         let mut query = pr_overlap::OpenEasyconfigQuery::new(repo);
@@ -1377,17 +1367,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
 
     let mut open_inputs: Vec<PrInput> = Vec::new();
     for path in &args.open_prs {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("--open-prs {}: not readable", path.display()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .with_context(|| format!("--open-prs {}: not JSON", path.display()))?;
-        let inputs: Vec<PrInput> = if value.is_array() {
-            serde_json::from_value(value)
-        } else {
-            serde_json::from_value(value).map(|one| vec![one])
-        }
-        .with_context(|| format!("--open-prs {}: pull request record", path.display()))?;
-        open_inputs.extend(inputs);
+        open_inputs.extend(pr_overlap::read_pr_inputs(path, "--open-prs")?);
     }
     if let Some(repo) = &args.open_repo {
         let mut query = pr_overlap::OpenEasyconfigQuery::new(repo);

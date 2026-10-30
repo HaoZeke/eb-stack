@@ -343,6 +343,21 @@ pub fn eb_version_of(path: &str) -> Option<String> {
     (!version.is_empty()).then_some(version)
 }
 
+/// Read pull-request JSON: one [`PrInput`] object, or an array of them.
+/// `flag` is the command-line flag the path came from, for the error.
+pub fn read_pr_inputs(path: &std::path::Path, flag: &str) -> anyhow::Result<Vec<PrInput>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("{flag} {}: not readable", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("{flag} {}: not JSON", path.display()))?;
+    if value.is_array() {
+        serde_json::from_value(value)
+    } else {
+        serde_json::from_value(value).map(|one| vec![one])
+    }
+    .with_context(|| format!("{flag} {}: pull request record", path.display()))
+}
+
 fn parsed_entries(text: &Option<String>) -> Vec<EasystackEntry> {
     text.as_deref()
         .map(|body| parse_easystack_entries(body).unwrap_or_default())
