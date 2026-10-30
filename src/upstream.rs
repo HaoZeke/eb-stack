@@ -1,7 +1,8 @@
 //! The newest stable upstream release of an EasyBuild recipe.
 //!
 //! The backend is read from the recipe's own `source_urls`: PyPI, GitHub,
-//! GitLab, CRAN, crates.io, or a plain HTTP directory. A distribution
+//! GitLab, CRAN, crates.io, NVIDIA's redistrib manifests, a SourceForge file
+//! feed, or a plain HTTP directory. A distribution
 //! aggregator such as Repology is not a source of truth here: it orders the
 //! versions distributions carry, merges unrelated projects under one name
 //! (wget and wget2), and cannot name a package without a per-ecosystem
@@ -72,6 +73,16 @@ pub enum Backend {
         #[serde(skip_serializing_if = "String::is_empty")]
         suffix: String,
     },
+    /// NVIDIA's `redistrib_<release>.json` manifests under
+    /// `developer.download.nvidia.com/compute/<product>/redist/`.
+    NvidiaRedist {
+        /// `cuda`, `cudnn`, ...
+        product: String,
+        /// The manifest key whose `version` the recipe carries (`cudnn`);
+        /// absent when the release label is the version (the CUDA toolkit).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        component: Option<String>,
+    },
 }
 
 impl Backend {
@@ -83,6 +94,7 @@ impl Backend {
             Self::Cran { package } => format!("cran:{package}"),
             Self::Crates { name } => format!("crates:{name}"),
             Self::Directory { url, .. } => format!("directory:{url}"),
+            Self::NvidiaRedist { product, .. } => format!("nvidia-redist:{product}"),
         }
     }
 }
@@ -91,9 +103,12 @@ impl Backend {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
-    /// `pypi`, `github`, `gitlab`, `cran`, `crates`, or `directory`.
+    /// `pypi`, `github`, `gitlab`, `cran`, `crates`, `directory`, or `none`
+    /// for a recipe that has no upstream release to follow.
     pub backend: Option<String>,
     /// Project for the backend: `owner/repo`, a PyPI or CRAN name, or a URL.
+    /// `%(name)s`, `%(namelower)s`, `%(version)s`, `%(version_major)s` and
+    /// `%(version_major_minor)s` take the recipe's values.
     pub project: Option<String>,
     /// Only versions matching this pattern are kept.
     pub include: Option<String>,
@@ -164,19 +179,80 @@ pub fn load_overrides(paths: &[impl AsRef<Path>]) -> Result<BTreeMap<String, Ove
 /// The backend the recipe names, or the one its override sets.
 pub fn detect_backend(ec: &ResolvedEasyconfig, ov: Option<&Override>) -> Option<Backend> {
     if let Some(ov) = ov {
+        if ov.backend.as_deref() == Some("none") {
+            return None;
+        }
         if let (Some(kind), Some(project)) = (ov.backend.as_deref(), ov.project.as_deref()) {
-            return backend_from_override(kind, project, &ec.name);
+            return backend_from_override(kind, project, ec);
         }
     }
-    let urls: Vec<&str> = ec
+    // A `sources` dict may carry its own `source_urls` (ecBuild's GITHUB_SOURCE).
+    let source_urls: Vec<&str> = ec
         .source_urls
         .iter()
+        .chain(ec.source_files.iter().flat_map(|f| f.source_urls.iter()))
         .map(String::as_str)
-        .chain(ec.homepage.as_deref())
         .collect();
+    if let Some(backend) = backend_from_urls(&source_urls, ec) {
+        return Some(backend);
+    }
+    if source_urls.is_empty()
+        && matches!(
+            ec.easyblock.as_deref(),
+            Some("PythonPackage" | "CargoPythonPackage")
+        )
+    {
+        // The easyblock adds the PyPI source URL itself; a GitHub homepage
+        // does not say where the release is published.
+        return Some(Backend::Pypi {
+            project: ec.name.clone(),
+        });
+    }
+    if let Some(home) = ec.homepage.as_deref() {
+        // A SourceForge homepage stands in for the download only when the
+        // recipe names none; otherwise its own directory is read below.
+        if let Some(backend) = backend_from_urls(&[home], ec)
+            .filter(|b| source_urls.is_empty() || !matches!(b, Backend::Directory { .. }))
+        {
+            return Some(backend);
+        }
+        // gnuplot's source_urls is a (url, 'download') pair the parser does
+        // not keep; its homepage names the SourceForge project.
+        let sf_home =
+            Regex::new(r"^https?://([a-z0-9][a-z0-9-]*)\.sourceforge\.(?:net|io)\b").unwrap();
+        if source_urls.is_empty() {
+            if let Some(c) = sf_home.captures(home) {
+                return Some(sourceforge(&c[1], ec));
+            }
+        }
+    }
+    let first = source_urls.first()?;
+    let (prefix, suffix) = recipe_file_pattern(ec);
+    Some(Backend::Directory {
+        url: (*first).to_string(),
+        prefix,
+        suffix,
+    })
+}
+
+/// The registry backend the first matching URL names.
+fn backend_from_urls(urls: &[&str], ec: &ResolvedEasyconfig) -> Option<Backend> {
     let gh = Regex::new(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/#?]+)").unwrap();
     let gl = Regex::new(r"^https?://(gitlab\.[^/]+)/(.+?)/(?:-/|archive|uploads|$)").unwrap();
-    for url in &urls {
+    // Any GitLab instance serves archives and releases under `/-/`
+    // (jugit.fz-juelich.de/mlz/libcerf/-/archive/v3.3/).
+    let gl_dash =
+        Regex::new(r"^https?://([^/]+)/([^/].*?)/-/(?:archive|releases|tags|raw|package_files)/")
+            .unwrap();
+    let nvidia = Regex::new(
+        r"^https?://developer\.download\.nvidia\.com/compute/([^/]+)/(?:redist/([^/]+)/)?",
+    )
+    .unwrap();
+    let sf = Regex::new(
+        r"^https?://(?:(?:download|downloads)\.sourceforge\.net/(?:project/)?|(?:www\.)?sourceforge\.net/projects/)([^/]+)",
+    )
+    .unwrap();
+    for url in urls {
         if url.contains("pypi.python.org")
             || url.contains("files.pythonhosted.org")
             || url.contains("pypi.org/packages")
@@ -201,31 +277,44 @@ pub fn detect_backend(ec: &ResolvedEasyconfig, ov: Option<&Override>) -> Option<
                 name: ec.name.to_lowercase(),
             });
         }
+        if let Some(c) = nvidia.captures(url) {
+            return Some(Backend::NvidiaRedist {
+                product: c[1].to_string(),
+                component: c.get(2).map(|m| m.as_str().to_string()),
+            });
+        }
+        if let Some(c) = sf.captures(url) {
+            return Some(sourceforge(&c[1], ec));
+        }
         if let Some(c) = gh.captures(url) {
             return Some(Backend::Github {
                 owner: c[1].to_string(),
                 repo: c[2].trim_end_matches(".git").to_string(),
             });
         }
-        if let Some(c) = gl.captures(url) {
+        if let Some(c) = gl.captures(url).or_else(|| gl_dash.captures(url)) {
             return Some(Backend::Gitlab {
                 host: c[1].to_string(),
                 path: c[2].to_string(),
             });
         }
     }
-    if ec.source_urls.is_empty()
-        && matches!(
-            ec.easyblock.as_deref(),
-            Some("PythonPackage" | "CargoPythonPackage")
-        )
-    {
-        // The easyblock adds the PyPI source URL itself.
-        return Some(Backend::Pypi {
-            project: ec.name.clone(),
-        });
+    None
+}
+
+/// A SourceForge project's file feed. It lists the newest files first with
+/// their paths, so it reads like a directory listing.
+fn sourceforge(project: &str, ec: &ResolvedEasyconfig) -> Backend {
+    let (prefix, suffix) = recipe_file_pattern(ec);
+    Backend::Directory {
+        url: format!("https://sourceforge.net/projects/{project}/rss"),
+        prefix,
+        suffix,
     }
-    let first = ec.source_urls.first()?;
+}
+
+/// The text around the version in the recipe's first source file.
+fn recipe_file_pattern(ec: &ResolvedEasyconfig) -> (String, String) {
     let prefix = ec
         .source_files
         .first()
@@ -236,18 +325,26 @@ pub fn detect_backend(ec: &ResolvedEasyconfig, ov: Option<&Override>) -> Option<
         .first()
         .and_then(|f| file_suffix(&f.filename, &ec.version))
         .unwrap_or_default();
-    Some(Backend::Directory {
-        url: first.clone(),
-        prefix,
-        suffix,
-    })
+    (prefix, suffix)
 }
 
-fn backend_from_override(kind: &str, project: &str, name: &str) -> Option<Backend> {
+/// An override's project with the recipe's name and version templates
+/// filled in: `https://www.paraview.org/files/v%(version_major_minor)s/`.
+fn expand_project(project: &str, ec: &ResolvedEasyconfig) -> String {
+    let parts: Vec<&str> = ec.version.split('.').collect();
+    let major_minor = parts.iter().take(2).copied().collect::<Vec<_>>().join(".");
+    project
+        .replace("%(namelower)s", &ec.name.to_lowercase())
+        .replace("%(name)s", &ec.name)
+        .replace("%(version_major_minor)s", &major_minor)
+        .replace("%(version_major)s", parts[0])
+        .replace("%(version)s", &ec.version)
+}
+
+fn backend_from_override(kind: &str, project: &str, ec: &ResolvedEasyconfig) -> Option<Backend> {
+    let project = expand_project(project, ec);
     Some(match kind {
-        "pypi" => Backend::Pypi {
-            project: project.to_string(),
-        },
+        "pypi" => Backend::Pypi { project },
         "github" => {
             let (owner, repo) = project.split_once('/')?;
             Backend::Github {
@@ -262,22 +359,21 @@ fn backend_from_override(kind: &str, project: &str, name: &str) -> Option<Backen
                 path: path.to_string(),
             }
         }
-        "cran" => Backend::Cran {
-            package: project.to_string(),
-        },
-        "crates" => Backend::Crates {
-            name: project.to_string(),
-        },
-        "directory" => Backend::Directory {
-            suffix: String::new(),
-            url: project.to_string(),
-            prefix: format!("{name}-"),
-        },
+        "cran" => Backend::Cran { package: project },
+        "crates" => Backend::Crates { name: project },
+        "directory" => {
+            // The listing moves; the file name is still the recipe's.
+            let (prefix, suffix) = recipe_file_pattern(ec);
+            Backend::Directory {
+                url: project,
+                prefix,
+                suffix,
+            }
+        }
         _ => return None,
     })
 }
 
-/// The part of a source filename before its version: `FastTree-2.2.c` gives `FastTree-`.
 /// The file name text after the version, `-linux-x64.tar.xz` or
 /// `+-src.tar.gz`; `None` when the name does not hold the version.
 fn file_suffix(filename: &str, version: &str) -> Option<String> {
@@ -286,6 +382,7 @@ fn file_suffix(filename: &str, version: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_string())
 }
 
+/// The part of a source filename before its version: `FastTree-2.2.c` gives `FastTree-`.
 fn file_prefix(filename: &str, version: &str) -> String {
     match filename.find(version) {
         Some(at) if at > 0 => filename[..at].to_string(),
@@ -325,6 +422,28 @@ pub fn tag_version(tag: &str, name: &str) -> String {
         if lower.starts_with(&prefix) && tag.len() > prefix.len() {
             rest = &tag[prefix.len()..];
             break;
+        }
+    }
+    if rest == tag {
+        // A word the name contains, before a separator and a number: libgd
+        // tags gd-2.3.3, and hwloc-CUDA reads hwloc's hwloc-2.15.0.
+        let squash = |s: &str| -> String {
+            s.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .collect::<String>()
+                .to_lowercase()
+        };
+        if let Some((word, after)) = tag.split_once(['-', '_']) {
+            let numeric = after
+                .trim_start_matches(['v', 'V'])
+                .starts_with(|c: char| c.is_ascii_digit());
+            if word.len() >= 2
+                && word.chars().all(|c| c.is_ascii_alphabetic())
+                && squash(name).contains(&word.to_lowercase())
+                && numeric
+            {
+                rest = after;
+            }
         }
     }
     let rest = rest
@@ -459,17 +578,27 @@ pub fn list_candidates(
                 });
             }
         }
+        Backend::NvidiaRedist { product, component } => {
+            out = nvidia_candidates(product, component.as_deref(), client)?;
+        }
         Backend::Directory {
             url,
             prefix,
             suffix,
         } => {
-            let body = client.get(url).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let mut pages = vec![String::from_utf8_lossy(&body).into_owned()];
+            // A query string names a download (download.php?version=1.7.7l),
+            // so the page without it is the listing, when it can be read.
+            let base = url
+                .split_once('?')
+                .and_then(|(base, _)| client.get(base).ok());
+            let mut pages = vec![match base {
+                Some(body) => String::from_utf8_lossy(&body).into_owned(),
+                None => read_listing(url, client)?,
+            }];
             for dir in versioned_dirs(url, client) {
                 if dir != *url {
-                    if let Ok(body) = client.get(&dir) {
-                        pages.push(String::from_utf8_lossy(&body).into_owned());
+                    if let Ok(page) = read_listing(&dir, client) {
+                        pages.push(page);
                     }
                 }
             }
@@ -508,12 +637,83 @@ pub fn list_candidates(
     Ok(out)
 }
 
+/// The page at `url`, or at the nearest of its two parent directories that
+/// can be read. A host that serves no index for the release directory
+/// (`.../tags/scorep-10.1/`, `.../hwloc/v2.13/downloads/`) often lists the
+/// same files one or two levels up.
+fn read_listing(url: &str, client: &dyn RegistryClient) -> Result<String> {
+    let err = match client.get(url) {
+        Ok(body) => return Ok(String::from_utf8_lossy(&body).into_owned()),
+        Err(err) => anyhow::anyhow!("{err}"),
+    };
+    let mut dir = url.trim_end_matches('/');
+    for _ in 0..2 {
+        let Some((parent, _)) = dir.rsplit_once('/') else {
+            break;
+        };
+        // Never above the host: `https://host` has no path left.
+        if !parent
+            .split_once("://")
+            .is_some_and(|(_, p)| p.contains('/'))
+        {
+            break;
+        }
+        if let Ok(body) = client.get(&format!("{parent}/")) {
+            return Ok(String::from_utf8_lossy(&body).into_owned());
+        }
+        dir = parent;
+    }
+    Err(err)
+}
+
+/// The NVIDIA release labels in `redist/`, and the version each names.
+fn nvidia_candidates(
+    product: &str,
+    component: Option<&str>,
+    client: &dyn RegistryClient,
+) -> Result<Vec<Candidate>> {
+    let base = format!("https://developer.download.nvidia.com/compute/{product}/redist/");
+    let body = client.get(&base).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let html = String::from_utf8_lossy(&body);
+    let re = Regex::new(r"redistrib_(\d+(?:\.\d+)+)\.json").unwrap();
+    let mut labels: Vec<String> = re.captures_iter(&html).map(|c| c[1].to_string()).collect();
+    labels.sort_by(|a, b| cmp_version(b, a));
+    labels.dedup();
+    let Some(component) = component else {
+        // The CUDA toolkit's release label is its version.
+        return Ok(labels
+            .into_iter()
+            .map(|label| Candidate {
+                raw: format!("redistrib_{label}.json"),
+                version: label,
+                dropped: None,
+            })
+            .collect());
+    };
+    // A library's own version (cuDNN 9.27.0.42) is longer than the label
+    // (9.27.0); only the newest manifest is read for it.
+    let Some(label) = labels.first() else {
+        return Ok(Vec::new());
+    };
+    let raw = format!("redistrib_{label}.json");
+    let doc = get_json(client, &format!("{base}{raw}"))?;
+    let version = doc[component]["version"]
+        .as_str()
+        .with_context(|| format!("{base}{raw} names no {component} version"))?;
+    Ok(vec![Candidate {
+        raw,
+        version: version.to_string(),
+        dropped: None,
+    }])
+}
+
 /// Why a recipe has no backend.
 fn no_backend_reason(ec: &ResolvedEasyconfig) -> &'static str {
-    if ec
-        .easyblock
-        .as_deref()
-        .is_some_and(|b| b.contains("Bundle"))
+    if ec.has_components
+        || ec
+            .easyblock
+            .as_deref()
+            .is_some_and(|b| b.contains("Bundle"))
     {
         "a bundle has no upstream release of its own; its components do"
     } else if ec.source_urls.is_empty() {
@@ -540,8 +740,17 @@ fn versioned_dirs(url: &str, client: &dyn RegistryClient) -> Vec<String> {
         return Vec::new();
     };
     let html = String::from_utf8_lossy(&body);
+    // A page the parent redirects to may link the directories by a longer
+    // path (`../../software/hwloc/v2.15/`); that path still ends in the
+    // parent's own name.
+    let parent_name = parent
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
     let Ok(re) = Regex::new(&format!(
-        r#"href="(?:\./)?{}(\d+(?:\.\d+)+){}/?""#,
+        r#"href="(?:\./|[^"]*/{}/)?{}(\d+(?:\.\d+)+){}/?""#,
+        regex::escape(parent_name),
         regex::escape(pre),
         regex::escape(post)
     )) else {
@@ -1054,5 +1263,269 @@ mod tests {
     fn builtin_overrides_parse() {
         let ovs = parse_overrides(BUILTIN_OVERRIDES).unwrap();
         assert!(ovs.contains_key("GStreamer"));
+    }
+
+    fn recipe(text: &str) -> ResolvedEasyconfig {
+        crate::eb_parse::resolve_easyconfig_str(text).unwrap()
+    }
+
+    const NV: &str = "https://developer.download.nvidia.com/compute";
+
+    #[test]
+    fn cuda_reads_the_redistrib_release_labels() {
+        let r = recipe("name = 'CUDA'\nversion = '13.4.1'\nhomepage = 'https://developer.nvidia.com/cuda-toolkit'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://developer.download.nvidia.com/compute/cuda/%(version)s/local_installers/']\nsources = ['cuda_%(version)s_linux.run']\n");
+        assert_eq!(
+            detect_backend(&r, None),
+            Some(Backend::NvidiaRedist {
+                product: "cuda".into(),
+                component: None
+            })
+        );
+        let page = "<a href='redistrib_13.3.1.json'>redistrib_13.3.1.json</a> <a href='redistrib_13.4.1.json'>x</a> <a href='redistrib_13.4.3.json'>y</a>";
+        let report = latest(
+            &r,
+            &BTreeMap::new(),
+            &client(&[(format!("{NV}/cuda/redist/").as_str(), page)]),
+        )
+        .unwrap();
+        assert_eq!(report.backend, "nvidia-redist:cuda");
+        assert_eq!(report.newest.as_deref(), Some("13.4.3"));
+        assert_eq!(report.state, "behind");
+    }
+
+    #[test]
+    fn cudnn_takes_its_own_version_from_the_newest_manifest() {
+        let r = recipe("name = 'cuDNN'\nversion = '9.23.0.39'\nhomepage = 'https://developer.nvidia.com/cudnn'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-%(cudnnarch)s/']\nsources = ['%(namelower)s-linux-%(cudnnarch)s-%(version)s_cuda13-archive.tar.xz']\n");
+        assert_eq!(
+            detect_backend(&r, None),
+            Some(Backend::NvidiaRedist {
+                product: "cudnn".into(),
+                component: Some("cudnn".into())
+            })
+        );
+        let page = "redistrib_9.23.0.json redistrib_9.27.0.json redistrib_9.26.1.json";
+        let manifest = r#"{"release_label": "9.27.0", "cudnn": {"version": "9.27.0.42"}}"#;
+        let pages = [
+            (format!("{NV}/cudnn/redist/"), page),
+            (format!("{NV}/cudnn/redist/redistrib_9.27.0.json"), manifest),
+        ];
+        let pages: Vec<(&str, &str)> = pages.iter().map(|(u, b)| (u.as_str(), *b)).collect();
+        let report = latest(&r, &BTreeMap::new(), &client(&pages)).unwrap();
+        assert_eq!(report.newest.as_deref(), Some("9.27.0.42"));
+        assert_eq!(report.state, "behind");
+
+        // A manifest without the library's version is not a guess at one.
+        let pages = [
+            (format!("{NV}/cudnn/redist/"), page),
+            (
+                format!("{NV}/cudnn/redist/redistrib_9.27.0.json"),
+                r#"{"release_label": "9.27.0"}"#,
+            ),
+        ];
+        let pages: Vec<(&str, &str)> = pages.iter().map(|(u, b)| (u.as_str(), *b)).collect();
+        let report = latest(&r, &BTreeMap::new(), &client(&pages)).unwrap();
+        assert_eq!(report.state, "unknown");
+        assert_eq!(report.newest, None);
+    }
+
+    #[test]
+    fn an_unreadable_release_directory_falls_back_to_a_parent_listing() {
+        let r = recipe("name = 'Score-P'\nversion = '10.1'\nhomepage = 'https://www.score-p.org'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://perftools.example.org/cicd/scorep/tags/scorep-%(version)s']\nsources = ['scorep-%(version)s.tar.gz']\n");
+        let page = r#"<a href="tags/scorep-11.0/scorep-11.0.tar.gz">a</a> <a href="tags/scorep-11.1-rc1/scorep-11.1-rc1.tar.gz">b</a> <a href="tags/scorep-10.1/scorep-10.1.tar.gz">c</a>"#;
+        let report = latest(
+            &r,
+            &BTreeMap::new(),
+            &client(&[("https://perftools.example.org/cicd/scorep/", page)]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("11.0"));
+        assert_eq!(report.state, "behind");
+
+        // Nothing readable at the URL or its two parents stays an error.
+        let report = latest(&r, &BTreeMap::new(), &client(&[])).unwrap();
+        assert_eq!(report.state, "unknown");
+        assert!(report
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("scorep-10.1"));
+    }
+
+    #[test]
+    fn versioned_directories_linked_by_a_longer_path_are_walked() {
+        let r = recipe("name = 'hwloc-CUDA'\nversion = '2.13.0'\nhomepage = 'https://www.open-mpi.org/projects/hwloc/'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://www.example.org/software/hwloc/v%(version_major_minor)s/downloads/']\nsources = ['hwloc-%(version)s.tar.gz']\n");
+        let root = "https://www.example.org/software/hwloc/";
+        let parent = r#"<a href="doc/v2.15.0/index.html">d</a> <a href="../../software/hwloc/v2.13/">a</a> <a href="../../software/hwloc/v2.14/">b</a> <a href="../../software/hwloc/v2.15/">c</a> <a href="https://elsewhere.org/v9.9/">e</a>"#;
+        let pages = [
+            (
+                format!("{root}v2.13/"),
+                "hwloc-2.13.0.tar.gz hwloc-2.13.0.tar.bz2",
+            ),
+            (root.to_string(), parent),
+            (
+                format!("{root}v2.15/"),
+                "hwloc-2.15.0.tar.gz hwloc-2.15.0rc1.tar.gz",
+            ),
+            (format!("{root}v2.14/"), "hwloc-2.14.0.tar.gz"),
+        ];
+        let pages: Vec<(&str, &str)> = pages.iter().map(|(u, b)| (u.as_str(), *b)).collect();
+        let report = latest(&r, &BTreeMap::new(), &client(&pages)).unwrap();
+        assert_eq!(report.newest.as_deref(), Some("2.15.0"));
+        assert!(!report
+            .candidates
+            .iter()
+            .any(|c| c.version.starts_with("9.9")));
+    }
+
+    #[test]
+    fn a_download_query_reads_the_page_without_it() {
+        let r = recipe("name = 'SIONlib'\nversion = '1.7.7'\nhomepage = 'https://example.org'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://apps.example.org/sionlib/download.php?version=%(version)sl']\nsources = ['%(namelower)s-%(version)sl.tar.gz']\n");
+        let page = "sionlib-1.7.6l.tar.gz sionlib-1.7.7.tar.gz sionlib-1.7.7l.tar.gz sionlib-2.0.0-rc.1l.tar.gz";
+        let report = latest(
+            &r,
+            &BTreeMap::new(),
+            &client(&[("https://apps.example.org/sionlib/download.php", page)]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("1.7.7"));
+        assert_eq!(report.state, "current");
+    }
+
+    #[test]
+    fn any_gitlab_archive_url_reads_the_gitlab_api() {
+        let r = recipe("name = 'libcerf'\nversion = '3.3'\nhomepage = 'https://jugit.example.de/mlz/libcerf'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://jugit.example.de/mlz/libcerf/-/archive/v%(version)s/']\nsources = ['libcerf-v%(version)s.tar.gz']\n");
+        assert_eq!(
+            detect_backend(&r, None),
+            Some(Backend::Gitlab {
+                host: "jugit.example.de".into(),
+                path: "mlz/libcerf".into()
+            })
+        );
+        let doc = r#"[{"tag_name": "v3.9"}, {"tag_name": "v3.3"}]"#;
+        let report = latest(
+            &r,
+            &BTreeMap::new(),
+            &client(&[(
+                "https://jugit.example.de/api/v4/projects/mlz%2Flibcerf/releases?per_page=100",
+                doc,
+            )]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("3.9"));
+    }
+
+    #[test]
+    fn a_tag_prefix_the_name_contains_is_stripped() {
+        assert_eq!(tag_version("gd-2.3.3", "libgd"), "2.3.3");
+        assert_eq!(tag_version("hwloc-2.15.0", "hwloc-CUDA"), "2.15.0");
+        assert_eq!(tag_version("hwloc-v0.9.2", "hwloc-CUDA"), "0.9.2");
+        assert_eq!(tag_version("scorep-10.1", "Score-P"), "10.1");
+        // Another product in the same repository keeps its prefix.
+        assert_eq!(tag_version("infernal-1.1.5", "HMMER"), "infernal-1.1.5");
+        assert_eq!(tag_version("hwloc-2.15-branch", "hwloc"), "2.15-branch");
+        assert_eq!(tag_version("nccl4py-v0.6.0", "NCCL"), "4py-v0.6.0");
+    }
+
+    #[test]
+    fn a_python_package_reads_pypi_before_its_github_homepage() {
+        let r = recipe("easyblock = 'PythonPackage'\nname = 'pytest-shard'\nversion = '0.1.2'\nhomepage = 'https://github.com/AdamGleave/pytest-shard'\ndescription = 'x'\ntoolchain = SYSTEM\nsources = [SOURCE_TAR_GZ]\n");
+        assert_eq!(
+            detect_backend(&r, None),
+            Some(Backend::Pypi {
+                project: "pytest-shard".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_source_dict_with_its_own_urls_names_the_backend() {
+        let r = recipe("easyblock = 'Tarball'\nname = 'ecBuild'\nversion = '3.14.2'\nhomepage = 'https://ecbuild.readthedocs.io/'\ndescription = 'x'\ntoolchain = SYSTEM\ngithub_account = 'ecmwf'\nsources = [{'source_urls': [GITHUB_SOURCE], 'filename': '%(version)s.tar.gz'}]\n");
+        assert_eq!(
+            detect_backend(&r, None),
+            Some(Backend::Github {
+                owner: "ecmwf".into(),
+                repo: "ecBuild".into()
+            })
+        );
+    }
+
+    #[test]
+    fn sourceforge_reads_the_project_file_feed() {
+        let gts = recipe("name = 'GTS'\nversion = '0.7.6'\nhomepage = 'https://gts.sourceforge.net/'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = [SOURCEFORGE_SOURCE]\nsources = [SOURCELOWER_TAR_GZ]\n");
+        assert_eq!(
+            detect_backend(&gts, None),
+            Some(Backend::Directory {
+                url: "https://sourceforge.net/projects/gts/rss".into(),
+                prefix: "gts-".into(),
+                suffix: ".tar.gz".into(),
+            })
+        );
+        // gnuplot's (url, 'download') source_urls pair is not kept by the
+        // parser; the homepage names the project.
+        let gnuplot = recipe("name = 'gnuplot'\nversion = '6.0.5'\nhomepage = 'http://gnuplot.sourceforge.net'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = [('https://sourceforge.net/projects/%(name)s/files/%(name)s/%(version)s', 'download')]\nsources = [SOURCE_TAR_GZ]\n");
+        let feed = "<title><![CDATA[/gnuplot/6.0.6/gnuplot-6.0.6.tar.gz]]></title> <title><![CDATA[/gnuplot/testing/gnuplot-6.0.6-testing.tar.gz]]></title> <title><![CDATA[/gnuplot/6.0.5/gnuplot-6.0.5.tar.gz]]></title>";
+        let report = latest(
+            &gnuplot,
+            &BTreeMap::new(),
+            &client(&[("https://sourceforge.net/projects/gnuplot/rss", feed)]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("6.0.6"));
+        assert_eq!(report.state, "behind");
+    }
+
+    #[test]
+    fn a_recipe_with_components_is_a_bundle() {
+        let r = recipe("name = 'gnupg-bundle'\nversion = '20260518'\nhomepage = 'https://www.gnupg.org/software/index.html'\ndescription = 'x'\ntoolchain = SYSTEM\ndefault_easyblock = 'ConfigureMake'\ncomponents = [('npth', '1.8', {'sources': [SOURCE_TAR_BZ2]})]\n");
+        let report = latest(&r, &BTreeMap::new(), &client(&[])).unwrap();
+        assert_eq!(report.state, "unknown");
+        assert!(
+            report.reason.as_deref().unwrap_or("").contains("bundle"),
+            "{:?}",
+            report.reason
+        );
+    }
+
+    #[test]
+    fn an_override_directory_takes_templates_and_keeps_the_recipe_file_name() {
+        let r = recipe("name = 'ParaView'\nversion = '6.1.1'\nhomepage = 'https://www.paraview.org'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://www.paraview.org/paraview-downloads/download.php?version=v%(version_major_minor)s']\nsources = ['%(name)s-v%(version)s.tar.gz']\n");
+        let ovs = parse_overrides("[ParaView]\nbackend = \"directory\"\nproject = \"https://files.example.org/v%(version_major_minor)s/\"\nreason = \"x\"\n").unwrap();
+        let pages = [
+            (
+                "https://files.example.org/v6.1/",
+                "ParaView-v6.1.0.tar.gz ParaView-v6.1.1.tar.gz",
+            ),
+            (
+                "https://files.example.org/",
+                r#"<a href="v6.0/">a</a> <a href="v6.1/">b</a> <a href="v6.2/">c</a>"#,
+            ),
+            (
+                "https://files.example.org/v6.2/",
+                "ParaView-v6.2.0.tar.gz ParaView-v6.2.1-RC1.tar.gz",
+            ),
+        ];
+        let report = latest(&r, &ovs, &client(&pages)).unwrap();
+        assert_eq!(report.backend, "directory:https://files.example.org/v6.1/");
+        assert_eq!(report.newest.as_deref(), Some("6.2.0"));
+    }
+
+    #[test]
+    fn an_override_with_no_backend_reports_unknown_with_its_reason() {
+        let r = ec(
+            "QIIME2",
+            "2022.11",
+            &["https://data.example.org/distro/core/"],
+        );
+        let ovs = parse_overrides(
+            "[QIIME2]\nbackend = \"none\"\nreason = \"the core distribution ended\"\n",
+        )
+        .unwrap();
+        let report = latest(&r, &ovs, &client(&[])).unwrap();
+        assert_eq!(report.state, "unknown");
+        assert_eq!(report.backend, "none");
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("the core distribution ended")
+        );
     }
 }

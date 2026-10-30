@@ -127,6 +127,10 @@ pub struct ResolvedEasyconfig {
     /// several hashes.
     #[serde(default)]
     pub checksums_by_filename: BTreeMap<String, String>,
+    /// The recipe sets `components`: it bundles other packages, whatever its
+    /// easyblock is called.
+    #[serde(default)]
+    pub has_components: bool,
 }
 
 impl ResolvedEasyconfig {
@@ -2151,6 +2155,11 @@ fn resolve_easyconfig_str_inner(
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
     let checksums_by_filename = checksums_by_filename_field(&parser.env, &templates);
+    let has_components = parser.env.contains_key("components")
+        || parser
+            .skipped
+            .iter()
+            .any(|stmt| stmt.text.trim_start().starts_with("components"));
 
     let resolved = ResolvedEasyconfig {
         name,
@@ -2172,6 +2181,7 @@ fn resolve_easyconfig_str_inner(
         patch_names,
         checksum_entry_keys,
         checksums_by_filename,
+        has_components,
     };
     let mut sites = easyblock_sites_from(&parser.env, &templates);
     recover_named_easyblocks(&mut sites, &parser.skipped);
@@ -4019,6 +4029,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
+            has_components: false,
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -4729,6 +4740,7 @@ builddependencies = [
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
+            has_components: false,
         }
     }
 
