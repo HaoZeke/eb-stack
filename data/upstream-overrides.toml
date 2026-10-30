@@ -5,6 +5,9 @@
 # max_major, pin, reason. `series_policy = "odd-minor-devel"` drops versions
 # whose minor number is odd. `max_major` drops a later product line that
 # reuses the name. `pin` keeps one version regardless of what upstream lists.
+# `backend = "none"` reports no upstream and says why. `project` may use
+# %(name)s, %(namelower)s, %(version)s, %(version_major)s and
+# %(version_major_minor)s.
 
 [GStreamer]
 series_policy = "odd-minor-devel"
@@ -47,3 +50,27 @@ reason = "the Python package is released to PyPI"
 [OpenFOAM]
 exclude = "^20[0-9]{6}$"
 reason = "OpenFOAM-N repositories tag dated patch snapshots of the same major"
+
+[FLINT]
+backend = "github"
+project = "flintlib/flint"
+reason = "flintlib.org/download/ refuses a directory listing (403); releases are tagged on GitHub"
+
+[HMMER]
+backend = "github"
+project = "EddyRivasLab/hmmer"
+reason = "eddylab.org/software/hmmer/ refuses a directory listing (403); releases are tagged on GitHub"
+
+[Julia]
+backend = "directory"
+project = "https://julialang-s3.julialang.org/bin/versions.json"
+reason = "the S3 bucket serves no index; versions.json lists every release file"
+
+[ParaView]
+backend = "directory"
+project = "https://www.paraview.org/files/v%(version_major_minor)s/"
+reason = "source_urls name a download.php form; the release files are listed under /files/vX.Y/"
+
+[QIIME2]
+backend = "none"
+reason = "the core distribution ended at 2023.7 (qiime2/environment-files); later releases are the amplicon and metagenome distributions, which need a new recipe"
