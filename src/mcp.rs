@@ -495,6 +495,12 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_bot_classify",
+            "Say what each EESSI bot job's FAILURE was, as `stack bot-classify` does: real-failure (a build or check failed; the sub_class is the campaign build-finding class from the job output, unknown without it), error-only (ERROR: lines, but No missing installations and a tarball with contents), empty-tarball (nothing was built), infra (bot config, merge, scheduler, container, network, missing job output), success, or unclassified for a human. files are saved bot comments, _bot_job<id>.result files, or slurm-<id>.out job output; files naming the same job id are one job.",
+            &[("files", "array_min1")],
+            &[],
+        ),
+        tool_with_optional(
             "eb_stack_sections",
             "Regroup a Jenkins build list under the section headers of a previous list, as `stack sections` does.",
             &[("list", "string"), ("from", "string"), ("out", "string")],
@@ -775,6 +781,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_cuda_cc" => stack_cuda_cc_tool(arguments),
         "eb_stack_known_failures" => stack_known_failures_tool(arguments),
         "eb_stack_oom" => stack_oom_tool(arguments),
+        "eb_stack_bot_classify" => stack_bot_classify_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -3245,6 +3252,18 @@ fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
         "builds": report.builds,
         "nodes": report.partitions,
         "unknown_arch": report.unknown_arches,
+    }))
+}
+
+fn stack_bot_classify_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::bot_result::run_bot_classify(&crate::bot_result::BotClassifyRequest {
+        files: path_array(arguments, "files")?,
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "jobs": report.jobs,
+        "counts": report.counts(),
     }))
 }
 

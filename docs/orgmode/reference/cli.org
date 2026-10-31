@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -44,6 +44,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack cuda-cc~ | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
 | ~stack known-failures~ | Warn about known per-architecture test, build, fetch and sanity failures in a plan, with the easyconfig remedy |
 | ~stack oom~ | Warn about plan entries likely to run out of memory in a bot job, with remedies |
+| ~stack bot-classify~ | Classify EESSI bot job results as real failure, ERROR-only noise, empty tarball, or infra |
 | ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -944,6 +945,43 @@ no node is reported and skipped. ~--profile~ replaces
 ~data/eessi-bot-resources.toml~. The command exits 0 when it warns. See
 [[file:../howto/oom-profile.org][warn before a bot job runs out of memory]].
 
+** ~stack bot-classify~
+
+What it does: read a saved EESSI bot comment, a ~_bot_job<id>.result~
+file, or a ~slurm-<id>.out~ job output, and classify each bot job as
+~real-failure~, ~error-only~, ~empty-tarball~, ~infra~, ~success~, or
+~unclassified~. A real failure takes its sub-class from the campaign
+build-finding table; infra names the cause. Nothing is posted.
+
+Why you'd use it: most FAILURE rows in software-layer pull requests 1873,
+1869, 1834 and 1760 were an ~ERROR:~ line in the test step after the
+build had packaged its software, and 1732 and 1733 failed on an empty
+tarball. The class says which rows need a person.
+
+#+begin_src bash
+eb-stack stack bot-classify \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+#+end_src
+
+#+begin_example
+real-failure/resource riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md, tests/bot_classify_fixtures/slurm-329698.out
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+  evidence: OSError: [Errno 28] No space left on device
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+#+end_example
+
+Inputs that name the same job id are one job. A comment with several job
+tables gives one job per table, and a bot update that submitted no job is
+~infra/bot-config~. ~why~ is the rule the class came from, and each
+~evidence~ line is a bot check or a job output line. The count line has
+one field per class. ~--json~ prints ~jobs~ and ~counts~. A directory
+argument is status 2; otherwise the command exits 0. See
+[[file:../howto/bot-classify.org][read an EESSI bot FAILURE]].
+
 * ~pr-overlap~
 
 #+begin_src bash
@@ -1485,6 +1523,8 @@ stdout, and ~hits~, one object per line. Warnings are not a tool error.
 ~eb_stack_oom~ requires ~easystack~ and takes ~arch~, ~easyconfigs~,
 ~installed~, ~profile~, and ~resources~. It returns the ~stack oom~ text
 and one object per warning; a warning is not a tool error.
+~eb_stack_bot_classify~ requires ~files~. It returns ~text~, the
+~stack bot-classify~ stdout, ~jobs~, one object per job, and ~counts~.
 ~eb_stack_batch~ takes ~arch~, ~unsupported~, ~known_failures~,
 ~oom_profile~, and ~oom_resources~. It refuses an unsupported plan the same way and writes
 known-failures and oom warnings.

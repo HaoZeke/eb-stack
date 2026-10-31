@@ -159,6 +159,7 @@ jobs:
             --test arch_known_failures \
             --test arch_unsupported \
             --test baseline_easystack \
+            --test bot_classify \
             --test build_list_and_bare_tuple \
             --test cli_ergonomics \
             --test cli_reference \

@@ -1,0 +1,225 @@
+#+TITLE: Read an EESSI bot FAILURE
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack bot-classify~ reads what an EESSI software-layer
+bot job left behind and says which kind of FAILURE it was: a real
+failure, ERROR-only noise, an empty tarball, or infra. A job that fits
+none of them is ~unclassified~, for a person to read. The command never
+posts or edits anything, and it always exits 0.
+
+Why you'd use it: the bot marks a job FAILURE whenever the job output
+holds a line matching ~ERROR:~, ~FATAL:~, ~FAILED:~ or
+~required modules missing:~, or lacks ~No missing installations~ or a
+tarball ~created!~ line. Those are the checks in ~bot/check-build.sh~ and
+~bot/check-test.sh~ in EESSI/software-layer-scripts. In software-layer
+pull requests 1873, 1869, 1834 and 1760 every job built and packaged its
+software, and the FAILURE was the test step finding an ~ERROR:~ line. In
+1732 and 1733 everything was already installed, so the tarball was
+empty. In 1741 the bot configuration kept jobs from being submitted at
+all. The builds that did fail were in 1818, 1823, and the first a64fx
+job of 1873.
+
+The inputs are any mix of:
+
+- a saved bot comment, the job table the bot posts and updates;
+- the ~_bot_job<id>.result~ file the bot writes in the job directory;
+- the job output, ~slurm-<id>.out~.
+
+Inputs that name the same job id are read as one job. A comment that
+holds several job tables gives one job per table.
+
+#+begin_src bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1873-zen2-217265.md
+#+end_src
+
+#+begin_example
+error-only x86_64/amd/zen2 job 217265 (eessi-bot-mc-aws): tests/bot_classify_fixtures/pr1873-zen2-217265.md
+  why: `ERROR: ` matched, but No missing installations and the tarball was created
+  evidence: found `No missing installations`
+  evidence: eessi-2025.06-software-linux-x86_64-amd-zen2-17931241740.tar.zst: entries: 18368
+  evidence: test result: found message matching ERROR:
+  evidence: test result: EESSI test suite was not run, test step itself failed to execute.
+real-failure=0 error-only=1 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+#+end_example
+
+How to read it:
+
+- The first line is the class, the CPU target, the Slurm job id, the bot
+  instance, and the inputs.
+- ~why~ is the rule the class came from.
+- Each ~evidence~ line is a check the bot reported or a line from the
+  job output. ~test result:~ marks the test step's checks.
+- The count line has one field per class and the number of jobs.
+
+* The classes
+
+| Class | When | Sub-class |
+|-
+| ~real-failure~ | ~FATAL:~, ~FAILED:~ or ~required modules missing:~ matched; or ~ERROR:~ matched and the job never said ~No missing installations~; or the test suite reported failing test cases | the campaign build-finding class of the job output, ~unknown~ without it |
+| ~error-only~ | ~ERROR:~ matched in the build or test step, but the job said ~No missing installations~ and the tarball has contents | none |
+| ~empty-tarball~ | the tarball was created with no entries, and no check found an error | none |
+| ~infra~ | the bot submitted no job, could not merge the pull request, found no job output, or the job output shows the scheduler, the container, CernVM-FS or the network failing | ~bot-config~, ~merge~, ~missing-output~, ~scheduler~, ~container~, ~network~, ~compat-layer~ |
+| ~success~ | every check passed | none |
+| ~unclassified~ | none of the above | none |
+
+The fixtures under ~tests/bot_classify_fixtures~ are real comments,
+trimmed to the job table, and the first line of each names the comment it
+came from.
+
+| Fixture | Pull request | Class |
+|-
+| ~pr1873-zen2-217265.md~ | 1873 | ~error-only~ |
+| ~pr1869-zen2.md~ | 1869 | ~error-only~ |
+| ~pr1834-zen2.md~ | 1834 | ~error-only~ |
+| ~pr1760-riscv64-327885.md~ | 1760 | ~error-only~ |
+| ~pr1741-zen5-sigma2.md~ | 1741 | ~error-only~ |
+| ~pr1732-riscv64-327189.md~ | 1732 | ~empty-tarball~ |
+| ~pr1733-riscv64.md~ | 1733 | ~empty-tarball~ |
+| ~pr1741-zen2-206298.md~ | 1741 | ~empty-tarball~ |
+| ~pr1741-no-jobs.md~ | 1741 | ~infra/bot-config~, one job per command |
+| ~pr1760-merge.md~ | 1760 | ~infra/merge~ |
+| ~pr1873-a64fx.md~ | 1873 | ~real-failure/unknown~ |
+| ~pr1818-riscv64-329698.md~ | 1818 | ~real-failure/unknown~, ~real-failure/resource~ with ~slurm-329698.out~ |
+| ~pr1818-riscv64-329809.md~ | 1818 | ~real-failure/unknown~ |
+| ~pr1823-riscv64-first.md~ | 1823 | ~real-failure/unknown~ |
+| ~pr1732-riscv64-327102.md~ | 1732 | ~unclassified~ |
+| ~pr1823-riscv64-second.md~ | 1823 | ~unclassified~ |
+
+* Nothing to deploy
+
+#+begin_src bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1732-riscv64-327189.md
+#+end_src
+
+#+begin_example
+empty-tarball riscv64/generic job 327189 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1732-riscv64-327189.md
+  why: No missing installations and the tarball has no entries: everything was already installed
+  evidence: found `No missing installations`
+  evidence: eessi-2026.06-software-linux-riscv64-generic-17908491890.tar.zst: entries: 0
+real-failure=0 error-only=0 empty-tarball=1 infra=0 success=0 unclassified=0 jobs=1
+#+end_example
+
+The build checks passed and the test step failed, but there is nothing
+in the tarball to deploy. The pull request was closed for that reason.
+
+* The cause of a real failure
+
+The bot's comment says which checks failed, not why. The cause comes
+from the job output, through the same table campaign findings use
+(~classify_build_failure~). Without the job output, the sub-class is
+~unknown~:
+
+#+begin_src bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1818-riscv64-329698.md
+#+end_src
+
+#+begin_example
+real-failure/unknown riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+#+end_example
+
+Add the job output. ~slurm-329698.out~ holds the line the maintainer
+quoted for that job:
+
+#+begin_src bash
+eb-stack stack bot-classify \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+#+end_src
+
+#+begin_example
+real-failure/resource riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md, tests/bot_classify_fixtures/slurm-329698.out
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+  evidence: OSError: [Errno 28] No space left on device
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+#+end_example
+
+A full disk or an exceeded quota is ~resource~, a failed EasyBuild sanity
+check is ~sanity~, and a compiler error is ~compile~. The bot's own
+~ERROR:~ and ~FATAL:~ prefixes are removed before a line is classified:
+they say a step failed, not which one.
+
+* Jobs that never ran
+
+A bot instance that submits no job posts an update instead of a job
+table. Each command it did not submit is one ~infra/bot-config~ job:
+
+#+begin_src bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1741-no-jobs.md
+#+end_src
+
+#+begin_example
+infra/bot-config x86_64/amd/zen5 (eessi-bot-sigma2): tests/bot_classify_fixtures/pr1741-no-jobs.md
+  why: the bot instance submitted no job for the build command
+  evidence: handling command `build architecture:x86_64/amd/zen5 repository:eessi.io-2025.06-software instance:eessi-bot-sigma2` resulted in:
+  evidence: no jobs were submitted
+infra/bot-config aarch64/nvidia/grace (eessi-bot-sigma2): tests/bot_classify_fixtures/pr1741-no-jobs.md
+  why: the bot instance submitted no job for the build command
+  evidence: handling command `build architecture:aarch64/nvidia/grace repository:eessi.io-2025.06-software instance:eessi-bot-sigma2` resulted in:
+  evidence: no jobs were submitted
+real-failure=0 error-only=0 empty-tarball=0 infra=2 success=0 unclassified=0 jobs=2
+#+end_example
+
+In the job output, these lines are infra:
+
+- ~sbatch: error:~, ~Batch job submission failed~, ~DUE TO NODE FAILURE~:
+  ~scheduler~;
+- ~container creation failed~, or a failed image pull: ~container~;
+- ~Failed to initialize root file catalog~,
+  ~Transport endpoint is not connected~, a ~/cvmfs/...~ repository that
+  ~is not available!~, a host name that does not resolve, or a refused
+  connection: ~network~;
+- a missing job configuration file, or a repository the container does
+  not know how to mount: ~bot-config~;
+- a Perl ~Can't locate ... in @INC~ whose ~@INC~ is under ~/compat/~,
+  which means the compatibility layer's Perl ran instead of the build
+  environment's: ~compat-layer~.
+
+* When the inputs do not say
+
+#+begin_src bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1732-riscv64-327102.md
+#+end_src
+
+#+begin_example
+unclassified riscv64/generic job 327102 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1732-riscv64-327102.md
+  why: the checks that failed do not say why; read the job output
+  evidence: no message matching No missing installations
+  evidence: No artefacts were created or found.
+real-failure=0 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=1 jobs=1
+#+end_example
+
+No check found an error, and there is no tarball. In pull request 1733
+the same shape was a full disk, but the comment does not say so, and the
+command does not guess. Pass the job output to get a class.
+
+* JSON
+
+~--json~ prints the jobs and the class counts:
+
+#+begin_src bash
+eb-stack stack bot-classify --json \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+#+end_src
+
+Each job has ~sources~, ~job_id~, ~instance~, ~repository~, ~target~,
+~class~, ~sub_class~, ~reason~, and ~evidence~. ~counts~ has one key per
+class. The MCP tool ~eb_stack_bot_classify~ takes ~files~ and returns the
+text, the jobs and the counts.
+
+* Limits
+
+- The comment holds only the checks the bot ran. The cause of a real
+  failure needs the job output, which stays on the bot host.
+- A job output line is classified by the campaign table, so a cause that
+  table does not know is ~unknown~.
+- A job that is still running has no ~finished~ row and is
+  ~unclassified~.

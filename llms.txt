@@ -34,6 +34,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Check CUDA compute capabilities in an easystack plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md): What it does: stack cuda-cc reads one or more easystacks as a plan, closes their dependencies on the robot tree, keeps the CUDA-dependent easyconfigs, and checks each cuda_compute_capabilities list against:
 - [Warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md): What it does: stack known-failures reads an easystack as a plan, closes its dependencies over --easyconfigs, and warns about every entry a bot run has already failed on one of the architectures you name.
 - [Warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md): What it does: stack oom reads an easystack as a plan.
+- [Read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md): What it does: stack bot-classify reads what an EESSI software-layer bot job left behind and says which kind of FAILURE it was: a real failure, ERROR-only noise, an empty tarball, or infra.
 
 ## Reference
 

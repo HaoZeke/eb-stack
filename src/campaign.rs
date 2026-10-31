@@ -979,13 +979,15 @@ pub fn classify_build_failure(
         || text.contains("can't find file to patch")
         || text.contains("patch failed")
         || text.contains("hunk #") && text.contains("failed");
+    // `OSError: [Errno 28] No space left on device`, `Disk quota exceeded`.
+    let disk_full = text.contains("no space left on device") || text.contains("quota exceeded");
     if text.contains("ssh:")
         || text.contains("connection refused")
         || text.contains("connection timed out")
     {
         BuildFindingClass::Transport
     } else if text.contains("slurm") && (text.contains("error") || text.contains("invalid")) {
-        if text.contains("oom") || text.contains("out of memory") {
+        if text.contains("oom") || text.contains("out of memory") || disk_full {
             BuildFindingClass::Resource
         } else {
             BuildFindingClass::Executor
@@ -994,6 +996,7 @@ pub fn classify_build_failure(
         || text.contains("out of memory")
         || text.contains("virtual memory exhausted")
         || text.contains("killed signal terminated program")
+        || disk_full
     {
         BuildFindingClass::Resource
     } else if license_refused {

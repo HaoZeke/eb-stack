@@ -93,6 +93,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
+    [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -4012,6 +4013,231 @@ When more than one entry matches a build, the highest estimate wins.
 - The MCP tool `eb_stack_oom` returns the same lines and each warning as
   JSON.
 
+# Read an EESSI bot FAILURE
+
+What it does: `stack bot-classify` reads what an EESSI software-layer
+bot job left behind and says which kind of FAILURE it was: a real
+failure, ERROR-only noise, an empty tarball, or infra. A job that fits
+none of them is `unclassified`, for a person to read. The command never
+posts or edits anything, and it always exits 0.
+
+Why you'd use it: the bot marks a job FAILURE whenever the job output
+holds a line matching `ERROR:`, `FATAL:`, `FAILED:` or
+`required modules missing:`, or lacks `No missing installations` or a
+tarball `created!` line. Those are the checks in `bot/check-build.sh` and
+`bot/check-test.sh` in EESSI/software-layer-scripts. In software-layer
+pull requests 1873, 1869, 1834 and 1760 every job built and packaged its
+software, and the FAILURE was the test step finding an `ERROR:` line. In
+1732 and 1733 everything was already installed, so the tarball was
+empty. In 1741 the bot configuration kept jobs from being submitted at
+all. The builds that did fail were in 1818, 1823, and the first a64fx
+job of 1873.
+
+The inputs are any mix of:
+
+- a saved bot comment, the job table the bot posts and updates;
+- the `_bot_job<id>.result` file the bot writes in the job directory;
+- the job output, `slurm-<id>.out`.
+
+Inputs that name the same job id are read as one job. A comment that
+holds several job tables gives one job per table.
+
+```bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1873-zen2-217265.md
+```
+
+```
+error-only x86_64/amd/zen2 job 217265 (eessi-bot-mc-aws): tests/bot_classify_fixtures/pr1873-zen2-217265.md
+  why: `ERROR: ` matched, but No missing installations and the tarball was created
+  evidence: found `No missing installations`
+  evidence: eessi-2025.06-software-linux-x86_64-amd-zen2-17931241740.tar.zst: entries: 18368
+  evidence: test result: found message matching ERROR:
+  evidence: test result: EESSI test suite was not run, test step itself failed to execute.
+real-failure=0 error-only=1 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+```
+
+How to read it:
+
+- The first line is the class, the CPU target, the Slurm job id, the bot
+  instance, and the inputs.
+- `why` is the rule the class came from.
+- Each `evidence` line is a check the bot reported or a line from the
+  job output. `test result:` marks the test step's checks.
+- The count line has one field per class and the number of jobs.
+
+# The classes
+
+| Class | When | Sub-class |
+| --- | --- | --- |
+| `real-failure` | `FATAL:`, `FAILED:` or `required modules missing:` matched; or `ERROR:` matched and the job never said `No missing installations`; or the test suite reported failing test cases | the campaign build-finding class of the job output, `unknown` without it |
+| `error-only` | `ERROR:` matched in the build or test step, but the job said `No missing installations` and the tarball has contents | none |
+| `empty-tarball` | the tarball was created with no entries, and no check found an error | none |
+| `infra` | the bot submitted no job, could not merge the pull request, found no job output, or the job output shows the scheduler, the container, CernVM-FS or the network failing | `bot-config`, `merge`, `missing-output`, `scheduler`, `container`, `network`, `compat-layer` |
+| `success` | every check passed | none |
+| `unclassified` | none of the above | none |
+
+The fixtures under `tests/bot_classify_fixtures` are real comments,
+trimmed to the job table, and the first line of each names the comment it
+came from.
+
+| Fixture | Pull request | Class |
+| --- | --- | --- |
+| `pr1873-zen2-217265.md` | 1873 | `error-only` |
+| `pr1869-zen2.md` | 1869 | `error-only` |
+| `pr1834-zen2.md` | 1834 | `error-only` |
+| `pr1760-riscv64-327885.md` | 1760 | `error-only` |
+| `pr1741-zen5-sigma2.md` | 1741 | `error-only` |
+| `pr1732-riscv64-327189.md` | 1732 | `empty-tarball` |
+| `pr1733-riscv64.md` | 1733 | `empty-tarball` |
+| `pr1741-zen2-206298.md` | 1741 | `empty-tarball` |
+| `pr1741-no-jobs.md` | 1741 | `infra/bot-config`, one job per command |
+| `pr1760-merge.md` | 1760 | `infra/merge` |
+| `pr1873-a64fx.md` | 1873 | `real-failure/unknown` |
+| `pr1818-riscv64-329698.md` | 1818 | `real-failure/unknown`, `real-failure/resource` with `slurm-329698.out` |
+| `pr1818-riscv64-329809.md` | 1818 | `real-failure/unknown` |
+| `pr1823-riscv64-first.md` | 1823 | `real-failure/unknown` |
+| `pr1732-riscv64-327102.md` | 1732 | `unclassified` |
+| `pr1823-riscv64-second.md` | 1823 | `unclassified` |
+
+# Nothing to deploy
+
+```bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1732-riscv64-327189.md
+```
+
+```
+empty-tarball riscv64/generic job 327189 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1732-riscv64-327189.md
+  why: No missing installations and the tarball has no entries: everything was already installed
+  evidence: found `No missing installations`
+  evidence: eessi-2026.06-software-linux-riscv64-generic-17908491890.tar.zst: entries: 0
+real-failure=0 error-only=0 empty-tarball=1 infra=0 success=0 unclassified=0 jobs=1
+```
+
+The build checks passed and the test step failed, but there is nothing
+in the tarball to deploy. The pull request was closed for that reason.
+
+# The cause of a real failure
+
+The bot's comment says which checks failed, not why. The cause comes
+from the job output, through the same table campaign findings use
+(`classify_build_failure`). Without the job output, the sub-class is
+`unknown`:
+
+```bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1818-riscv64-329698.md
+```
+
+```
+real-failure/unknown riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+```
+
+Add the job output. `slurm-329698.out` holds the line the maintainer
+quoted for that job:
+
+```bash
+eb-stack stack bot-classify \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+```
+
+```
+real-failure/resource riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md, tests/bot_classify_fixtures/slurm-329698.out
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+  evidence: OSError: [Errno 28] No space left on device
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+```
+
+A full disk or an exceeded quota is `resource`, a failed EasyBuild sanity
+check is `sanity`, and a compiler error is `compile`. The bot's own
+`ERROR:` and `FATAL:` prefixes are removed before a line is classified:
+they say a step failed, not which one.
+
+# Jobs that never ran
+
+A bot instance that submits no job posts an update instead of a job
+table. Each command it did not submit is one `infra/bot-config` job:
+
+```bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1741-no-jobs.md
+```
+
+```
+infra/bot-config x86_64/amd/zen5 (eessi-bot-sigma2): tests/bot_classify_fixtures/pr1741-no-jobs.md
+  why: the bot instance submitted no job for the build command
+  evidence: handling command `build architecture:x86_64/amd/zen5 repository:eessi.io-2025.06-software instance:eessi-bot-sigma2` resulted in:
+  evidence: no jobs were submitted
+infra/bot-config aarch64/nvidia/grace (eessi-bot-sigma2): tests/bot_classify_fixtures/pr1741-no-jobs.md
+  why: the bot instance submitted no job for the build command
+  evidence: handling command `build architecture:aarch64/nvidia/grace repository:eessi.io-2025.06-software instance:eessi-bot-sigma2` resulted in:
+  evidence: no jobs were submitted
+real-failure=0 error-only=0 empty-tarball=0 infra=2 success=0 unclassified=0 jobs=2
+```
+
+In the job output, these lines are infra:
+
+- `sbatch: error:`, `Batch job submission failed`, `DUE TO NODE FAILURE`:
+  `scheduler`;
+- `container creation failed`, or a failed image pull: `container`;
+- `Failed to initialize root file catalog`,
+  `Transport endpoint is not connected`, a `/cvmfs/...` repository that
+  `is not available!`, a host name that does not resolve, or a refused
+  connection: `network`;
+- a missing job configuration file, or a repository the container does
+  not know how to mount: `bot-config`;
+- a Perl `Can't locate ... in @INC` whose `@INC` is under `/compat/`,
+  which means the compatibility layer's Perl ran instead of the build
+  environment's: `compat-layer`.
+
+# When the inputs do not say
+
+```bash
+eb-stack stack bot-classify tests/bot_classify_fixtures/pr1732-riscv64-327102.md
+```
+
+```
+unclassified riscv64/generic job 327102 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1732-riscv64-327102.md
+  why: the checks that failed do not say why; read the job output
+  evidence: no message matching No missing installations
+  evidence: No artefacts were created or found.
+real-failure=0 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=1 jobs=1
+```
+
+No check found an error, and there is no tarball. In pull request 1733
+the same shape was a full disk, but the comment does not say so, and the
+command does not guess. Pass the job output to get a class.
+
+# JSON
+
+`--json` prints the jobs and the class counts:
+
+```bash
+eb-stack stack bot-classify --json \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+```
+
+Each job has `sources`, `job_id`, `instance`, `repository`, `target`,
+`class`, `sub_class`, `reason`, and `evidence`. `counts` has one key per
+class. The MCP tool `eb_stack_bot_classify` takes `files` and returns the
+text, the jobs and the counts.
+
+# Limits
+
+- The comment holds only the checks the bot ran. The cause of a real
+  failure needs the job output, which stays on the bot host.
+- A job output line is classified by the campaign table, so a cause that
+  table does not know is `unknown`.
+- A job that is still running has no `finished` row and is
+  `unclassified`.
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -4028,7 +4254,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -4057,6 +4283,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack cuda-cc` | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
 | `stack known-failures` | Warn about known per-architecture test, build, fetch and sanity failures in a plan, with the easyconfig remedy |
 | `stack oom` | Warn about plan entries likely to run out of memory in a bot job, with remedies |
+| `stack bot-classify` | Classify EESSI bot job results as real failure, ERROR-only noise, empty tarball, or infra |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -4957,6 +5184,43 @@ no node is reported and skipped. `--profile` replaces
 `data/eessi-bot-resources.toml`. The command exits 0 when it warns. See
 [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/../howto/oom-profile.html.md).
 
+## `stack bot-classify`
+
+What it does: read a saved EESSI bot comment, a `_bot_job<id>.result`
+file, or a `slurm-<id>.out` job output, and classify each bot job as
+`real-failure`, `error-only`, `empty-tarball`, `infra`, `success`, or
+`unclassified`. A real failure takes its sub-class from the campaign
+build-finding table; infra names the cause. Nothing is posted.
+
+Why you'd use it: most FAILURE rows in software-layer pull requests 1873,
+1869, 1834 and 1760 were an `ERROR:` line in the test step after the
+build had packaged its software, and 1732 and 1733 failed on an empty
+tarball. The class says which rows need a person.
+
+```bash
+eb-stack stack bot-classify \
+  tests/bot_classify_fixtures/pr1818-riscv64-329698.md \
+  tests/bot_classify_fixtures/slurm-329698.out
+```
+
+```
+real-failure/resource riscv64/generic job 329698 (eessi-bot-riscv-prod): tests/bot_classify_fixtures/pr1818-riscv64-329698.md, tests/bot_classify_fixtures/slurm-329698.out
+  why: the job output matched `FATAL:`
+  evidence: found message matching FATAL:
+  evidence: found message matching ERROR:
+  evidence: no message matching No missing installations
+  evidence: OSError: [Errno 28] No space left on device
+real-failure=1 error-only=0 empty-tarball=0 infra=0 success=0 unclassified=0 jobs=1
+```
+
+Inputs that name the same job id are one job. A comment with several job
+tables gives one job per table, and a bot update that submitted no job is
+`infra/bot-config`. `why` is the rule the class came from, and each
+`evidence` line is a bot check or a job output line. The count line has
+one field per class. `--json` prints `jobs` and `counts`. A directory
+argument is status 2; otherwise the command exits 0. See
+[read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/../howto/bot-classify.html.md).
+
 # `pr-overlap`
 
 ```bash
@@ -5498,6 +5762,8 @@ stdout, and `hits`, one object per line. Warnings are not a tool error.
 `eb_stack_oom` requires `easystack` and takes `arch`, `easyconfigs`,
 `installed`, `profile`, and `resources`. It returns the `stack oom` text
 and one object per warning; a warning is not a tool error.
+`eb_stack_bot_classify` requires `files`. It returns `text`, the
+`stack bot-classify` stdout, `jobs`, one object per job, and `counts`.
 `eb_stack_batch` takes `arch`, `unsupported`, `known_failures`,
 `oom_profile`, and `oom_resources`. It refuses an unsupported plan the same way and writes
 known-failures and oom warnings.
@@ -9324,7 +9590,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 43 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 48 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -9368,6 +9634,7 @@ eb_stack_generation
 eb_stack_cuda_cc
 eb_stack_known_failures
 eb_stack_oom
+eb_stack_bot_classify
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach
@@ -9383,7 +9650,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 43 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 48 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:

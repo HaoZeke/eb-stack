@@ -1334,6 +1334,26 @@ enum StackCommand {
         #[arg(long)]
         resources: Option<PathBuf>,
     },
+    /// Say what an EESSI bot job's FAILURE was: a real failure, ERROR-only
+    /// noise, an empty tarball, or infra.
+    ///
+    /// Each file is a saved bot comment, a `_bot_job<id>.result` file, or a
+    /// job output file (`slurm-<id>.out`). Files that name the same job id
+    /// are read as one job. A real failure gets its cause from the same
+    /// table campaign findings use; without the job output the cause is
+    /// `unknown`. A job that matches no known shape is `unclassified`. The
+    /// command exits 0 whatever the classes.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack bot-classify comment-6447925862.md\n  eb-stack stack bot-classify comment.md slurm-329698.out --json\n  eb-stack stack bot-classify _bot_job217265.result slurm-217265.out"
+    )]
+    BotClassify {
+        /// Bot comment, `_bot_job<id>.result`, or job output files.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Print the jobs and the class counts as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     #[command(
@@ -2909,6 +2929,23 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     resources,
                 })?;
             print!("{}", report.stdout);
+            Ok(())
+        }
+        StackCommand::BotClassify { files, json } => {
+            let report = eb_stack::bot_result::run_bot_classify(
+                &eb_stack::bot_result::BotClassifyRequest { files },
+            )?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "jobs": report.jobs,
+                        "counts": report.counts(),
+                    }))?
+                );
+            } else {
+                print!("{}", report.stdout);
+            }
             Ok(())
         }
         StackCommand::Easystack {

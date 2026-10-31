@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `classify_build_failure` classes `No space left on device` and
+  `Disk quota exceeded` as `resource`. A full disk in an EasyBuild log was
+  `compile` before.
 - A version bump moves the file name in a positional checksum's trailing
   comment to the new version.
 - A version bump moves a `local_*` commit that is the old release tag's
@@ -363,6 +366,12 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack bot-classify` and the MCP tool `eb_stack_bot_classify` read EESSI
+  bot comments, `_bot_job<id>.result` files and job output, and classify
+  each bot job as a real failure (with the campaign build-finding class),
+  ERROR-only noise, an empty tarball, or infra. Text no rule matches stays
+  `unclassified`. Fixtures are trimmed comments from software-layer pull
+  requests 1873, 1869, 1834, 1760, 1732, 1733, 1818, 1823 and 1741.
 - `eb-stack stack files` finds the patch and source files an easystack's
   easyconfigs need that neither the easyconfig's directory nor the robot
   path has. Patches of the recipe, its extensions, and its components,

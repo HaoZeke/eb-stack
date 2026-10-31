@@ -1,0 +1,5 @@
+# source: https://github.com/EESSI/software-layer/pull/1818#issuecomment-6313711865
+# The job output line that comment quotes for job 329698
+# (https://github.com/EESSI/software-layer/pull/1818#issuecomment-6294189759).
+# The rest of the job output is on the bot host only.
+OSError: [Errno 28] No space left on device

@@ -67,6 +67,18 @@ fn failure_classifier_preserves_the_build_error_domain() {
             "g++: fatal error: Killed signal terminated program cc1plus\ncompilation terminated.",
             BuildFindingClass::Resource,
         ),
+        (
+            "OSError: [Errno 28] No space left on device",
+            BuildFindingClass::Resource,
+        ),
+        (
+            "cp: error writing 'libfoo.so': Disk quota exceeded",
+            BuildFindingClass::Resource,
+        ),
+        (
+            "slurmstepd: error: write /var/tmp/job: No space left on device",
+            BuildFindingClass::Resource,
+        ),
         ("ssh: connect to host failed", BuildFindingClass::Transport),
         (
             "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found",

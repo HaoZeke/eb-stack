@@ -5,6 +5,7 @@ pub mod arch_known_failures;
 pub mod arch_support;
 pub mod artifact_class;
 pub mod batch;
+pub mod bot_result;
 pub mod build_backend;
 pub mod build_order;
 pub mod bump_companion;
