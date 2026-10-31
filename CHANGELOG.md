@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `examples/eessi-pr-overlap/fetch-prs.sh` reads every open pull request.
+  It listed them with a `gh pr list` limit of 500 and dropped the rest
+  without a message. It now pages through the pulls API 100 at a time, as
+  the easyconfigs script does, and prints `open pull requests: N`.
 - `stack arch --probe-sources` and `eb_stack_arch` with `probe_sources`
   probe only the architecture families `--arch` (`arch`) names. They
   probed x86_64, aarch64 and riscv64 whatever `--arch` said, so

@@ -151,9 +151,13 @@ easyconfig tree and the ~easybuild/easyblocks~ package for the
 EasyBuild version these easystacks name.
 ~scripts/fetch-upstream-trees.sh~ clones a pinned release, which can
 differ from that version.
-~examples/eessi-pr-overlap/fetch-prs.sh~ writes one JSON file per open
-PR. It fetches each PR head into the clone as ~refs/remotes/pr/N~ and
-does not check it out. ~--eessi-version~ defaults to ~2026.06~.
+~examples/eessi-pr-overlap/fetch-prs.sh~ reads every open PR and writes
+one JSON file per PR that changes an easystack for that EESSI version.
+It pages through the GitHub pulls API 100 at a time with no upper
+limit, so a repository with more open PRs than one listing returns is
+still read in full. It fetches each PR head into the clone as
+~refs/remotes/pr/N~ and does not check it out. ~--eessi-version~
+defaults to ~2026.06~.
 
 #+begin_src bash
 : "${EESSI_SOFTWARE_PATH:?source the EESSI init script and module load EESSI-extend}"
@@ -194,6 +198,15 @@ eb-stack pr-overlap "${args[@]}" \
   --merge-order \
   --out-dir /tmp/pr-overlap-out
 #+end_src
+
+On ~EESSI/software-layer~ on 2026-10-31, ~fetch-prs.sh~ printed:
+
+: open pull requests: 52
+: pull requests with 2026.06 easystack changes: 26
+
+The first line counts every open PR the API returned. The second line
+counts the files in ~prs/~, which are the ~--pr~ inputs. A PR missing
+from ~prs/~ changed no 2026.06 easystack.
 
 ~nullglob~ keeps an empty ~commit-trees/~ or ~easyblocks/~ from being
 passed as a literal path. You get the same kinds of report files as in

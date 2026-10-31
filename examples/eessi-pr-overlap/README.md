@@ -153,6 +153,18 @@ eb-stack pr-overlap --pr in/prs/*.json \
   --out-dir out/
 ```
 
+`fetch-prs.sh` reads every open pull request, 100 per page with no upper
+limit, and writes `in/prs/<N>.json` for each one that changes a 2026.06
+easystack. On EESSI/software-layer on 2026-10-31 it printed:
+
+```
+open pull requests: 52
+pull requests with 2026.06 easystack changes: 26
+```
+
+The first line is every open pull request read. The second is the number of
+files in `in/prs/`, the `--pr` inputs.
+
 `installed.txt` is `find $EESSI_SOFTWARE_PATH/software -mindepth 2 -maxdepth 2 -type d -printf '%P\n'`.
 `--installed-modulerc` is that prefix's `modules/all`. `--filter-deps` is
 `EASYBUILD_FILTER_DEPS` after `module load EESSI-extend` on the same CPU

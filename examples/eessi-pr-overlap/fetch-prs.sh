@@ -42,8 +42,15 @@ for line in open(sys.argv[1]):
 json.dump(rows, open(sys.argv[2], "w"))
 PY
 else
-  gh pr list --repo "$repo" --state open --limit 500 \
-    --json number,headRefOid,title >"$out/open.json"
+  # Every open pull request, 100 per page, with no upper limit.
+  gh api --method GET --paginate "repos/${repo}/pulls?state=open&per_page=100" \
+    --jq '.[] | {number, headRefOid: .head.sha, title}' >"$out/open.jsonl"
+  python3 - "$out/open.jsonl" "$out/open.json" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+json.dump(rows, open(sys.argv[2], "w"))
+print("open pull requests:", len(rows))
+PY
 fi
 
 python3 - "$out/open.json" <<'PY' | while read -r number sha; do
