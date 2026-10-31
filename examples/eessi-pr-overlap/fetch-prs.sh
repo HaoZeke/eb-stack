@@ -14,9 +14,15 @@ set -euo pipefail
 
 repo=$1
 version=$2
-out=$3
+out=${3:?usage: fetch-prs.sh <owner/repo> <eessi-version> <out-dir> [pr-numbers]}
 list=${4:-}
+# Rewrite raw/ and prs/ from scratch on every run, so a pull request that
+# closed or stopped touching easystacks does not persist from a stale run,
+# and so does its refspecs line. commit-trees/ and easyblocks/ are caches
+# guarded by their marker files and survive reruns.
+rm -rf "$out/raw" "$out/prs"
 mkdir -p "$out/prs" "$out/commit-trees" "$out/easyblocks"
+rm -f "$out/refspecs"
 prefix="easystacks/software.eessi.io/${version}/"
 
 git fetch --quiet --no-tags origin main
@@ -67,20 +73,50 @@ PY
       esac
     done)
   [[ ${#files[@]} -eq 0 ]] && continue
-  # GitHub keeps every pull request head, fork or not, at refs/pull/N/head.
-  git fetch --quiet --no-tags --depth=1 origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
   dir="$out/raw/${number}"
   mkdir -p "$dir"
   i=0
   for f in "${files[@]}"; do
-    git show "origin/main:${f}" >"$dir/${i}.base" 2>/dev/null || rm -f "$dir/${i}.base"
-    git show "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head" 2>/dev/null || rm -f "$dir/${i}.head"
-    git rev-parse "origin/main:${f}" >"$dir/${i}.base_blob" 2>/dev/null || rm -f "$dir/${i}.base_blob"
-    git rev-parse "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head_blob" 2>/dev/null || rm -f "$dir/${i}.head_blob"
     printf '%s\n' "$f" >"$dir/${i}.path"
     i=$((i + 1))
   done
   printf '%s\n' "$sha" >"$dir/head_sha"
+  # GitHub keeps every pull request head, fork or not, at refs/pull/N/head.
+  printf '+refs/pull/%s/head:refs/remotes/pr/%s\n' "$number" "$number" >>"$out/refspecs"
+done
+
+# One shallow fetch for every head. A shallow fetch per pull request
+# made a first run stop with git exit 128 ("shallow file has changed
+# since we read it"). The single fetch runs with automatic gc off, since
+# a gc can rewrite .git/shallow, and a failed fetch is retried twice.
+if [[ -s "$out/refspecs" ]]; then
+  for attempt in 1 2 3; do
+    if git -c gc.auto=0 -c maintenance.auto=false fetch --quiet --no-tags \
+      --depth=1 --stdin origin <"$out/refspecs"; then
+      break
+    fi
+    if [[ $attempt -eq 3 ]]; then
+      echo "fetch-prs.sh: git fetch failed 3 times" >&2
+      exit 1
+    fi
+    sleep $((attempt * 5))
+  done
+fi
+
+# Base text and blob from main, head text and blob from the fetched ref.
+for dir in "$out"/raw/*/; do
+  [[ -d $dir ]] || continue
+  dir=${dir%/}
+  number=${dir##*/}
+  i=0
+  while [[ -f "$dir/${i}.path" ]]; do
+    f=$(<"$dir/${i}.path")
+    git show "origin/main:${f}" >"$dir/${i}.base" 2>/dev/null || rm -f "$dir/${i}.base"
+    git show "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head" 2>/dev/null || rm -f "$dir/${i}.head"
+    git rev-parse "origin/main:${f}" >"$dir/${i}.base_blob" 2>/dev/null || rm -f "$dir/${i}.base_blob"
+    git rev-parse "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head_blob" 2>/dev/null || rm -f "$dir/${i}.head_blob"
+    i=$((i + 1))
+  done
 done
 
 # One JSON document per pull request, in the shape `pr-overlap --pr` reads.
@@ -124,9 +160,15 @@ PY
 # every subdirectory of easybuild/easyconfigs, then copies the touched files
 # on top. A tree of only the changed files drops dependencies that already
 # existed at the commit and are not in the release robot yet.
-cat "$out"/raw/*/*.head 2>/dev/null \
-  | grep -oE '(^|[^A-Za-z0-9_-])from-commit:[[:space:]]*[0-9a-f]{40}' \
-  | grep -oE '[0-9a-f]{40}' | sort -u \
+# No head easystack naming a pin is a normal run: an empty glob or a grep that
+# matches nothing exits 1, which must not abort the script. The subshell
+# absorbs only that, so a real failure in the loop body below still stops us.
+(
+  compgen -G "$out/raw/*/*.head" >/dev/null || exit 0
+  cat "$out"/raw/*/*.head \
+    | grep -oE '(^|[^A-Za-z0-9_-])from-commit:[[:space:]]*[0-9a-f]{40}' \
+    | grep -oE '[0-9a-f]{40}' | sort -u || [[ $? -eq 1 ]]
+) \
   | while read -r commit; do
       dest="$out/commit-trees/${commit}"
       [[ -f "$dest/.full-easyconfigs" ]] && continue
@@ -162,21 +204,24 @@ cat "$out"/raw/*/*.head 2>/dev/null \
 # the files that commit touches, and it puts them ahead of the installed
 # easyblocks package. The whole repository at that commit is not the same
 # thing: every class would then look as if the commit had provided it.
-cat "$out"/raw/*/*.head 2>/dev/null \
-  | grep -oE 'include-easyblocks-from-commit:[[:space:]]*[0-9a-f]{40}' \
-  | grep -oE '[0-9a-f]{40}' | sort -u \
+(
+  compgen -G "$out/raw/*/*.head" >/dev/null || exit 0
+  cat "$out"/raw/*/*.head \
+    | grep -oE 'include-easyblocks-from-commit:[[:space:]]*[0-9a-f]{40}' \
+    | grep -oE '[0-9a-f]{40}' | sort -u || [[ $? -eq 1 ]]
+) \
   | while read -r commit; do
       dest="$out/easyblocks/${commit}"
       [[ -f "$dest/.touched-files" ]] && continue
       rm -rf "$dest"
       mkdir -p "$dest"
-      if ! files=$(gh api --method GET "repos/easybuilders/easybuild-easyblocks/commits/${commit}" \
+      if ! touched=$(gh api --method GET "repos/easybuilders/easybuild-easyblocks/commits/${commit}" \
           --jq '.files[] | select(.status != "removed") | .filename'); then
         echo "no easyblocks commit ${commit}" >&2
         rm -rf "$dest"
         continue
       fi
-      if [[ -z "$files" ]]; then
+      if [[ -z "$touched" ]]; then
         echo "easyblocks commit ${commit} touches no files" >&2
         rm -rf "$dest"
         continue
@@ -199,7 +244,7 @@ cat "$out"/raw/*/*.head 2>/dev/null \
       args=()
       while IFS= read -r file; do
         [[ -n "$file" ]] && args+=("${top}/${file}")
-      done <<<"$files"
+      done <<<"$touched"
       if ! tar -xzf "$ball" -C "$dest" --strip-components=1 -- "${args[@]}"; then
         echo "could not extract easyblocks commit ${commit}" >&2
         rm -f "$ball"
@@ -209,4 +254,7 @@ cat "$out"/raw/*/*.head 2>/dev/null \
       rm -f "$ball"
       : >"$dest/.touched-files"
     done
-ls "$out/prs" | wc -l | xargs echo "pull requests with ${version} easystack changes:"
+shopt -s nullglob
+prs=("$out"/prs/*.json)
+shopt -u nullglob
+echo "pull requests with ${version} easystack changes: ${#prs[@]}"

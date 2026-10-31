@@ -436,3 +436,330 @@ esac
         .expect("head text")
         .contains("Pkg102-1.0-GCCcore-15.2.0.eb"));
 }
+
+const EESSI_STACK: &str = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.1-2026.1.yml";
+
+/// Seed a bare origin with `main` carrying `EESSI_STACK`, push one head per
+/// `(number, body)` to `refs/pull/<N>/head`, and clone it into `root/clone`.
+/// Returns each pull request's head sha. Mirrors the setup the existing EESSI
+/// test does inline.
+fn eessi_seed_and_clone(
+    root: &Path,
+    prs: &[(u64, String)],
+) -> std::collections::BTreeMap<u64, String> {
+    let origin = root.join("origin.git");
+    let seed = root.join("seed");
+    let clone = root.join("clone");
+
+    assert_ok(
+        &run(
+            "git",
+            &["init", "--bare", origin.to_str().expect("origin utf-8")],
+            root,
+            &[],
+        ),
+        "init bare origin",
+    );
+    fs::create_dir_all(&seed).expect("seed dir");
+    assert_ok(&run("git", &["init"], &seed, &[]), "init seed");
+    git(&seed, &["config", "user.name", "Fixture"]);
+    git(&seed, &["config", "user.email", "fixture@example.invalid"]);
+    write(
+        &seed.join(EESSI_STACK),
+        "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n",
+    );
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "seed main"]);
+    git(&seed, &["branch", "-M", "main"]);
+    git(
+        &seed,
+        &[
+            "remote",
+            "add",
+            "origin",
+            origin.to_str().expect("origin utf-8"),
+        ],
+    );
+    git(&seed, &["push", "-u", "origin", "main"]);
+
+    let mut heads = std::collections::BTreeMap::new();
+    for (pr, body) in prs {
+        git(&seed, &["checkout", "-B", &format!("pr{pr}"), "main"]);
+        write(&seed.join(EESSI_STACK), body);
+        git(&seed, &["commit", "-am", &format!("pr-{pr} head")]);
+        let sha = git(&seed, &["rev-parse", "HEAD"]).trim().to_string();
+        git(
+            &seed,
+            &["push", "origin", &format!("HEAD:refs/pull/{pr}/head")],
+        );
+        heads.insert(*pr, sha);
+    }
+    git(&seed, &["checkout", "main"]);
+
+    assert_ok(
+        &run(
+            "git",
+            &[
+                "clone",
+                origin.to_str().expect("origin utf-8"),
+                clone.to_str().expect("clone utf-8"),
+            ],
+            root,
+            &[],
+        ),
+        "clone fixture",
+    );
+    heads
+}
+
+/// A stand-in for `gh api`: one open-pulls URL served from `MOCK_PAGE` (raw
+/// GitHub shape, with `--jq` applied as gh does), the changed files of any
+/// pull request from `MOCK_STACK`, and any easyblocks commit's one touched
+/// file. Also a `curl` that always fails, so a named pin stays unresolved
+/// without any network, as it does in the field.
+fn write_eessi_mocks(mock_bin: &Path) {
+    write_executable(
+        &mock_bin.join("gh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == api ]] || { echo "unexpected: gh $*" >&2; exit 1; }
+shift
+url="" filter=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --method) shift ;;
+    --paginate) ;;
+    --jq) shift; filter=$1 ;;
+    repos/*) url=$1 ;;
+    *) echo "unexpected arg: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+case "$url" in
+  *"/pulls?state=open&per_page=100")
+    if [[ -n "$filter" ]]; then jq -c "$filter" "${MOCK_PAGE:?}"; else cat "${MOCK_PAGE:?}"; fi ;;
+  repos/easybuilders/easybuild-easyblocks/commits/*)
+    printf '%s\n' easybuild/easyblocks/p/pkg.py ;;
+  */pulls/*/files)
+    printf '%s\n' "${MOCK_STACK:?}" ;;
+  *) echo "unexpected url: $url" >&2; exit 1 ;;
+esac
+"#,
+    )
+    .expect("write mock gh");
+    write_executable(
+        &mock_bin.join("curl"),
+        "#!/usr/bin/env bash\necho \"mock curl: no network: $*\" >&2\nexit 22\n",
+    )
+    .expect("write mock curl");
+}
+
+fn eessi_script() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/eessi-pr-overlap/fetch-prs.sh")
+}
+
+fn run_eessi(
+    clone: &Path,
+    out: &Path,
+    mock_bin: &Path,
+    page: &Path,
+    extra: &[(&str, &str)],
+) -> Output {
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let mut envs: Vec<(&str, &str)> = vec![
+        ("PATH", path.as_str()),
+        ("MOCK_PAGE", page.to_str().expect("page utf-8")),
+        ("MOCK_STACK", EESSI_STACK),
+    ];
+    envs.extend_from_slice(extra);
+    // `path` must outlive the borrow; bind the run before it drops.
+    run(
+        "bash",
+        &[
+            eessi_script().to_str().expect("script utf-8"),
+            "EESSI/software-layer",
+            "2026.06",
+            out.to_str().expect("out utf-8"),
+        ],
+        clone,
+        &envs,
+    )
+}
+
+/// A rerun into the same out-dir must drop a pull request that is no longer
+/// open: the first run sees {1, 2}, the second only {2}, so `prs/` holds just
+/// `2.json` and the count line says 1. Before the fix `raw/` and `prs/` were
+/// never cleared, so `1.json` survived and the count stayed 2.
+#[test]
+fn eessi_rerun_rewrites_outputs_to_current_open_pull_requests_only() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+
+    // Both heads name a from-commit and an include-easyblocks-from-commit pin,
+    // so the b7c933b script gets past bug (c) and this test isolates the
+    // stale-output bug. The pins never resolve (curl fails), as in the field.
+    let body = |pr: u64| {
+        format!(
+            "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg{pr}-1.0-GCCcore-15.2.0.eb:\n      options:\n        from-commit: 1111111111111111111111111111111111111111\n        include-easyblocks-from-commit: 2222222222222222222222222222222222222222\n"
+        )
+    };
+    let heads = eessi_seed_and_clone(root, &[(1, body(1)), (2, body(2))]);
+    write_eessi_mocks(&mock_bin);
+
+    let sha_of = |n: u64| {
+        heads
+            .get(&n)
+            .cloned()
+            .unwrap_or_else(|| format!("{n:040x}"))
+    };
+    let page_first = root.join("page-first.json");
+    let page_second = root.join("page-second.json");
+    write(&page_first, &pulls_page([1, 2].into_iter(), sha_of));
+    write(&page_second, &pulls_page([2].into_iter(), sha_of));
+
+    let first = run_eessi(&clone, &out, &mock_bin, &page_first, &[]);
+    assert_ok(&first, "first eessi run");
+    assert_eq!(json_files(&out.join("prs")), ["1.json", "2.json"]);
+
+    let second = run_eessi(&clone, &out, &mock_bin, &page_second, &[]);
+    assert_ok(&second, "second eessi run");
+    assert_eq!(json_files(&out.join("prs")), ["2.json"]);
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == "pull requests with 2026.06 easystack changes: 1"),
+        "stdout:\n{stdout}"
+    );
+}
+
+/// A run where no head easystack names a pin is a normal, successful run. The
+/// script must reach the count line and exit 0. Before the fix the empty
+/// `grep` in the from-commit pipeline exited 1 under `pipefail` and aborted
+/// the script after `prs/` was written but before the count line.
+#[test]
+fn eessi_no_pin_run_reaches_count_line_and_exits_zero() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+
+    let body = |pr: u64| {
+        format!(
+            "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg{pr}-1.0-GCCcore-15.2.0.eb\n"
+        )
+    };
+    let heads = eessi_seed_and_clone(root, &[(1, body(1)), (2, body(2))]);
+    write_eessi_mocks(&mock_bin);
+
+    let sha_of = |n: u64| {
+        heads
+            .get(&n)
+            .cloned()
+            .unwrap_or_else(|| format!("{n:040x}"))
+    };
+    let page = root.join("page.json");
+    write(&page, &pulls_page([1, 2].into_iter(), sha_of));
+
+    let output = run_eessi(&clone, &out, &mock_bin, &page, &[]);
+    assert_ok(&output, "no-pin eessi run");
+    assert_eq!(json_files(&out.join("prs")), ["1.json", "2.json"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == "pull requests with 2026.06 easystack changes: 2"),
+        "stdout:\n{stdout}"
+    );
+    // No pin was named, so nothing was fetched into these caches.
+    assert!(!out
+        .join("commit-trees")
+        .join("1111111111111111111111111111111111111111")
+        .exists());
+    assert!(!out
+        .join("easyblocks")
+        .join("2222222222222222222222222222222222222222")
+        .exists());
+}
+
+/// Every pull request head is fetched in one `git fetch --stdin`, not one
+/// shallow fetch per pull request. A `git` wrapper on PATH logs each call and
+/// delegates to the real git; exactly one logged call carries `--stdin`, and
+/// no per-PR `refs/pull/<N>/head` fetch is logged. Before the fix the loop ran
+/// a shallow fetch per pull request and never used `--stdin`.
+#[test]
+fn eessi_fetches_all_pull_request_heads_in_one_stdin_fetch() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+
+    let body = |pr: u64| {
+        format!(
+            "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg{pr}-1.0-GCCcore-15.2.0.eb\n"
+        )
+    };
+    let heads = eessi_seed_and_clone(root, &[(1, body(1)), (2, body(2))]);
+    write_eessi_mocks(&mock_bin);
+
+    let real_git = String::from_utf8(run("bash", &["-c", "command -v git"], root, &[]).stdout)
+        .expect("git path utf-8")
+        .trim()
+        .to_string();
+    let git_log = root.join("git-calls.log");
+    write_executable(
+        &mock_bin.join("git"),
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"${GIT_LOG:?}\"\nexec \"${REAL_GIT:?}\" \"$@\"\n",
+    )
+    .expect("write mock git");
+
+    let sha_of = |n: u64| {
+        heads
+            .get(&n)
+            .cloned()
+            .unwrap_or_else(|| format!("{n:040x}"))
+    };
+    let page = root.join("page.json");
+    write(&page, &pulls_page([1, 2].into_iter(), sha_of));
+
+    let output = run_eessi(
+        &clone,
+        &out,
+        &mock_bin,
+        &page,
+        &[
+            ("GIT_LOG", git_log.to_str().expect("log utf-8")),
+            ("REAL_GIT", real_git.as_str()),
+        ],
+    );
+    assert_ok(&output, "single-fetch eessi run");
+    assert_eq!(json_files(&out.join("prs")), ["1.json", "2.json"]);
+
+    let log = fs::read_to_string(&git_log).expect("read git log");
+    let stdin_fetches: Vec<&str> = log
+        .lines()
+        .filter(|line| line.starts_with("fetch ") || line.contains(" fetch "))
+        .filter(|line| line.contains("--stdin"))
+        .collect();
+    assert_eq!(
+        stdin_fetches.len(),
+        1,
+        "expected one `fetch --stdin`, saw {stdin_fetches:?} in:\n{log}"
+    );
+    assert!(
+        !log.lines().any(|line| line.contains("refs/pull/")),
+        "no per-PR refs/pull fetch should be logged:\n{log}"
+    );
+}

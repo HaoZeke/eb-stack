@@ -6,6 +6,15 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `examples/eessi-pr-overlap/fetch-prs.sh` rewrites `raw/` and `prs/` from
+  scratch on every run, so a pull request that closed or stopped touching
+  easystacks does not persist from a stale run; it fetches every pull request
+  head in one `git fetch --stdin` (with automatic gc off and two retries)
+  instead of a shallow fetch per pull request that could fail with git exit
+  128; it reaches the count line and exits 0 when no head easystack names a
+  `from-commit` or `include-easyblocks-from-commit` pin; and it clears its
+  three shellcheck findings (SC2178/SC2128 from reusing the `files` array as a
+  string, SC2012 from `ls | wc -l`). It matches the easyconfigs script.
 - `examples/eessi-pr-overlap/fetch-prs.sh` reads every open pull request.
   It listed them with a `gh pr list` limit of 500 and dropped the rest
   without a message. It now pages through the pulls API 100 at a time, as
