@@ -763,3 +763,65 @@ fn eessi_fetches_all_pull_request_heads_in_one_stdin_fetch() {
         "no per-PR refs/pull fetch should be logged:\n{log}"
     );
 }
+
+#[test]
+fn easyconfigs_fetch_refuses_an_empty_out_dir_before_deleting() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+
+    // Every command the script could run to touch the filesystem or the
+    // network is stubbed out: each stand-in logs its name and arguments to
+    // the shared log and exits 1. If the empty-argument guard were missing,
+    // the script would reach `rm -rf "$out/raw" "$out/prs"` on `/raw` and
+    // `/prs`; the stand-in records that call instead of deleting anything,
+    // so this test is safe even when CI runs as root.
+    let log = root.join("commands.log");
+    for name in ["rm", "mkdir", "git", "gh", "python3"] {
+        write_executable(
+            &mock_bin.join(name),
+            &format!(
+                "#!/usr/bin/env bash\nprintf '{name} %s\\n' \"$*\" >> \"${{MOCK_LOG:?}}\"\nexit 1\n"
+            ),
+        )
+        .expect("write mock command");
+    }
+
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/easyconfigs-pr-overlap/fetch-prs.sh");
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+
+    let output = run(
+        "bash",
+        &[script.to_str().expect("script utf-8"), "acme/repo", ""],
+        root,
+        &[
+            ("PATH", &path),
+            ("MOCK_LOG", log.to_str().expect("log utf-8")),
+        ],
+    );
+
+    assert!(
+        !output.status.success(),
+        "script exited successfully on an empty out-dir\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let logged = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        logged.is_empty(),
+        "script ran a mocked command before the guard:\n{logged}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("usage: fetch-prs.sh <owner/repo> <out-dir>"),
+        "stderr missing usage guard:\n{stderr}"
+    );
+}

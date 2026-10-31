@@ -11,7 +11,7 @@
 set -euo pipefail
 
 repo=$1
-out=$2
+out=${2:?usage: fetch-prs.sh <owner/repo> <out-dir>}
 # Rewrite outputs from scratch on every run, so closed pull requests do not
 # persist from stale raw/ and prs/ directories.
 rm -rf "$out/raw" "$out/prs"
