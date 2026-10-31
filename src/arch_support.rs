@@ -509,10 +509,10 @@ pub struct ArchCheckRequest {
     pub source_probe: Option<SourceProbeRequest>,
 }
 
-/// Arguments for the optional source probe of `stack arch`.
+/// Arguments for the optional source probe of `stack arch`. The probe runs
+/// on the architecture families `ArchCheckRequest::arches` names, or on
+/// every family when that is empty.
 pub struct SourceProbeRequest {
-    /// Architectures to probe with per-arch template expansion.
-    pub arches: Vec<String>,
     /// Extra probe attempts after the first one.
     pub retries: u32,
     /// Per-request timeout.
@@ -562,6 +562,7 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
         return Err(usage("--probe-sources needs --easyconfigs"));
     }
 
+    let parse_arches = parse_arch_families(request);
     let mut plan_files: BTreeSet<PathBuf> = BTreeSet::new();
     let mut failed_pairs: BTreeSet<(String, String)> = BTreeSet::new();
     let (parse_failed, unsupported): (Vec<String>, Vec<String>) = if request.easyconfigs.is_empty()
@@ -570,7 +571,6 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
         (Vec::new(), plan_hits.iter().map(PlanHit::message).collect())
     } else {
         let trees: Vec<&Path> = request.easyconfigs.iter().map(PathBuf::as_path).collect();
-        let parse_arches = parse_arch_families(request);
         let start_files: BTreeSet<String> = starts.iter().map(|entry| basename(entry)).collect();
         let mut parse_failed = Vec::new();
         let mut unsupported = Vec::new();
@@ -617,7 +617,7 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
 
     let flagged = cheap_flags(request, &list, &starts)?;
     let source_findings = match &request.source_probe {
-        Some(probe) => probe_plan_sources(probe, &plan_files, &failed_pairs)?,
+        Some(probe) => probe_plan_sources(probe, &parse_arches, &plan_files, &failed_pairs)?,
         None => Vec::new(),
     };
     let mut stdout = String::new();
@@ -659,10 +659,11 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
     })
 }
 
-/// Probe each plan file on every probe architecture it parsed on. A pair
-/// already reported in `parse_failed` has no sources to resolve.
+/// Probe each plan file on every parsed architecture family it parsed on.
+/// A pair already reported in `parse_failed` has no sources to resolve.
 fn probe_plan_sources(
     probe: &SourceProbeRequest,
+    families: &[String],
     plan_files: &BTreeSet<PathBuf>,
     failed_pairs: &BTreeSet<(String, String)>,
 ) -> Result<Vec<String>> {
@@ -673,10 +674,9 @@ fn probe_plan_sources(
     let mut findings = Vec::new();
     for path in plan_files {
         let file = basename(&path.display().to_string());
-        let arches: Vec<String> = probe
-            .arches
+        let arches: Vec<String> = families
             .iter()
-            .filter(|arch| !failed_pairs.contains(&(file.clone(), arch_family(arch).to_string())))
+            .filter(|family| !failed_pairs.contains(&(file.clone(), (*family).clone())))
             .cloned()
             .collect();
         if arches.is_empty() {
@@ -704,7 +704,10 @@ fn probe_plan_sources(
 
 fn parse_arch_families(request: &ArchCheckRequest) -> Vec<String> {
     if request.arches.is_empty() {
-        return vec!["x86_64".into(), "aarch64".into(), "riscv64".into()];
+        return crate::source_probe::DEFAULT_TARGET_ARCHES
+            .iter()
+            .map(|arch| arch.to_string())
+            .collect();
     }
     let mut families: Vec<String> = request
         .arches

@@ -1133,10 +1133,14 @@ enum StackCommand {
         /// Replace the bundled unsupported list.
         #[arg(long)]
         unsupported: Option<PathBuf>,
-        /// Probe source URLs for x86_64, aarch64, and riscv64 before build.
+        /// Probe source URLs on each `--arch` family before build. Absent
+        /// `--arch` probes x86_64, aarch64, and riscv64.
         ///
         /// This is opt-in because it performs network requests (HEAD plus
         /// ranged GET fallback) against every resolved source URL in the plan.
+        /// A source no probed family can fetch is `unreachable`. A source
+        /// another probed family can fetch is `arch-missing`, so one
+        /// `--arch` reports a missing source as `unreachable`.
         #[arg(long = "probe-sources")]
         probe_sources: bool,
         /// Extra attempts after the first source probe request.
@@ -2777,10 +2781,6 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     unsupported,
                     source_probe: probe_sources.then(|| {
                         eb_stack::arch_support::SourceProbeRequest {
-                            arches: eb_stack::source_probe::DEFAULT_TARGET_ARCHES
-                                .iter()
-                                .map(|arch| arch.to_string())
-                                .collect(),
                             retries: probe_retries,
                             timeout: std::time::Duration::from_secs(probe_timeout_s),
                         }

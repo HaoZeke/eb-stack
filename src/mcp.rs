@@ -420,7 +420,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_arch",
-            "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged. With probe_sources, source_urls and sources are resolved per architecture (x86_64, aarch64, riscv64) and probed by HEAD with ranged GET fallback.",
+            "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged. With probe_sources, source_urls and sources are resolved on each arch family (x86_64, aarch64, and riscv64 when arch is absent) and probed by HEAD with ranged GET fallback. A source no probed family can fetch is unreachable; one another probed family can fetch is arch-missing.",
             &[("easystack", "array_min1")],
             &[
                 ("arch", "array"),
@@ -3094,10 +3094,6 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
         additional: string_array(arguments, "additional_arch")?,
         unsupported: optional_path(arguments, "unsupported"),
         source_probe: probe_sources.then(|| crate::arch_support::SourceProbeRequest {
-            arches: crate::source_probe::DEFAULT_TARGET_ARCHES
-                .iter()
-                .map(|arch| arch.to_string())
-                .collect(),
             retries: probe_retries,
             timeout: std::time::Duration::from_secs(probe_timeout_s),
         }),

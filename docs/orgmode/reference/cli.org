@@ -690,8 +690,11 @@ same refusal runs inside ~stack batch~ before a plan is written.
 With ~--easyconfigs~, each file the plan names is parsed once per
 architecture, and a file that fails to parse on one is a
 ~parse_failed~ line that exits 1.
-~--probe-sources~ adds a per-architecture source URL probe over
-~x86_64~, ~aarch64~, and ~riscv64~ with HEAD and ranged GET fallback.
+~--probe-sources~ adds a source URL probe, with HEAD and ranged GET
+fallback, on each family ~--arch~ names, or on ~x86_64~, ~aarch64~,
+and ~riscv64~ with no ~--arch~. A source no probed family can fetch is
+~unreachable~. A source another probed family can fetch is
+~arch-missing~, so with one ~--arch~ a missing source is ~unreachable~.
 ~--probe-retries~ and ~--probe-timeout-s~ tune that network check.
 
 [[file:../howto/arch-unsupported.org][Refuse a plan an architecture cannot build]]
@@ -1506,7 +1509,8 @@ requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
 ~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the
 same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
-and a hit is a tool error. ~eb_stack_files~ requires ~easystack~ and takes
+and a hit is a tool error. ~probe_sources~ probes the families ~arch~
+names, as ~--arch~ does. ~eb_stack_files~ requires ~easystack~ and takes
 ~easyconfigs~, ~commit_tree~, ~easyconfigs_repo~, ~sourcepath~, and
 ~path_map~. It returns the same report as ~stack files~, and a missing
 file is a tool error. ~eb_stack_cuda_cc~ requires ~easystack~ and ~easyconfigs~,

@@ -3404,12 +3404,13 @@ not in that architecture's `additional_arch` easystack.
 # Per-architecture source probe
 
 What it does: `--probe-sources` resolves each planned easyconfig's
-`source_urls` and `sources` for `x86_64`, `aarch64`, and `riscv64`, then
-probes every concrete URL with HEAD and a ranged GET fallback
-(`Range: bytes=0-0`). It reports `unreachable` when no architecture can
-reach a source, and `arch-missing` when one architecture can reach it
-but another cannot. A file already reported as `parse_failed` on an
-architecture is not probed there.
+`source_urls` and `sources` on every architecture family the command
+checks, then probes every concrete URL with HEAD and a ranged GET
+fallback (`Range: bytes=0-0`). The families are the ones `--arch` names,
+with a target such as `aarch64/neoverse_v1` counted as `aarch64`. With
+no `--arch` they are `x86_64`, `aarch64`, and `riscv64`. A file already
+reported as `parse_failed` on a family is not probed there, and a family
+`--arch` does not name is neither parsed nor probed.
 
 Why you'd use it: software-layer pull request 1670 failed because the
 Kaleido wheel naming differed by architecture. The plan parsed and
@@ -3418,7 +3419,6 @@ on non-x86 targets. The probe catches that before the bot run.
 
 ```bash
 eb-stack stack arch \
-  --arch x86_64 \
   --easystack tests/source_probe_fixtures/easystacks/kaleido.yml \
   --easyconfigs tests/source_probe_fixtures/easyconfigs \
   --probe-sources
@@ -3437,12 +3437,47 @@ parse_failed=0 unsupported=0 flagged=0 source_unreachable=0 source_arch_missing=
 ```
 
 How to read it: each line names the easyconfig, the concrete source file
-for that architecture, and the probe outcome. `arch-missing` means at
-least one target architecture resolved a matching source URL while this
-architecture did not. `source_unreachable` and `source_arch_missing` in
-the count line summarize the two source-probe classes. The command
-exits 1. `--probe-retries` (default 2) and `--probe-timeout-s`
+for that architecture, the URL that was tried, and the HTTP status of
+the HEAD and the ranged GET. `arch-missing` means another probed family
+fetched this source slot and this family did not, so the recipe names
+a file that exists for one architecture and not this one.
+`unreachable` means no probed family fetched it. `source_unreachable`
+and `source_arch_missing` in the count line count the two classes. Any
+finding exits 1. `--probe-retries` (default 2) and `--probe-timeout-s`
 (default 8) tune the network check.
+
+## One architecture
+
+What it does: `--arch aarch64 --probe-sources` probes the plan on
+`aarch64` only.
+
+Why you'd use it: a pull request that adds an architecture-specific
+easyconfig, or one bot target that failed to fetch, needs only that
+family checked. A recipe that does not parse on another family does not
+stop the probe.
+
+```bash
+eb-stack stack arch \
+  --arch aarch64 \
+  --easystack tests/source_probe_fixtures/easystacks/kaleido.yml \
+  --easyconfigs tests/source_probe_fixtures/easyconfigs \
+  --probe-sources
+```
+
+On the same copy and server it prints:
+
+```
+Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is unreachable on aarch64: __BASE_URL__/kaleido-0.2.1-manylinux2014-aarch64.whl (attempt 1/3 HEAD=status:404 RANGE=status:404)
+parse_failed=0 unsupported=0 flagged=0 source_unreachable=1 source_arch_missing=0
+```
+
+How to read it: with one family probed there is no other architecture
+to compare with, so a source that family cannot fetch is `unreachable`,
+not `arch-missing`. The line still names the file, the URL, and the
+404, and the command exits 1. Run without `--arch` to learn whether the
+same source slot resolves to a file that exists on another
+architecture. `--arch x86_64` on this fixture probes only the x86_64
+wheel, which the server has, and exits 0.
 
 See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
@@ -4929,8 +4964,11 @@ same refusal runs inside `stack batch` before a plan is written.
 With `--easyconfigs`, each file the plan names is parsed once per
 architecture, and a file that fails to parse on one is a
 `parse_failed` line that exits 1.
-`--probe-sources` adds a per-architecture source URL probe over
-`x86_64`, `aarch64`, and `riscv64` with HEAD and ranged GET fallback.
+`--probe-sources` adds a source URL probe, with HEAD and ranged GET
+fallback, on each family `--arch` names, or on `x86_64`, `aarch64`,
+and `riscv64` with no `--arch`. A source no probed family can fetch is
+`unreachable`. A source another probed family can fetch is
+`arch-missing`, so with one `--arch` a missing source is `unreachable`.
 `--probe-retries` and `--probe-timeout-s` tune that network check.
 
 [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md)
@@ -5745,7 +5783,8 @@ requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
 `arch`, `easyconfigs`, `installed`, `additional_arch`, `unsupported`,
 `probe_sources`, `probe_retries`, and `probe_timeout_s`. It returns the
 same report as `stack arch`, with `parse_failed` and `source_findings`,
-and a hit is a tool error. `eb_stack_files` requires `easystack` and takes
+and a hit is a tool error. `probe_sources` probes the families `arch`
+names, as `--arch` does. `eb_stack_files` requires `easystack` and takes
 `easyconfigs`, `commit_tree`, `easyconfigs_repo`, `sourcepath`, and
 `path_map`. It returns the same report as `stack files`, and a missing
 file is a tool error. `eb_stack_cuda_cc` requires `easystack` and `easyconfigs`,

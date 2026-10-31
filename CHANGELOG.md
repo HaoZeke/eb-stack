@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack arch --probe-sources` and `eb_stack_arch` with `probe_sources`
+  probe only the architecture families `--arch` (`arch`) names. They
+  probed x86_64, aarch64 and riscv64 whatever `--arch` said, so
+  `--arch x86_64` failed on aarch64 and riscv64 wheels, and a recipe
+  that does not parse on an unrequested family aborted the command with
+  `source probe:`. With no `--arch` all three are still probed. With one
+  family there is nothing to compare with, so a source it cannot fetch
+  is `unreachable` rather than `arch-missing`, and still exits 1.
 - `classify_build_failure` classes `No space left on device` and
   `Disk quota exceeded` as `resource`. A full disk in an EasyBuild log was
   `compile` before.

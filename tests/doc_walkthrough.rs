@@ -509,7 +509,8 @@ fn kaleido_server() -> (String, std::thread::JoinHandle<()>, std::net::SocketAdd
 }
 
 /// `arch-unsupported.org` quotes the source-probe output with the server
-/// address written as the fixture's `__BASE_URL__`.
+/// address written as the fixture's `__BASE_URL__`: first with no `--arch`,
+/// then with `--arch aarch64`.
 #[test]
 fn the_source_probe_howto_quotes_the_output_it_prints() {
     use std::io::Write;
@@ -525,34 +526,38 @@ fn the_source_probe_howto_quotes_the_output_it_prints() {
         recipe.replace("__BASE_URL__", &base_url),
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
-        .current_dir(root())
-        .args([
-            "stack",
-            "arch",
-            "--arch",
-            "x86_64",
-            "--easystack",
-            "tests/source_probe_fixtures/easystacks/kaleido.yml",
-            "--easyconfigs",
-        ])
-        .arg(&tree)
-        .arg("--probe-sources")
-        .output()
-        .expect("run eb-stack");
+    let probe = |arches: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
+        command.current_dir(root()).args(["stack", "arch"]);
+        for arch in arches {
+            command.args(["--arch", arch]);
+        }
+        let out = command
+            .args([
+                "--easystack",
+                "tests/source_probe_fixtures/easystacks/kaleido.yml",
+                "--easyconfigs",
+            ])
+            .arg(&tree)
+            .arg("--probe-sources")
+            .output()
+            .expect("run eb-stack");
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .replace(&base_url, "__BASE_URL__")
+    };
+    let every_arch = probe(&[]);
+    let aarch64 = probe(&["aarch64"]);
     if let Ok(mut stop) = std::net::TcpStream::connect(addr) {
         let _ = stop.write_all(b"STOP / HTTP/1.1\r\n\r\n");
     }
     let _ = worker.join();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8(out.stdout)
-        .unwrap()
-        .replace(&base_url, "__BASE_URL__");
     let page =
         std::fs::read_to_string(root().join("docs/orgmode/howto/arch-unsupported.org")).unwrap();
     let section = page
@@ -563,13 +568,24 @@ fn the_source_probe_howto_quotes_the_output_it_prints() {
         section.contains("--easyconfigs tests/source_probe_fixtures/easyconfigs"),
         "{section}"
     );
-    let quoted = section
+    assert!(section.contains("  --arch aarch64 \\\n"), "{section}");
+    let quoted: Vec<&str> = section
         .split("#+begin_example\n")
-        .nth(1)
-        .and_then(|rest| rest.split("#+end_example").next())
-        .unwrap();
-    assert_eq!(quoted, stdout, "page:\n{quoted}\nstdout:\n{stdout}");
-    assert!(!quoted.contains("127.0.0.1"), "{quoted}");
+        .skip(1)
+        .filter_map(|rest| rest.split("#+end_example").next())
+        .collect();
+    assert_eq!(quoted.len(), 2, "{section}");
+    assert_eq!(
+        quoted[0], every_arch,
+        "page:\n{}\nstdout:\n{every_arch}",
+        quoted[0]
+    );
+    assert_eq!(
+        quoted[1], aarch64,
+        "page:\n{}\nstdout:\n{aarch64}",
+        quoted[1]
+    );
+    assert!(quoted.iter().all(|text| !text.contains("127.0.0.1")));
 }
 
 fn run_to(args: &[&str], out: &Path) -> std::process::Output {
