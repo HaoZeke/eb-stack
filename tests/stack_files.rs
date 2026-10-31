@@ -302,6 +302,8 @@ fn an_unreadable_absolute_path_is_unchecked() {
         arg(&fixture("pr1048/easystacks/015-eb-4.9.4.yml")),
         "--easyconfigs",
         arg(&fixture("pr1048/robot-4.9.4")),
+        "--path-map",
+        &format!("/cvmfs={}", arg(&fixture("pr1048/absent"))),
     ]);
     assert_eq!(code, Some(0), "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(
