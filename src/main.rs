@@ -1271,9 +1271,11 @@ enum StackCommand {
     /// remedy as easyconfig text, and the EESSI hook that applies it, if
     /// one does. A from-commit or include-easyblocks-from-commit pin that
     /// carries the fix, or an easyconfig that already has it, is reported
-    /// as remedied. The command exits 0 either way.
+    /// as remedied. The command exits 0 either way, unless `--strict` is
+    /// given, when a remaining warning makes it exit 1. Remedied hits never
+    /// count against `--strict`.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack known-failures --arch aarch64/a64fx --easystack eessi-2026.06-eb-5.4.1-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack known-failures --easystack eessi-2025.06-eb-5.4.0-2025b.yml --installed installed-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs"
+        after_long_help = "Examples:\n  eb-stack stack known-failures --arch aarch64/a64fx --easystack eessi-2026.06-eb-5.4.1-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack known-failures --easystack eessi-2025.06-eb-5.4.0-2025b.yml --installed installed-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack known-failures --strict --arch aarch64/a64fx --easystack eessi-2026.06-eb-5.4.1-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs"
     )]
     KnownFailures {
         /// Target, `aarch64/a64fx`, or family, `aarch64`. Repeatable.
@@ -1302,6 +1304,10 @@ enum StackCommand {
         /// easystack file name.
         #[arg(long)]
         easybuild_version: Option<String>,
+        /// Exit 1 when a warning remains after the report. Remedied hits
+        /// never count. Without it the command exits 0 either way.
+        #[arg(long)]
+        strict: bool,
     },
     /// Warn about plan entries likely to run out of memory in a bot job.
     ///
@@ -2896,6 +2902,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             known_failures,
             eessi_version,
             easybuild_version,
+            strict,
         } => {
             let report = eb_stack::arch_known_failures::run_known_failures(
                 &eb_stack::arch_known_failures::KnownFailuresRequest {
@@ -2909,6 +2916,11 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 },
             )?;
             print!("{}", report.stdout);
+            if strict {
+                if let Some(error) = report.strict_error() {
+                    bail!("{error}");
+                }
+            }
             Ok(())
         }
         StackCommand::Oom {

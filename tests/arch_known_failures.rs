@@ -451,3 +451,120 @@ fn the_mcp_tool_returns_the_same_report_and_warnings_are_not_an_error() {
         .expect("text")
         .ends_with("known=1 remedied=0\n"));
 }
+
+#[test]
+fn strict_exits_1_on_a_remaining_warning_and_names_it_on_stderr() {
+    let easystack = path("easystacks/1829/eessi-2026.06-eb-5.4.1-2026.1.yml");
+    let easyconfigs = path("easyconfigs");
+    let args = [
+        "stack",
+        "known-failures",
+        "--arch",
+        "aarch64/a64fx",
+        "--easystack",
+        &easystack,
+        "--easyconfigs",
+        &easyconfigs,
+    ];
+
+    let lenient = run(&args);
+    let lenient_stdout = text(&lenient.stdout);
+    assert!(lenient.status.success(), "{lenient_stdout}");
+
+    let mut strict_args = args.to_vec();
+    strict_args.push("--strict");
+    let strict = run(&strict_args);
+    let strict_stdout = text(&strict.stdout);
+    let strict_stderr = text(&strict.stderr);
+    assert_eq!(strict.status.code(), Some(1), "{strict_stderr}");
+    assert_eq!(
+        strict_stdout, lenient_stdout,
+        "--strict leaves stdout byte-for-byte"
+    );
+    assert!(
+        strict_stdout.contains(
+            "orjson-3.11.8-GCCcore-15.2.0.eb on aarch64/a64fx: known test failure: test_datetime_zoneinfo_utc fails"
+        ),
+        "{strict_stdout}"
+    );
+    assert!(
+        strict_stdout.ends_with("known=1 remedied=0\n"),
+        "{strict_stdout}"
+    );
+    assert!(
+        strict_stderr
+            .contains("orjson-3.11.8-GCCcore-15.2.0.eb on aarch64/a64fx: known test failure"),
+        "{strict_stderr}"
+    );
+}
+
+#[test]
+fn strict_exits_0_when_every_hit_is_remedied() {
+    let easyconfigs = path("easyconfigs");
+    let merged = path("easystacks/1670/eessi-2025.06-eb-5.4.0-2024a.yml");
+    let output = run(&[
+        "stack",
+        "known-failures",
+        "--strict",
+        "--arch",
+        "aarch64",
+        "--easystack",
+        &merged,
+        "--easyconfigs",
+        &easyconfigs,
+    ]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "Kaleido-0.2.1-GCCcore-13.3.0.eb on aarch64: known fetch failure, remedied: from-commit be78248 carries the remedy\nknown=0 remedied=1\n"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn the_mcp_tool_returns_a_tool_error_in_strict_mode() {
+    let call = |strict: bool| {
+        let mut arguments = json!({
+            "arch": ["aarch64/a64fx"],
+            "easystack": [path("easystacks/1829/eessi-2026.06-eb-5.4.1-2026.1.yml")],
+            "easyconfigs": [path("easyconfigs")],
+        });
+        if strict {
+            arguments["strict"] = json!(true);
+        }
+        handle_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "eb_stack_known_failures",
+                "arguments": arguments,
+            }
+        }))
+        .expect("response")
+    };
+
+    let lenient = call(false);
+    assert_eq!(lenient["result"]["isError"], false, "{lenient}");
+    let hits = lenient["result"]["structuredContent"]["hits"]
+        .as_array()
+        .expect("hits");
+    assert_eq!(hits.len(), 1, "{lenient}");
+    assert_eq!(hits[0]["file"], "orjson-3.11.8-GCCcore-15.2.0.eb");
+
+    let strict = call(true);
+    assert_eq!(strict["result"]["isError"], true, "{strict}");
+    assert!(strict["result"]["structuredContent"].is_null(), "{strict}");
+    let message = strict["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text");
+    assert!(
+        message.contains("orjson-3.11.8-GCCcore-15.2.0.eb on aarch64/a64fx: known test failure"),
+        "{message}"
+    );
+}

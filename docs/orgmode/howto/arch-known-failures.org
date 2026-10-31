@@ -93,6 +93,24 @@ so a GROMACS without CUDA is not warned about, and ~min_easybuild =
 entries, ~in EESSI:~ names the hook that already applies the remedy, such
 as ~pre_single_extension_orjson~ for the a64fx orjson test.
 
+* Failing a pre-bot check on a remaining warning
+
+By default a warning is advice and the command exits 0. Pass ~--strict~
+to exit 1 while any warning remains, so a pre-bot script or CI job fails
+on a known failure that has no remedy in place yet:
+
+#+begin_src bash
+eb-stack stack known-failures --strict \
+  --arch aarch64/a64fx \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1829/eessi-2026.06-eb-5.4.1-2026.1.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+#+end_src
+
+The stdout is the same report as without ~--strict~; the error on stderr
+names each remaining warning by easyconfig and target, here
+~orjson-3.11.8-GCCcore-15.2.0.eb on aarch64/a64fx~. A remedied hit never
+counts, so the merged 1670 easystack above exits 0 under ~--strict~.
+
 * Choosing architectures
 
 ~--arch~ repeats and takes a target or a family. ~--arch aarch64~ meets

@@ -388,6 +388,22 @@ pub struct KnownHit {
 }
 
 impl KnownHit {
+    /// A one-line summary naming the easyconfig, the architectures, and the
+    /// phase, for the `--strict` error text.
+    pub fn warning_summary(&self) -> String {
+        let mut subject = self.file.clone();
+        if let Some(extension) = &self.extension {
+            subject.push_str(&format!(" (extension {extension})"));
+        }
+        let arches = self
+            .arches
+            .iter()
+            .map(|arch| arch_text(arch))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{subject} on {arches}: known {}", self.phase.label())
+    }
+
     /// The lines the command prints for this hit, without a final newline.
     pub fn message(&self) -> String {
         let mut subject = self.file.clone();
@@ -835,6 +851,14 @@ impl KnownFailuresReport {
     /// Hits whose remedy is not in place yet.
     pub fn warnings(&self) -> impl Iterator<Item = &KnownHit> {
         self.hits.iter().filter(|hit| hit.remedied.is_none())
+    }
+
+    /// The `--strict` error: one line per remaining warning, each naming the
+    /// easyconfig, the architectures, and the phase. `None` when every hit is
+    /// remedied, so `--strict` exits 0.
+    pub fn strict_error(&self) -> Option<String> {
+        let lines: Vec<String> = self.warnings().map(KnownHit::warning_summary).collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 }
 

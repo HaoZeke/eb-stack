@@ -311,7 +311,9 @@ line, an `ARCH` conditional, or a pin), and the EESSI hook that applies
 it, if one does. Put the remedy in the easyconfig, or the warning in the
 pull request description, before the bot runs. Do not answer a known
 failure with a rerun. A `remedied:` line means a pin or the easyconfig
-already carries the fix. The command exits 0. The table is
+already carries the fix. The command exits 0; add `--strict` to exit 1
+when a warning remains (remedied hits never count), so a pre-bot script
+or CI job fails on a known failure with no remedy in place. The table is
 `data/arch-known-failures.toml`, and the how-to is
 `docs/orgmode/howto/arch-known-failures.org`.
 

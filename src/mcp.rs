@@ -471,7 +471,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_known_failures",
-            "Warn about known per-architecture failures a plan includes or depends on, as `stack known-failures` does. Each warning names the easyconfig, the architectures, the symptom, the established easyconfig remedy as text, and the EESSI hook that applies it. A pin or easyconfig that already carries the fix is reported as remedied. Warnings are not a tool error.",
+            "Warn about known per-architecture failures a plan includes or depends on, as `stack known-failures` does. Each warning names the easyconfig, the architectures, the symptom, the established easyconfig remedy as text, and the EESSI hook that applies it. A pin or easyconfig that already carries the fix is reported as remedied. Warnings are not a tool error, except with strict: true, when a remaining warning returns a tool error whose text lists the warnings.",
             &[("easystack", "array_min1")],
             &[
                 ("arch", "array"),
@@ -480,6 +480,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("known_failures", "string"),
                 ("eessi_version", "string"),
                 ("easybuild_version", "string"),
+                ("strict", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -3211,6 +3212,11 @@ fn stack_known_failures_tool(arguments: &Value) -> Result<Value, String> {
         },
     )
     .map_err(workflow_error)?;
+    if optional_bool(arguments, "strict") {
+        if let Some(error) = report.strict_error() {
+            return Err(error);
+        }
+    }
     Ok(json!({
         "text": report.stdout,
         "hits": report.hits,

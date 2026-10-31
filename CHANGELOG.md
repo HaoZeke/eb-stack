@@ -387,6 +387,12 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack known-failures` and the MCP tool `eb_stack_known_failures` take a
+  `--strict` flag (`strict: true`). It prints the same report, then exits 1
+  (returns a tool error that lists the warnings) when a warning remains, so a
+  pre-bot script or CI job can fail on a known failure with no remedy in
+  place. Remedied hits never count, so a plan whose every hit is remedied
+  exits 0. Without it the behavior and output are unchanged.
 - `stack bot-classify` and the MCP tool `eb_stack_bot_classify` read EESSI
   bot comments, `_bot_job<id>.result` files and job output, and classify
   each bot job as a real failure (with the campaign build-finding class),
