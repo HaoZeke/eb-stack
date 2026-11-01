@@ -168,11 +168,191 @@ or bot configuration.
 
 The parallel level is the smallest of these: the node's cores,
 EasyBuild's maximum, the hook limit applied to the cores, and a
-top-level ~maxparallel~ in the recipe. A software name in the hook table
-uses its limit for the target, then its ~'*'~ limit. Only software with
-no hook entry gets the target's default, which divides by 4 on A64FX.
+top-level ~maxparallel~ in the recipe. The hook ops are the ones in
+~eb_hooks.py~. ~divide_by_factor(parallel, factor)~ is
+~max(1, parallel // factor)~. ~set_maximum(parallel, n)~ is
+~min(parallel, n)~. A software name uses its limit for the CPU target,
+and that key overrides its ~'*'~ limit. Only software with no hook entry
+gets the target's own limit, which divides by 4 on A64FX. The hook
+applies the op to the cores the job can use, and keeps the result only
+when it is lower than the parallel level EasyBuild already chose.
 
 When more than one entry matches a build, the highest estimate wins.
+
+~divide~ in the hook table is an integer in ~eb_hooks.py~. A factor that
+is not an integer makes Python's ~//~ return a float: ~16 // 2.5~ is
+~6.0~, and ~max~ keeps that float when it is at least 1. A whole number
+written as a float does the same: ~16 // 2.0~ is ~8.0~. The command
+warns, and the estimate uses the numeric floor. Write the factor as an
+integer.
+
+In ~post_ready_hook~ the log line is two statements:
+
+#+begin_src text
+msg = "limiting parallelism to %s (was %s, derived parallelism %s) for %s on %s "
+msg+ "to avoid out-of-memory failures during building/testing"
+#+end_src
+
+The second statement adds nothing. ~msg + "..."~ is an expression, and
+the result is thrown away. The operator that appends is ~+=~. The line
+that prints stops after the CPU target. This is upstream ~eb_hooks.py~.
+eb-stack does not patch it.
+
+* A divide factor that is not an integer
+
+The maintainers asked for a libxc divider of 2.5 or 3, which is 6 or 5
+cores on the 16-core AWS build nodes. 3 is an integer. 2.5 is not, and
+~eb_hooks.py~ would store a float. The fixture
+~resources-divide-2.5.toml~ is that factor, not the integer 2 the hooks
+ship:
+
+#+begin_src bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --resources tests/oom_profile_fixtures/resources-divide-2.5.toml \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+#+end_src
+
+#+begin_example
+warning: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
+oom=0 fits=1 builds=5 nodes=1
+#+end_example
+
+The warning is the float. The estimate then uses 6, so 6 times 4.0 GiB
+is 24 GiB and the 32 GiB zen4 job fits. With the integer divider of 2
+the same build is the warning in the first example. The command still
+exits 0.
+
+* A memory limit instead of a core fraction
+
+A core fraction does not travel. Half of 16 cores and half of 64 cores
+are different numbers of compilers, and the memory those compilers need
+does not change with the core count. ~limit_by_memory(parallel,
+mib_per_job)~ is ~max(1, min(parallel, memory_mib // mib_per_job))~.
+~memory_mib~ is the smallest cgroup v2 ~memory.max~ on the build
+process's cgroup path, in MiB. That is the Slurm job's limit when the
+job is the cgroup. ~memory.max~ is bytes; a value of ~max~ is unlimited
+and does not count. With no cgroup v2 limit, the figure is ~MemTotal~
+from ~/proc/meminfo~, kilobytes divided by 1024, which is what EasyBuild's
+~get_total_memory()~ returns.
+
+~mib_per_job~ is the peak RSS of the worst compile, plus headroom. One
+measured number then holds on every node size. ~data/job-memory.toml~
+is that table. A row with no ~mib_per_job~ is unmeasured, and the note
+says so. libxc 7.0 is unmeasured. The real peak waits on a compile under
+GCC 15.2 with the EESSI flags. Nothing in the table is a guess, and the
+per-process GiB figures in ~data/build-memory.toml~ are not copied in:
+those explain a failed job, they are not ~ru_maxrss~ of one compile.
+
+~--node~ prints, for each ~CORES:MEMORY_MIB~ or
+~CORES:MEMORY_MIB:TARGET~, the parallelism the current hook leaves and
+the parallelism ~limit_by_memory~ leaves. A node with no target uses
+only ~'*'~ rows, not a CPU-target override and not the A64FX divide by
+4. ~--job-memory~ replaces the table. With no ~--easystack~, the report
+is the whole output:
+
+#+begin_src bash
+eb-stack stack oom \
+  --node 16:32768:x86_64/amd/zen4 \
+  --node 48:30016:aarch64/a64fx
+#+end_src
+
+#+begin_example
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4
+  LLVM: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  MBX: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  PETSc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  Qt5: current 16 (no hook limit); memory unmeasured
+  Qt6: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  QuantumESPRESSO: current 16 (no hook limit); memory unmeasured
+  ROCm-LLVM: current 12 (set_maximum on *, min(16, 12)); memory unmeasured
+  TensorFlow: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  hipBLASLt: current 8 (set_maximum on *, min(16, 8)); memory unmeasured
+  jax: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+  rocBLAS: current 8 (set_maximum on *, min(16, 8)); memory unmeasured
+node 48 cores, 30016 MiB, aarch64/a64fx
+  LLVM: current 16 (divide_by_factor on *, max(1, 48 // 2) = 24, then max-parallel 16); memory unmeasured
+  MBX: current 1 (set_maximum on aarch64/a64fx, min(48, 1)); memory unmeasured
+  PETSc: current 16 (divide_by_factor on *, max(1, 48 // 2) = 24, then max-parallel 16); memory unmeasured
+  Qt5: current 8 (set_maximum on aarch64/a64fx, min(48, 8)); memory unmeasured
+  Qt6: current 8 (set_maximum on aarch64/a64fx, min(48, 8)); memory unmeasured
+  QuantumESPRESSO: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured
+  ROCm-LLVM: current 12 (set_maximum on *, min(48, 12)); memory unmeasured
+  TensorFlow: current 8 (set_maximum on aarch64/a64fx, min(48, 8)); memory unmeasured
+  hipBLASLt: current 8 (set_maximum on *, min(48, 8)); memory unmeasured
+  jax: current 16 (divide_by_factor on *, max(1, 48 // 2) = 24, then max-parallel 16); memory unmeasured
+  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured
+  rocBLAS: current 8 (set_maximum on *, min(48, 8)); memory unmeasured
+  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured
+job memory: libxc 7.0 unmeasured, no mib_per_job
+#+end_example
+
+On zen4, libxc's ~'*'~ row divides 16 by 2. On A64FX the CPU-target row
+overrides that and caps libxc at 6, and a build with no software row
+takes the global divide by 4, which is 12. ~(other builds)~ is that
+default. ~memory unmeasured~ means the table has no ~mib_per_job~ for
+that name. The footer names the rows that are unmeasured. libxc 7.0 is
+the one the table calls out; the other names are absent from the table,
+which is the same as unmeasured.
+
+* Measure the worst compile
+
+~mib_per_job~ comes from a compiler launcher, not from a guess.
+~scripts/compile_rss.py~ is the launcher. CMake runs
+~CMAKE_C_COMPILER_LAUNCHER~ in front of the compiler. A ~CC~ wrapper is
+the same shape, the script and then the compiler. Each invocation
+appends one JSON line to ~$EB_STACK_COMPILE_RSS_LOG~ (default
+~compile-rss.jsonl~ in the working directory). The line is
+~getrusage(RUSAGE_CHILDREN).ru_maxrss~ after the compiler exits. On
+Linux that field is kilobytes, and the log calls it ~ru_maxrss_kb~. A
+lock keeps a parallel build from tearing a line.
+
+Build under the EESSI flags. ~<target>~ is the ~-march~ the bot uses
+for that CPU target (~znver4~ on zen4, and the matching name on the
+others):
+
+#+begin_src text
+export EB_STACK_COMPILE_RSS_LOG="$PWD/compile-rss.jsonl"
+export CFLAGS="-O2 -ftree-vectorize -march=<target> -fno-math-errno"
+export CXXFLAGS="$CFLAGS"
+export CMAKE_C_COMPILER_LAUNCHER="$PWD/scripts/compile_rss.py"
+export CMAKE_CXX_COMPILER_LAUNCHER="$PWD/scripts/compile_rss.py"
+# or, when the build sets CC itself:
+# export CC="$PWD/scripts/compile_rss.py gcc"
+#+end_src
+
+Then run the build. The summary picks the worst compile and suggests
+~mib_per_job~: the peak rounded up to a whole MiB, plus headroom of one
+quarter (~--headroom 0.25~), rounded up again. Copy that number into
+~data/job-memory.toml~ yourself, with a note that says where the log
+came from. The suggestion is arithmetic on the log. It does not name a
+package, and it does not write the table.
+
+The fixture below is not a measurement of libxc, or of any package. It
+only shows the summary. 4096 kilobytes is 4 MiB, and one quarter of
+headroom makes 5:
+
+#+begin_src bash
+python3 scripts/compile_rss.py --summarize \
+  tests/oom_profile_fixtures/compile-rss.jsonl
+#+end_src
+
+#+begin_example
+compiles: 2
+worst_ru_maxrss_kb: 4096
+worst_command: gcc -O2 -ftree-vectorize -march=znver4 -fno-math-errno -c sample.c
+worst_exit: 0
+worst_mib: 4
+headroom: 1/4
+suggested_mib_per_job: 5
+note: suggested_mib_per_job is the worst peak rounded up to MiB, plus headroom, rounded up; it is not a measurement of a named package
+#+end_example
+
+libxc's row stays unmeasured until that launcher has been run on a
+libxc 7.0.0 build with those flags. Do not fill the number in before
+then.
 
 * Limits
 
@@ -182,6 +362,11 @@ When more than one entry matches a build, the highest estimate wins.
   checked.
 - The model is linear in the parallel level. It does not model link
   steps, test steps that run with a different parallel level, or memory
-  that other jobs on the node use.
+  that other jobs on the node use. It does not model ~ulimit -u~, which
+  ~det_parallelism~ also consults.
+- ~limit_by_memory~ does not replace the estimate. The estimate follows
+  the hooks that are in ~eb_hooks.py~. The ~--node~ report is the
+  comparison. A package with no measured ~mib_per_job~ stays
+  unmeasured.
 - The MCP tool ~eb_stack_oom~ returns the same lines and each warning as
   JSON.

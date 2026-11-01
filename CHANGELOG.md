@@ -26,6 +26,26 @@ All notable changes to this project are documented here.
   tree and an accelerator compute-capability tree. `--eessi-version`
   keeps `--open-layer` easystacks of that version. The open-pull-request
   match stays the filename the pull request adds.
+- `stack oom` warns when a `PARALLELISM_LIMITS` `divide_by_factor` is
+  not an integer. `eb_hooks.py` computes `max(1, parallel // factor)`,
+  and a non-integer factor makes `//` return a float (`16 // 2.5` is
+  `6.0`; `16 // 2.0` is `8.0`). The estimate uses the numeric floor.
+  The same command models `set_maximum` as `min(parallel, n)`, a
+  CPU-target key overriding `*`, and the A64FX divide by 4.
+- `limit_by_memory(parallel, mib_per_job)` is
+  `max(1, min(parallel, memory_mib // mib_per_job))`. `memory_mib` is
+  the smallest cgroup v2 `memory.max` on the process's cgroup path, in
+  MiB, or `MemTotal` when no cgroup v2 limit is set.
+  `data/job-memory.toml` holds `mib_per_job` per package. A row with no
+  number is unmeasured. libxc 7.0 is unmeasured; its peak has not been
+  measured. `--node CORES:MEMORY_MIB[:TARGET]` prints the hook
+  parallelism beside that rule. `--job-memory` replaces the table.
+- `scripts/compile_rss.py` is a compiler launcher for
+  `CMAKE_C_COMPILER_LAUNCHER` and for a `CC` wrapper. It records
+  `getrusage(RUSAGE_CHILDREN).ru_maxrss` per compile.
+  `--summarize` picks the worst compile and suggests `mib_per_job`
+  with one quarter of headroom. The suggestion is arithmetic on the
+  log, not a measurement of a named package.
 
 ### Changed
 

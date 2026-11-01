@@ -1,0 +1,2 @@
+{"argv": ["gcc", "-O2", "-c", "other.c"], "exit": 0, "ru_maxrss_kb": 1024}
+{"argv": ["gcc", "-O2", "-ftree-vectorize", "-march=znver4", "-fno-math-errno", "-c", "sample.c"], "exit": 0, "ru_maxrss_kb": 4096}

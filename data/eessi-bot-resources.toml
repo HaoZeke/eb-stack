@@ -149,10 +149,17 @@ memory_gib = 180.0
 sources = ["https://github.com/EESSI/software-layer/pull/1461#issuecomment-4337055573"]
 
 # PARALLELISM_LIMITS from eb_hooks.py. The hook takes the cores the job
-# has and applies the software's limit for the target, else its '*'
-# limit. Software with limits for other targets only is left alone. Without
-# a software entry the target's own limit applies. The result only ever
+# has (`det_parallelism`, the cores, also cut by `ulimit -u`; this table
+# models the cores) and applies the software's limit for the target, else
+# its '*' limit. A CPU-target key overrides '*'. Software with limits for
+# other targets only is left alone. Without a software entry the target's
+# own limit applies, which divides by 4 on A64FX. The result only ever
 # lowers EasyBuild's parallel level.
+#
+# `divide` is `divide_by_factor(parallel, factor) = max(1, parallel // factor)`.
+# `maximum` is `set_maximum(parallel, n) = min(parallel, n)`. Write `divide`
+# as an integer. A non-integer makes Python's `//` return a float
+# (`16 // 2.5` is `6.0`); `stack oom` warns and uses the numeric floor.
 [hooks]
 source = "https://github.com/EESSI/software-layer-scripts/blob/608fb40c88152a9b9aaefa6634c5e39526236212/eb_hooks.py#L2705-L2768"
 

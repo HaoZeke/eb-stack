@@ -510,14 +510,17 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_oom",
-            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A warning is not an error.",
-            &[("easystack", "array_min1")],
+            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A divide_by_factor that is not an integer is also a warning: Python's // returns a float (16 // 2.5 is 6.0). node is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET and prints the hook parallelism beside limit_by_memory. Pass easystack or node. A warning is not an error.",
+            &[],
             &[
+                ("easystack", "array"),
                 ("arch", "array"),
                 ("easyconfigs", "array"),
                 ("installed", "string"),
                 ("profile", "string"),
                 ("resources", "string"),
+                ("node", "array"),
+                ("job_memory", "string"),
             ],
         ),
         tool_with_optional(
@@ -3303,11 +3306,13 @@ fn stack_known_failures_tool(arguments: &Value) -> Result<Value, String> {
 fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
     let report = crate::oom_profile::run_oom_check(&crate::oom_profile::OomCheckRequest {
         arches: string_array(arguments, "arch")?,
-        easystacks: path_array(arguments, "easystack")?,
+        easystacks: optional_paths(arguments, "easystack")?,
         easyconfigs: optional_paths(arguments, "easyconfigs")?,
         installed: optional_path(arguments, "installed"),
         profile: optional_path(arguments, "profile"),
         resources: optional_path(arguments, "resources"),
+        nodes: string_array(arguments, "node")?,
+        job_memory: optional_path(arguments, "job_memory"),
     })
     .map_err(workflow_error)?;
     Ok(json!({
@@ -3331,6 +3336,7 @@ fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
         "builds": report.builds,
         "nodes": report.partitions,
         "unknown_arch": report.unknown_arches,
+        "factor_warnings": report.factor_warnings,
     }))
 }
 

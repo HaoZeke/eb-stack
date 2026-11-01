@@ -1427,18 +1427,23 @@ enum StackCommand {
     /// parallel level the bot job gives it: the node's cores, EasyBuild's
     /// max-parallel, the EESSI `PARALLELISM_LIMITS`, and `maxparallel` in
     /// the easyconfig. An estimate that reaches the job's memory in
-    /// `data/eessi-bot-resources.toml` is a warning with remedies. The
-    /// command does not fail on a warning.
+    /// `data/eessi-bot-resources.toml` is a warning with remedies. A
+    /// `divide_by_factor` that is not an integer is a warning too: Python's
+    /// `//` then returns a float (`16 // 2.5` is `6.0`). `--node` prints
+    /// the hook parallelism beside `limit_by_memory` for a core count and
+    /// a memory. The command does not fail on a warning. Pass `--easystack`
+    /// or `--node` (or both).
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack oom --easystack eessi-2026.06-eb-5.4.0-2026.1.yml\n  eb-stack stack oom --arch x86_64/amd/zen4 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt"
+        after_long_help = "Examples:\n  eb-stack stack oom --easystack eessi-2026.06-eb-5.4.0-2026.1.yml\n  eb-stack stack oom --arch x86_64/amd/zen4 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt\n  eb-stack stack oom --node 16:32768:x86_64/amd/zen4 --node 48:30016:aarch64/a64fx"
     )]
     Oom {
         /// CPU target, `x86_64/amd/zen4`, or a prefix such as `aarch64`.
         /// Repeatable. Absent checks every target in the bot resource table.
         #[arg(long = "arch")]
         arch: Vec<String>,
-        /// Easystack whose entries are the plan. Repeatable.
-        #[arg(long, required = true)]
+        /// Easystack whose entries are the plan. Repeatable. Required
+        /// unless `--node` is passed.
+        #[arg(long)]
         easystack: Vec<PathBuf>,
         /// Robot tree the dependency closure and `maxparallel` are read
         /// from. Repeatable. Absent checks only the filenames the easystack
@@ -1455,6 +1460,15 @@ enum StackCommand {
         /// Replace the bundled bot resource table.
         #[arg(long)]
         resources: Option<PathBuf>,
+        /// Node size `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
+        /// Repeatable. Memory is MiB. Prints the hook parallelism and
+        /// `limit_by_memory` for each size. With no `--easystack`, this
+        /// report is the whole output.
+        #[arg(long)]
+        node: Vec<String>,
+        /// Replace the bundled per-package `mib_per_job` table.
+        #[arg(long)]
+        job_memory: Option<PathBuf>,
     },
     /// Say what an EESSI bot job's FAILURE was: a real failure, ERROR-only
     /// noise, an empty tarball, or infra.
@@ -3090,6 +3104,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
             installed,
             profile,
             resources,
+            node,
+            job_memory,
         } => {
             let report =
                 eb_stack::oom_profile::run_oom_check(&eb_stack::oom_profile::OomCheckRequest {
@@ -3099,6 +3115,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     installed,
                     profile,
                     resources,
+                    nodes: node,
+                    job_memory,
                 })?;
             print!("{}", report.stdout);
             Ok(())

@@ -1,0 +1,24 @@
+# Peak resident set of one compile, for limit_by_memory.
+#
+# limit_by_memory(parallel, mib_per_job) is
+#
+#     max(1, min(parallel, memory_mib // mib_per_job))
+#
+# memory_mib is the smallest cgroup v2 memory.max on the build process's
+# cgroup path, in MiB, or MemTotal when no cgroup v2 limit is set. One
+# measured mib_per_job then gives a parallelism cap on every node size.
+#
+# mib_per_job is that peak, in MiB, plus the headroom
+# scripts/compile_rss.py suggests from a launcher log. Leave it out when
+# it has not been measured. A row with no mib_per_job is unmeasured, and
+# its note says so. Do not fill a number in from a guess or from a
+# per-process figure in data/build-memory.toml.
+#
+# libxc 7.0.0 has no measurement. The number waits on the worst compile
+# under GCC 15.2 with the EESSI flags
+# (-O2 -ftree-vectorize -march=<target> -fno-math-errno).
+
+[[package]]
+name = "libxc"
+versions = ["7.0"]
+note = "unmeasured. Peak RSS of the worst libxc 7.0.0 compile under GCC 15.2 with the EESSI flags (-O2 -ftree-vectorize -march=<target> -fno-math-errno) has not been measured, so there is no mib_per_job."

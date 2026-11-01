@@ -1606,15 +1606,18 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             .keys()
             .map(|rel| dir.join("software-layer").join(rel))
             .collect();
-        let oom = crate::oom_profile::run_oom_check(&crate::oom_profile::OomCheckRequest {
+        let oom_report = crate::oom_profile::run_oom_check(&crate::oom_profile::OomCheckRequest {
             arches: args.arches.clone(),
             easystacks: easystack_paths,
             easyconfigs: args.easyconfigs.clone(),
             installed: Some(args.installed.clone()),
             profile: args.oom_profile.clone(),
             resources: args.oom_resources.clone(),
-        })?
-        .warnings;
+            nodes: Vec::new(),
+            job_memory: None,
+        })?;
+        let oom = oom_report.warnings;
+        let factor_warnings = oom_report.factor_warnings;
 
         // The second-version check this batch gets. `detected` ignores the
         // allow list, so a pair the reviewer accepted still records a `versions`
@@ -1752,6 +1755,16 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             }
             body.push_str("```\n");
         }
+        if !factor_warnings.is_empty() {
+            body.push_str(
+                "\nNon-integer PARALLELISM_LIMITS factors, from `eb-stack stack oom`:\n\n```\n",
+            );
+            for line in &factor_warnings {
+                body.push_str(line);
+                body.push('\n');
+            }
+            body.push_str("```\n");
+        }
         if !warnings.is_empty() {
             body.push_str(
                 "\nSecond versions in one generation, from `eb-stack stack generation`:\n\n```\n",
@@ -1773,6 +1786,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             "oom": {
                 "warnings": oom.iter().map(crate::oom_profile::OomWarning::lines).collect::<Vec<_>>(),
                 "count": oom.len(),
+                "factor_warnings": factor_warnings,
             },
             "easystacks": stacks.keys().collect::<Vec<_>>(),
             "digest": digest,

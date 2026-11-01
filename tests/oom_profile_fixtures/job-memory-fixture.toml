@@ -1,0 +1,8 @@
+# Arithmetic fixture for limit_by_memory. 8192 is not a measurement of
+# libxc or of any other package.
+
+[[package]]
+name = "libxc"
+versions = ["7.0"]
+mib_per_job = 8192
+note = "fixture for the report arithmetic, not a measurement of libxc"

@@ -1,0 +1,22 @@
+# Not the bundled hook table. libxc's divide is 2.5 here so `stack oom`
+# can show that eb_hooks.py's `16 // 2.5` is the float 6.0. The hooks
+# shipped in data/eessi-bot-resources.toml use the integer 2.
+
+[easybuild]
+max_parallel = 16
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "amd-zen4"
+target = "x86_64/amd/zen4"
+cores = 16
+memory_gib = 32.0
+sources = ["https://github.com/EESSI/software-layer/pull/1772#issuecomment-6440377764"]
+
+[hooks]
+source = "fixture: libxc divide 2.5 is not the integer 2 in eb_hooks.py"
+
+[[hooks.limit]]
+software = "libxc"
+target = "*"
+divide = 2.5

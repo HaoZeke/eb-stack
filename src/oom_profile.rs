@@ -9,6 +9,13 @@
 //! the job's memory is a warning, and the warning names the remedies the
 //! EESSI maintainers have used: a lower parallel level, or a node with more
 //! memory. Nothing is changed; the remedies are text.
+//!
+//! The hook ops are `divide_by_factor` and `set_maximum` from
+//! `eb_hooks.py`. A divide factor that is not an integer makes Python's
+//! `//` return a float (`16 // 2.5` is `6.0`); the command warns and uses
+//! the numeric floor for the estimate. `data/job-memory.toml` holds
+//! `mib_per_job` for `limit_by_memory`. A row with no number is
+//! unmeasured. `--node` prints the hook parallelism beside that rule.
 
 use crate::arch_support::{plan_requirers, split_easyconfig_filename};
 use crate::build_order::{closure_against_installed, reverse_uses, Choice, ModuleKey};
@@ -27,6 +34,9 @@ pub const BUNDLED_BUILD_MEMORY: &str = include_str!("../data/build-memory.toml")
 
 /// The bot job table shipped with eb-stack.
 pub const BUNDLED_BOT_RESOURCES: &str = include_str!("../data/eessi-bot-resources.toml");
+
+/// The per-package `mib_per_job` table shipped with eb-stack.
+pub const BUNDLED_JOB_MEMORY: &str = include_str!("../data/job-memory.toml");
 
 /// One recorded build memory figure.
 #[derive(Debug, Clone, PartialEq)]
@@ -326,18 +336,177 @@ impl Partition {
 /// How a hook limit lowers parallelism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitOp {
-    /// `divide_by_factor`: the cores divided by this, at least 1.
-    Divide(u32),
-    /// `set_maximum`: no more than this.
+    /// `divide_by_factor`: `max(1, parallel // factor)`.
+    Divide(DivideFactor),
+    /// `set_maximum`: `min(parallel, maximum)`.
     Maximum(u32),
+}
+
+/// A `divide_by_factor` argument.
+///
+/// An integer literal (`divide = 2`) makes Python's `//` return an int.
+/// A float (`divide = 2.5`, or `divide = 2.0`) makes `//` return a float:
+/// `16 // 2.5` is `6.0` and `16 // 2.0` is `8.0`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DivideFactor {
+    bits: u64,
+    integer_literal: bool,
+}
+
+impl std::fmt::Debug for DivideFactor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DivideFactor")
+            .field("value", &self.value())
+            .field("integer_literal", &self.integer_literal)
+            .finish()
+    }
+}
+
+impl DivideFactor {
+    fn from_integer(value: u32) -> Self {
+        Self {
+            bits: f64::from(value).to_bits(),
+            integer_literal: true,
+        }
+    }
+
+    fn from_float(value: f64) -> Self {
+        Self {
+            bits: value.to_bits(),
+            integer_literal: false,
+        }
+    }
+
+    /// The factor as a number.
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.bits)
+    }
+
+    /// The table wrote an integer, `divide = 2`, not a float.
+    pub fn integer_literal(self) -> bool {
+        self.integer_literal
+    }
+
+    fn integer(self) -> Option<u32> {
+        self.integer_literal
+            .then(|| u32::try_from(self.value() as u64).ok())
+            .flatten()
+    }
+}
+
+/// What `divide_by_factor` returns, and whether Python's result is a float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DividedParallel {
+    /// `max(1, floor(parallel / factor))`.
+    pub level: u32,
+    /// `max` kept a float. True when the factor is a float and the
+    /// quotient is at least 1. Below 1, `max(1, 0.0)` is the int 1.
+    pub float_result: bool,
+}
+
+/// `divide_by_factor` from `eb_hooks.py`: `max(1, parallel // factor)`.
+///
+/// An integer factor uses integer division, so the result is an int.
+/// A float factor uses floor division and the result is a float when the
+/// quotient is at least 1. `level` is that number as a count of jobs.
+pub fn divide_by_factor(parallel: u32, factor: DivideFactor) -> DividedParallel {
+    let value = factor.value();
+    if factor.integer_literal() {
+        let divisor = factor.integer().unwrap_or(1).max(1);
+        return DividedParallel {
+            level: (parallel / divisor).max(1),
+            float_result: false,
+        };
+    }
+    if !value.is_finite() || value <= 0.0 {
+        return DividedParallel {
+            level: 1,
+            float_result: false,
+        };
+    }
+    let quotient = (f64::from(parallel) / value).floor();
+    if quotient < 1.0 {
+        return DividedParallel {
+            level: 1,
+            float_result: false,
+        };
+    }
+    let level = if quotient >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        quotient as u32
+    };
+    DividedParallel {
+        level,
+        float_result: true,
+    }
+}
+
+/// `set_maximum` from `eb_hooks.py`: `min(parallel, maximum)`.
+pub fn set_maximum(parallel: u32, maximum: u32) -> u32 {
+    parallel.min(maximum)
+}
+
+/// `limit_by_memory(parallel, mib_per_job)` with the memory passed in.
+///
+/// `max(1, min(parallel, memory_mib // mib_per_job))`. `memory_mib` is
+/// what [`job_memory_mib`] reads on the machine a build is running on, or
+/// the memory of a node size the report is asked about. `mib_per_job` is
+/// the peak RSS of the worst compile. A zero `mib_per_job` is not a
+/// budget; the table parser refuses it, and this returns 1.
+pub fn limit_by_memory(parallel: u32, mib_per_job: u32, memory_mib: u64) -> u32 {
+    if mib_per_job == 0 {
+        return 1;
+    }
+    let by_memory = memory_mib / u64::from(mib_per_job);
+    let by_memory = u32::try_from(by_memory).unwrap_or(u32::MAX);
+    parallel.min(by_memory).max(1)
 }
 
 impl LimitOp {
     fn apply(self, cores: u32) -> u32 {
         match self {
-            Self::Divide(factor) => (cores / factor).max(1),
-            Self::Maximum(value) => cores.min(value),
+            Self::Divide(factor) => divide_by_factor(cores, factor).level,
+            Self::Maximum(value) => set_maximum(cores, value),
         }
+    }
+}
+
+/// Render a divide factor the way the table wrote it.
+pub fn format_factor(factor: DivideFactor) -> String {
+    let value = factor.value();
+    if factor.integer_literal() {
+        return factor.integer().unwrap_or(0).to_string();
+    }
+    if is_whole(value) {
+        return format!("{value:.1}");
+    }
+    let text = format!("{value}");
+    if text.contains('.') {
+        text
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn is_whole(value: f64) -> bool {
+    value.is_finite() && value == value.trunc()
+}
+
+/// How `16 // factor` comes out in Python, for the warning text.
+fn float_example(factor: DivideFactor) -> String {
+    let shown = format_factor(factor);
+    let raw = if factor.value() > 0.0 {
+        (16.0_f64 / factor.value()).floor()
+    } else {
+        0.0
+    };
+    let divided = divide_by_factor(16, factor);
+    if divided.float_result {
+        format!("16 // {shown} is {raw:.1}, a float")
+    } else {
+        format!("16 // {shown} is {raw:.1}, a float, and max(1, {raw:.1}) is 1, an int")
     }
 }
 
@@ -410,8 +579,21 @@ struct RawHooks {
 struct RawLimit {
     software: Option<String>,
     target: String,
-    divide: Option<u32>,
+    #[serde(default)]
+    divide: Option<FactorInput>,
+    #[serde(default)]
     maximum: Option<u32>,
+}
+
+/// A TOML number, keeping an integer distinct from a float.
+///
+/// `divide = 2` is an integer. `divide = 2.0` and `divide = 2.5` are
+/// floats. Python's `//` follows that distinction.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum FactorInput {
+    Int(u32),
+    Float(f64),
 }
 
 /// The parallel level a build gets in one job, and why.
@@ -485,12 +667,17 @@ impl BotResources {
         }
         let mut limits = Vec::new();
         for limit in raw.hooks.limit {
+            let who = limit.software.as_deref().unwrap_or("every build");
             let op = match (limit.divide, limit.maximum) {
-                (Some(factor), None) if factor > 0 => LimitOp::Divide(factor),
+                (Some(FactorInput::Int(factor)), None) if factor > 0 => {
+                    LimitOp::Divide(DivideFactor::from_integer(factor))
+                }
+                (Some(FactorInput::Float(factor)), None) if factor.is_finite() && factor > 0.0 => {
+                    LimitOp::Divide(DivideFactor::from_float(factor))
+                }
                 (None, Some(value)) if value > 0 => LimitOp::Maximum(value),
                 _ => bail!(
-                    "hook limit for {} on {} needs one positive divide or maximum",
-                    limit.software.as_deref().unwrap_or("every build"),
+                    "hook limit for {who} on {} needs one positive divide or maximum",
                     limit.target
                 ),
             };
@@ -511,12 +698,13 @@ impl BotResources {
         })
     }
 
-    /// The hook limit for `name` on `target`, as `post_ready_hook` picks it.
+    /// The hook row for `name` on `target`, as `post_ready_hook` picks it.
     ///
-    /// A software entry decides on its own: its limit for the target, else
-    /// its `*` limit, else none. Only software without an entry gets the
-    /// target's own limit.
-    pub fn hook_limit(&self, name: &str, target: &str) -> Option<LimitOp> {
+    /// A software entry decides on its own: its row for the target, else
+    /// its `*` row, else none. A CPU-target key overrides `*`. Only
+    /// software without an entry gets the target's own limit, which on
+    /// A64FX is `divide_by_factor` by 4.
+    pub fn matching_limit(&self, name: &str, target: &str) -> Option<&HookLimit> {
         let software: Vec<&HookLimit> = self
             .limits
             .iter()
@@ -525,14 +713,48 @@ impl BotResources {
         if !software.is_empty() {
             return software
                 .iter()
+                .copied()
                 .find(|limit| limit.target == target)
-                .or_else(|| software.iter().find(|limit| limit.target == "*"))
-                .map(|limit| limit.op);
+                .or_else(|| software.iter().copied().find(|limit| limit.target == "*"));
         }
         self.limits
             .iter()
             .find(|limit| limit.software.is_none() && limit.target == target)
-            .map(|limit| limit.op)
+    }
+
+    /// The hook limit for `name` on `target`, as `post_ready_hook` picks it.
+    pub fn hook_limit(&self, name: &str, target: &str) -> Option<LimitOp> {
+        self.matching_limit(name, target).map(|limit| limit.op)
+    }
+
+    /// One line per divide factor that is not an integer literal.
+    ///
+    /// `eb_hooks.py` computes `max(1, parallel // factor)`. A non-integer
+    /// factor makes `//` return a float: `16 // 2.5` is `6.0`. A whole
+    /// number written as a float does the same: `16 // 2.0` is `8.0`.
+    pub fn factor_warnings(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for limit in &self.limits {
+            let LimitOp::Divide(factor) = limit.op else {
+                continue;
+            };
+            if factor.integer_literal() {
+                continue;
+            }
+            let who = limit.software.as_deref().unwrap_or("every build");
+            let shown = format_factor(factor);
+            let kind = if is_whole(factor.value()) {
+                format!("{shown}, a float rather than an integer")
+            } else {
+                format!("{shown}, which is not an integer")
+            };
+            lines.push(format!(
+                "warning: PARALLELISM_LIMITS divide_by_factor for {who} on {} uses {kind}; eb_hooks.py computes max(1, parallel // factor), and {}. Use an integer factor.",
+                limit.target,
+                float_example(factor)
+            ));
+        }
+        lines
     }
 
     /// The parallel level `name` builds with on `partition`.
@@ -713,7 +935,16 @@ fn parallel_reason(name: &str, parallel: &Parallel) -> String {
     }
     match parallel.hook {
         Some(LimitOp::Divide(factor)) => {
-            parts.push(format!("eb_hooks.py divides {name} by {factor}"));
+            let shown = format_factor(factor);
+            let divided = divide_by_factor(parallel.cores, factor);
+            if divided.float_result {
+                parts.push(format!(
+                    "eb_hooks.py divides {name} by {shown} ({} // {shown} is {:.1}, a float)",
+                    parallel.cores, divided.level as f64
+                ));
+            } else {
+                parts.push(format!("eb_hooks.py divides {name} by {shown}"));
+            }
         }
         Some(LimitOp::Maximum(value)) => {
             parts.push(format!("eb_hooks.py caps {name} at {value}"));
@@ -828,6 +1059,414 @@ fn remedies(
     lines
 }
 
+/// One package's `mib_per_job`. `None` means the peak has not been measured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobMemory {
+    /// EasyBuild name, `libxc`.
+    pub name: String,
+    /// Version families, `7.0`. Empty covers every version.
+    pub versions: Vec<String>,
+    /// MiB the worst compile needs, plus headroom. Absent when unmeasured.
+    pub mib_per_job: Option<u32>,
+    /// Why the number is there, or why it is not.
+    pub note: String,
+}
+
+/// The per-package `mib_per_job` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobMemoryTable {
+    packages: Vec<JobMemory>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawJobMemory {
+    #[serde(default)]
+    package: Vec<RawJobPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawJobPackage {
+    name: String,
+    #[serde(default)]
+    versions: Vec<String>,
+    mib_per_job: Option<u32>,
+    note: String,
+}
+
+impl JobMemoryTable {
+    /// The table shipped in `data/job-memory.toml`.
+    pub fn bundled() -> Result<Self> {
+        Self::parse(BUNDLED_JOB_MEMORY).context("data/job-memory.toml")
+    }
+
+    /// Read a table from `path`.
+    pub fn load(path: &Path) -> Result<Self> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        Self::parse(&text).with_context(|| format!("parse {}", path.display()))
+    }
+
+    /// Parse the TOML document. A package with no `mib_per_job` is
+    /// unmeasured, and its note must say so. A number has to be positive.
+    pub fn parse(text: &str) -> Result<Self> {
+        let raw: RawJobMemory =
+            toml::from_str(text).context("job memory table is not valid TOML")?;
+        let mut packages = Vec::new();
+        let mut seen = BTreeSet::new();
+        for package in raw.package {
+            let name = package.name.trim().to_string();
+            let note = package.note.trim().to_string();
+            if name.is_empty() || note.is_empty() {
+                bail!("a job memory row needs a name and a note");
+            }
+            if !seen.insert(name.clone()) {
+                bail!("job memory table repeats {name}");
+            }
+            match package.mib_per_job {
+                None => {
+                    if !note.to_ascii_lowercase().contains("unmeasured") {
+                        bail!(
+                            "{name}: a package with no mib_per_job is unmeasured, and the note must say so"
+                        );
+                    }
+                }
+                Some(0) => bail!("{name}: mib_per_job must be positive"),
+                Some(_) => {}
+            }
+            packages.push(JobMemory {
+                name,
+                versions: package.versions,
+                mib_per_job: package.mib_per_job,
+                note,
+            });
+        }
+        Ok(Self { packages })
+    }
+
+    /// Every package, in file order.
+    pub fn packages(&self) -> &[JobMemory] {
+        &self.packages
+    }
+
+    /// The row for `name`, if the table has one.
+    pub fn get(&self, name: &str) -> Option<&JobMemory> {
+        self.packages.iter().find(|package| package.name == name)
+    }
+}
+
+/// One node size the parallelism report compares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSize {
+    /// CPUs the job holds.
+    pub cores: u32,
+    /// Memory the job can use, in MiB.
+    pub memory_mib: u64,
+    /// CPU target, `x86_64/amd/zen4`. Absent applies only `*` hook rows.
+    pub target: Option<String>,
+}
+
+/// Parse `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
+pub fn parse_node_size(text: &str) -> Result<NodeSize> {
+    let Some((cores, rest)) = text.split_once(':') else {
+        bail!("--node {text} is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET");
+    };
+    let (memory, target) = match rest.split_once(':') {
+        Some((memory, target)) => (memory, Some(target.to_string())),
+        None => (rest, None),
+    };
+    let cores: u32 = cores
+        .parse()
+        .with_context(|| format!("--node {text} cores are not an integer"))?;
+    let memory_mib: u64 = memory
+        .parse()
+        .with_context(|| format!("--node {text} memory is not an integer number of MiB"))?;
+    if cores == 0 || memory_mib == 0 {
+        bail!("--node {text} needs positive cores and memory");
+    }
+    if target.as_deref().is_some_and(str::is_empty) {
+        bail!("--node {text} has an empty target");
+    }
+    Ok(NodeSize {
+        cores,
+        memory_mib,
+        target,
+    })
+}
+
+/// MiB from a cgroup v2 `memory.max` byte count. `max` and a blank file
+/// are not a limit.
+fn memory_max_mib(text: &str) -> Option<u64> {
+    let text = text.trim();
+    if text.is_empty() || text == "max" {
+        return None;
+    }
+    let bytes: u64 = text.parse().ok()?;
+    Some(bytes / (1024 * 1024))
+}
+
+/// The cgroup v2 path from `/proc/self/cgroup` (`0::/path`), relative to
+/// the cgroup root. `.` and empty components are dropped. `..` is refused
+/// so the walk stays under the cgroup filesystem.
+fn cgroup_v2_relative(text: &str) -> Option<String> {
+    let path = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("0::"))?;
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        parts.push(part);
+    }
+    Some(parts.join("/"))
+}
+
+/// Smallest cgroup v2 `memory.max` on `cgroup_text`'s path, in MiB.
+///
+/// `sysfs` is `/sys/fs/cgroup` on a host. The walk starts at the process
+/// cgroup and climbs to `sysfs`, and the smallest numeric `memory.max`
+/// wins. `max` is unlimited and does not count. No numeric file is
+/// `None`, which is when the caller uses MemTotal.
+pub fn smallest_cgroup_memory_mib(cgroup_text: &str, sysfs: &Path) -> Option<u64> {
+    let relative = cgroup_v2_relative(cgroup_text)?;
+    let mut path = if relative.is_empty() {
+        sysfs.to_path_buf()
+    } else {
+        sysfs.join(relative)
+    };
+    let mut best: Option<u64> = None;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path.join("memory.max")) {
+            if let Some(mib) = memory_max_mib(&text) {
+                best = Some(best.map_or(mib, |have| have.min(mib)));
+            }
+        }
+        if path == sysfs {
+            break;
+        }
+        match path.parent() {
+            Some(parent) if parent.starts_with(sysfs) => path = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    best
+}
+
+/// `MemTotal` from `/proc/meminfo`, in MiB.
+///
+/// The line is kilobytes. Dividing by 1024 matches EasyBuild's
+/// `get_total_memory()`.
+pub fn memtotal_mib(meminfo: &str) -> Option<u64> {
+    for line in meminfo.lines() {
+        let Some(rest) = line.strip_prefix("MemTotal:") else {
+            continue;
+        };
+        let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+        return Some(kb / 1024);
+    }
+    None
+}
+
+/// Memory for `limit_by_memory`, from a cgroup listing, a cgroup
+/// filesystem, and a meminfo file.
+///
+/// The smallest cgroup v2 `memory.max` on the process path wins. With
+/// none, MemTotal.
+pub fn job_memory_mib_from(cgroup_text: &str, sysfs: &Path, meminfo: &str) -> Option<u64> {
+    if let Some(mib) = smallest_cgroup_memory_mib(cgroup_text, sysfs) {
+        return Some(mib);
+    }
+    memtotal_mib(meminfo)
+}
+
+/// Memory for `limit_by_memory` on this process.
+///
+/// The smallest cgroup v2 `memory.max` on `/proc/self/cgroup`'s path,
+/// under `/sys/fs/cgroup`. A Slurm job's limit is the one on that path.
+/// With no cgroup v2 limit, MemTotal, the same figure EasyBuild's
+/// `get_total_memory()` reads.
+pub fn job_memory_mib() -> Option<u64> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    job_memory_mib_from(&cgroup, Path::new("/sys/fs/cgroup"), &meminfo)
+}
+
+fn node_partition(node: &NodeSize) -> Partition {
+    Partition {
+        instance: String::new(),
+        node: String::new(),
+        target: node.target.clone().unwrap_or_default(),
+        accel: None,
+        cores: node.cores,
+        memory_gib: 1.0,
+        sources: Vec::new(),
+    }
+}
+
+fn current_clause(resources: &BotResources, name: &str, node: &NodeSize) -> (u32, String) {
+    let partition = node_partition(node);
+    let got = resources.parallel(name, &partition, None);
+    let key = resources
+        .matching_limit(name, &partition.target)
+        .map(|limit| limit.target.as_str());
+    let on = key.map(|key| format!(" on {key}")).unwrap_or_default();
+    let text = match got.hook {
+        Some(LimitOp::Divide(factor)) => {
+            let divided = divide_by_factor(node.cores, factor);
+            let mut text = format!(
+                "divide_by_factor{on}, max(1, {} // {})",
+                node.cores,
+                format_factor(factor)
+            );
+            if divided.level != got.level {
+                if divided.float_result {
+                    text.push_str(&format!(
+                        " = {:.1}, a float, then max-parallel {}",
+                        divided.level as f64, resources.max_parallel
+                    ));
+                } else {
+                    text.push_str(&format!(
+                        " = {}, then max-parallel {}",
+                        divided.level, resources.max_parallel
+                    ));
+                }
+            } else if divided.float_result {
+                text.push_str(&format!(" = {:.1}, a float", divided.level as f64));
+            }
+            text
+        }
+        Some(LimitOp::Maximum(value)) => {
+            let raw = set_maximum(node.cores, value);
+            let mut text = format!("set_maximum{on}, min({}, {value})", node.cores);
+            if raw != got.level {
+                text.push_str(&format!(
+                    " = {raw}, then max-parallel {}",
+                    resources.max_parallel
+                ));
+            }
+            text
+        }
+        None if node.cores > resources.max_parallel => {
+            format!("no hook limit, max-parallel {}", resources.max_parallel)
+        }
+        None => "no hook limit".to_string(),
+    };
+    (got.level, text)
+}
+
+fn memory_clause(mib_per_job: Option<u32>, node: &NodeSize, max_parallel: u32) -> String {
+    let Some(mib_per_job) = mib_per_job else {
+        return "memory unmeasured".to_string();
+    };
+    let raw = limit_by_memory(node.cores, mib_per_job, node.memory_mib);
+    let curr = node.cores.min(max_parallel).max(1);
+    let effective = if raw < curr { raw } else { curr };
+    let formula = format!(
+        "max(1, min({}, {} // {mib_per_job}))",
+        node.cores, node.memory_mib
+    );
+    if effective != raw {
+        format!("memory {effective} ({formula} = {raw}, then max-parallel {max_parallel})")
+    } else {
+        format!("memory {effective} ({formula})")
+    }
+}
+
+fn report_names(resources: &BotResources, jobs: &JobMemoryTable) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for limit in &resources.limits {
+        if let Some(name) = &limit.software {
+            names.insert(name.clone());
+        }
+    }
+    for package in jobs.packages() {
+        names.insert(package.name.clone());
+    }
+    names.into_iter().collect()
+}
+
+fn job_memory_footer(jobs: &JobMemoryTable) -> String {
+    let unmeasured: Vec<String> = jobs
+        .packages()
+        .iter()
+        .filter(|package| package.mib_per_job.is_none())
+        .map(|package| {
+            if package.versions.is_empty() {
+                package.name.clone()
+            } else {
+                format!("{} {}", package.name, package.versions.join(", "))
+            }
+        })
+        .collect();
+    if unmeasured.is_empty() {
+        if jobs.packages().is_empty() {
+            "job memory: the table has no packages, so every memory rule is unmeasured\n"
+                .to_string()
+        } else {
+            "job memory: every package in the table has an mib_per_job\n".to_string()
+        }
+    } else {
+        format!(
+            "job memory: {} unmeasured, no mib_per_job\n",
+            unmeasured.join("; ")
+        )
+    }
+}
+
+/// Parallelism under the current hook and under `limit_by_memory`.
+///
+/// Each node is a core count, a memory in MiB, and an optional CPU
+/// target. The hook column is what `post_ready_hook` would leave, including
+/// EasyBuild's `max-parallel`. The memory column is
+/// `limit_by_memory(cores, mib_per_job)` when the table has a number, and
+/// `unmeasured` when it does not. No number is invented.
+pub fn render_parallelism(
+    resources: &BotResources,
+    jobs: &JobMemoryTable,
+    nodes: &[NodeSize],
+) -> String {
+    let mut out =
+        String::from("parallelism under the current eb_hooks.py limit and under limit_by_memory\n");
+    let names = report_names(resources, jobs);
+    for node in nodes {
+        match &node.target {
+            Some(target) => out.push_str(&format!(
+                "node {} cores, {} MiB, {target}\n",
+                node.cores, node.memory_mib
+            )),
+            None => out.push_str(&format!(
+                "node {} cores, {} MiB\n",
+                node.cores, node.memory_mib
+            )),
+        }
+        for name in &names {
+            let (level, clause) = current_clause(resources, name, node);
+            let mib = jobs.get(name).and_then(|package| package.mib_per_job);
+            out.push_str(&format!(
+                "  {name}: current {level} ({clause}); {}\n",
+                memory_clause(mib, node, resources.max_parallel)
+            ));
+        }
+        let sentinel = "\u{0}";
+        if resources
+            .matching_limit(sentinel, node.target.as_deref().unwrap_or(""))
+            .is_some()
+        {
+            let (level, clause) = current_clause(resources, sentinel, node);
+            out.push_str(&format!(
+                "  (other builds): current {level} ({clause}); memory unmeasured\n"
+            ));
+        }
+    }
+    out.push_str(&job_memory_footer(jobs));
+    out
+}
+
 /// Arguments for `stack oom`.
 pub struct OomCheckRequest {
     /// CPU targets or target prefixes. Empty checks every target in the
@@ -845,6 +1484,11 @@ pub struct OomCheckRequest {
     pub profile: Option<PathBuf>,
     /// Override `data/eessi-bot-resources.toml`.
     pub resources: Option<PathBuf>,
+    /// Node sizes, `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
+    /// Prints the hook parallelism beside `limit_by_memory`.
+    pub nodes: Vec<String>,
+    /// Override `data/job-memory.toml`.
+    pub job_memory: Option<PathBuf>,
 }
 
 /// What `stack oom` prints.
@@ -861,21 +1505,53 @@ pub struct OomCheckReport {
     pub partitions: usize,
     /// `--arch` values the bot resource table has no node for.
     pub unknown_arches: Vec<String>,
+    /// Divide factors that are not integers. Also included in `stdout`.
+    pub factor_warnings: Vec<String>,
 }
 
 /// Estimate each plan build's peak on each bot node and warn where it
 /// reaches the job's memory.
 pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
+    if request.easystacks.is_empty() && request.nodes.is_empty() {
+        return Err(usage(
+            "pass at least one --easystack, or --node to compare parallelism",
+        ));
+    }
+    let mut nodes = Vec::new();
+    for text in &request.nodes {
+        nodes.push(parse_node_size(text).map_err(usage)?);
+    }
+    let resources = match &request.resources {
+        Some(path) => BotResources::load(path)?,
+        None => BotResources::bundled()?,
+    };
+    let jobs = match &request.job_memory {
+        Some(path) => JobMemoryTable::load(path)?,
+        None => JobMemoryTable::bundled()?,
+    };
+    let factor_warnings = resources.factor_warnings();
     if request.easystacks.is_empty() {
-        return Err(usage("pass at least one --easystack"));
+        let mut stdout = String::new();
+        for line in &factor_warnings {
+            stdout.push_str(line);
+            stdout.push('\n');
+        }
+        if !nodes.is_empty() {
+            stdout.push_str(&render_parallelism(&resources, &jobs, &nodes));
+        }
+        return Ok(OomCheckReport {
+            stdout,
+            warnings: Vec::new(),
+            fits: 0,
+            builds: 0,
+            partitions: 0,
+            unknown_arches: Vec::new(),
+            factor_warnings,
+        });
     }
     let profile = match &request.profile {
         Some(path) => MemoryProfile::load(path)?,
         None => MemoryProfile::bundled()?,
-    };
-    let resources = match &request.resources {
-        Some(path) => BotResources::load(path)?,
-        None => BotResources::bundled()?,
     };
     let mut starts = Vec::new();
     for path in &request.easystacks {
@@ -953,6 +1629,10 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
             "{arch} has no bot node in the bot resource table, so it is not checked\n"
         ));
     }
+    for line in &factor_warnings {
+        stdout.push_str(line);
+        stdout.push('\n');
+    }
     for warning in &warnings {
         for line in warning.lines() {
             stdout.push_str(&line);
@@ -966,6 +1646,10 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         builds.len(),
         partitions.len()
     ));
+    if !nodes.is_empty() {
+        stdout.push('\n');
+        stdout.push_str(&render_parallelism(&resources, &jobs, &nodes));
+    }
     Ok(OomCheckReport {
         stdout,
         warnings,
@@ -973,6 +1657,7 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         builds: builds.len(),
         partitions: partitions.len(),
         unknown_arches,
+        factor_warnings,
     })
 }
 
@@ -1077,6 +1762,40 @@ fn plan_builds(
 mod tests {
     use super::*;
 
+    fn parse_factor(literal: &str) -> DivideFactor {
+        let text = format!(
+            "[easybuild]\nmax_parallel = 1\n[hooks]\n[[hooks.limit]]\nsoftware = \"pkg\"\ntarget = \"*\"\ndivide = {literal}\n"
+        );
+        let resources =
+            BotResources::parse(&text).unwrap_or_else(|error| panic!("{literal}: {error}"));
+        match resources.limits[0].op {
+            LimitOp::Divide(factor) => factor,
+            other => panic!("{literal} is not a divide: {other:?}"),
+        }
+    }
+
+    fn python_divide(parallel: u32, literal: &str) -> (String, String) {
+        let script = format!(
+            "value = max(1, {parallel} // {literal})\nprint(repr(value))\nprint(type(value).__name__)\n"
+        );
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("python3");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).expect("utf8");
+        let mut lines = text.lines();
+        (
+            lines.next().unwrap_or("").to_string(),
+            lines.next().unwrap_or("").to_string(),
+        )
+    }
+
     fn zen4(resources: &BotResources) -> &Partition {
         resources
             .partitions
@@ -1110,6 +1829,12 @@ mod tests {
             );
         }
         assert!(resources.hooks_source.contains("608fb40c"));
+        assert!(resources.factor_warnings().is_empty());
+        let jobs = JobMemoryTable::bundled().expect("bundled job memory");
+        let libxc = jobs.get("libxc").expect("libxc row");
+        assert_eq!(libxc.mib_per_job, None);
+        assert!(libxc.note.to_ascii_lowercase().contains("unmeasured"));
+        assert!(libxc.versions.iter().any(|family| family == "7.0"));
     }
 
     #[test]
@@ -1194,6 +1919,243 @@ source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263
             .find(|e| e.name == "hipBLASLt")
             .unwrap();
         assert_eq!(fitting_parallel(hip, 8, 27.9), None);
+    }
+
+    #[test]
+    fn divide_by_factor_matches_python_floor_division() {
+        let cases = ["2", "2.0", "2.5", "20.5", "4", "0.5"];
+        for literal in cases {
+            let factor = parse_factor(literal);
+            for parallel in [1_u32, 16, 48] {
+                let got = divide_by_factor(parallel, factor);
+                let (python_repr, python_type) = python_divide(parallel, literal);
+                let rendered = if got.float_result {
+                    format!("{:.1}", got.level as f64)
+                } else {
+                    got.level.to_string()
+                };
+                assert_eq!(
+                    python_repr, rendered,
+                    "max(1, {parallel} // {literal}) is {python_repr}, model says {rendered}"
+                );
+                assert_eq!(
+                    python_type == "float",
+                    got.float_result,
+                    "{parallel} // {literal} is a {python_type}"
+                );
+            }
+        }
+        assert_eq!(set_maximum(48, 6), 6);
+        assert_eq!(set_maximum(4, 6), 4);
+        assert_eq!(limit_by_memory(16, 8192, 32768), 4);
+        assert_eq!(limit_by_memory(16, 100_000, 32768), 1);
+        assert_eq!(limit_by_memory(48, 100, 30_016), 48);
+    }
+
+    #[test]
+    fn a_non_integer_divide_warns_and_uses_the_numeric_floor() {
+        let text = r#"
+[easybuild]
+max_parallel = 16
+
+[[partition]]
+instance = "eessi-bot-mc-aws"
+node = "amd-zen4"
+target = "x86_64/amd/zen4"
+cores = 16
+memory_gib = 32.0
+
+[hooks]
+[[hooks.limit]]
+software = "libxc"
+target = "*"
+divide = 2.5
+
+[[hooks.limit]]
+software = "LLVM"
+target = "*"
+divide = 2.0
+
+[[hooks.limit]]
+target = "aarch64/a64fx"
+divide = 4
+"#;
+        let resources = BotResources::parse(text).unwrap();
+        let warnings = resources.factor_warnings();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].contains("libxc on * uses 2.5, which is not an integer"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("16 // 2.5 is 6.0, a float"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("Use an integer factor."),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].contains("LLVM on * uses 2.0, a float rather than an integer"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].contains("16 // 2.0 is 8.0, a float"),
+            "{warnings:?}"
+        );
+        let zen4 = zen4(&resources);
+        assert_eq!(resources.parallel("libxc", zen4, None).level, 6);
+        assert_eq!(resources.parallel("LLVM", zen4, None).level, 8);
+        // The integer A64FX row is not a warning. zlib has no software
+        // entry, so it takes that row: 48 // 4 = 12. libxc has only '*',
+        // so on A64FX it still divides by 2.5: floor(48 / 2.5) = 19.
+        assert!(resources
+            .factor_warnings()
+            .iter()
+            .all(|line| !line.contains("every build")));
+        assert_eq!(
+            resources
+                .hook_limit("zlib", "aarch64/a64fx")
+                .map(|op| op.apply(48)),
+            Some(12)
+        );
+        assert_eq!(
+            resources
+                .hook_limit("libxc", "aarch64/a64fx")
+                .map(|op| op.apply(48)),
+            Some(19)
+        );
+    }
+
+    #[test]
+    fn cpu_target_key_overrides_the_wildcard() {
+        let resources = BotResources::bundled().unwrap();
+        let libxc_star = resources
+            .matching_limit("libxc", "x86_64/amd/zen4")
+            .unwrap();
+        assert_eq!(libxc_star.target, "*");
+        assert!(matches!(libxc_star.op, LimitOp::Divide(_)));
+        let libxc_a64fx = resources.matching_limit("libxc", "aarch64/a64fx").unwrap();
+        assert_eq!(libxc_a64fx.target, "aarch64/a64fx");
+        assert!(matches!(libxc_a64fx.op, LimitOp::Maximum(6)));
+        let global = resources.matching_limit("zlib", "aarch64/a64fx").unwrap();
+        assert!(global.software.is_none());
+        assert!(matches!(global.op, LimitOp::Divide(_)));
+        assert!(resources
+            .matching_limit("zlib", "x86_64/amd/zen4")
+            .is_none());
+        // QuantumESPRESSO has an A64FX row only, so zen4 is left alone.
+        assert!(resources
+            .matching_limit("QuantumESPRESSO", "x86_64/amd/zen4")
+            .is_none());
+        assert!(resources
+            .matching_limit("QuantumESPRESSO", "aarch64/a64fx")
+            .is_some());
+    }
+
+    #[test]
+    fn limit_by_memory_report_names_an_unmeasured_package() {
+        let resources = BotResources::bundled().unwrap();
+        let jobs = JobMemoryTable::bundled().unwrap();
+        let nodes = vec![
+            NodeSize {
+                cores: 16,
+                memory_mib: 32_768,
+                target: Some("x86_64/amd/zen4".to_string()),
+            },
+            NodeSize {
+                cores: 48,
+                memory_mib: 30_016,
+                target: Some("aarch64/a64fx".to_string()),
+            },
+        ];
+        let text = render_parallelism(&resources, &jobs, &nodes);
+        assert!(
+            text.contains(
+                "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("job memory: libxc 7.0 unmeasured, no mib_per_job\n"),
+            "{text}"
+        );
+        assert!(!text.contains("8192"), "{text}");
+        let fixture = JobMemoryTable::parse(
+            r#"
+[[package]]
+name = "libxc"
+versions = ["7.0"]
+mib_per_job = 8192
+note = "fixture for the report arithmetic, not a measurement of libxc"
+"#,
+        )
+        .unwrap();
+        let one = render_parallelism(&resources, &fixture, &nodes[..1]);
+        assert!(
+            one.contains(
+                "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
+            ),
+            "{one}"
+        );
+        assert!(
+            one.contains("job memory: every package in the table has an mib_per_job\n"),
+            "{one}"
+        );
+    }
+
+    #[test]
+    fn cgroup_v2_memory_is_the_smallest_max_else_memtotal() {
+        let root = std::env::temp_dir().join(format!(
+            "eb-stack-cgroup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("leaf")).unwrap();
+        std::fs::write(root.join("memory.max"), "17179869184\n").unwrap();
+        std::fs::write(root.join("leaf/memory.max"), "8589934592\n").unwrap();
+        let cgroup = "0::/leaf\n";
+        assert_eq!(smallest_cgroup_memory_mib(cgroup, &root), Some(8192));
+        std::fs::write(root.join("leaf/memory.max"), "max\n").unwrap();
+        assert_eq!(smallest_cgroup_memory_mib(cgroup, &root), Some(16384));
+        std::fs::write(root.join("memory.max"), "max\n").unwrap();
+        let meminfo = "MemTotal:       32768000 kB\n";
+        assert_eq!(job_memory_mib_from(cgroup, &root, meminfo), Some(32_000));
+        assert_eq!(
+            job_memory_mib_from("12:memory:/user.slice\n", &root, meminfo),
+            Some(32_000)
+        );
+        assert_eq!(smallest_cgroup_memory_mib("0::/../leaf\n", &root), None);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(memtotal_mib(meminfo), Some(32_000));
+        assert!(job_memory_mib().is_some_and(|mib| mib > 0));
+    }
+
+    #[test]
+    fn a_job_memory_row_without_the_unmeasured_mark_is_refused() {
+        let error = JobMemoryTable::parse(
+            r#"
+[[package]]
+name = "libxc"
+note = "to be filled in later"
+"#,
+        )
+        .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(text.contains("unmeasured"), "{text}");
     }
 
     #[test]

@@ -335,8 +335,20 @@ the estimate against the job's memory. The libxc build in software-layer
 #1772 was killed twice on zen4 at 8 processes on 32 GiB. The remedies are
 text only: a `maxparallel` in the recipe, a limit in `PARALLELISM_LIMITS`
 in software-layer-scripts `eb_hooks.py`, or a node with more memory. Put
-the change in the pull request yourself. The command exits 0. The how-to
-is `docs/orgmode/howto/oom-profile.org`.
+the change in the pull request yourself. The command exits 0.
+
+The hook ops are `divide_by_factor` (`max(1, parallel // factor)`) and
+`set_maximum` (`min(parallel, n)`). A CPU-target key overrides `*`.
+A64FX divides every other build by 4. A divide factor that is not an
+integer is a warning: `16 // 2.5` is the float `6.0`. Use an integer.
+`eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
+the message never prints. That is upstream. Do not patch it from here.
+
+`eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook
+with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`.
+libxc is unmeasured. Measure a compile with `scripts/compile_rss.py`
+under `-O2 -ftree-vectorize -march=<target> -fno-math-errno`, and do not
+invent the number. The how-to is `docs/orgmode/howto/oom-profile.org`.
 
 ## Contribution policy gates
 

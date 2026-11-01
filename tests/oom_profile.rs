@@ -218,14 +218,186 @@ fn an_easystack_is_required_and_a_directory_is_refused() {
     assert!(stderr.contains("is a directory"), "{stderr}");
 }
 
-/// Each `eb-stack stack oom` block in the how-to prints the example block
-/// that follows it, run from the repository root.
+#[test]
+fn a_non_integer_divide_warns_and_the_estimate_uses_six() {
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--resources",
+        &arg("resources-divide-2.5.toml"),
+        "--easystack",
+        &arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml"),
+    ]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(
+        stdout.starts_with(
+            "warning: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.\n"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("may run out of memory"), "{stdout}");
+    assert!(
+        stdout.ends_with("oom=0 fits=1 builds=5 nodes=1\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn node_sizes_compare_the_hook_with_the_memory_rule() {
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with(
+            "parallelism under the current eb_hooks.py limit and under limit_by_memory\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "node 16 cores, 32768 MiB, x86_64/amd/zen4\n  LLVM: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("job memory: libxc 7.0 unmeasured, no mib_per_job\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("oom="), "{stdout}");
+
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--job-memory",
+        &arg("job-memory-fixture.toml"),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
+        ),
+        "{stdout}"
+    );
+    // 8192 is the fixture's arithmetic, not a measured libxc peak.
+    assert!(
+        stdout.contains("job memory: every package in the table has an mib_per_job\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_node_size_without_cores_or_memory_is_rejected() {
+    let (code, _, stderr) = run(&["stack", "oom", "--node", "16"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("CORES:MEMORY_MIB"), "{stderr}");
+    let (code, _, stderr) = run(&["stack", "oom", "--node", "0:32768"]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+#[test]
+fn the_compile_rss_helper_records_a_child_and_suggests_headroom() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let script = root.join("scripts/compile_rss.py");
+    let log = arg("compile-rss.jsonl");
+    let summary = Command::new("python3")
+        .arg(&script)
+        .arg("--summarize")
+        .arg(&log)
+        .output()
+        .expect("summarize fixture");
+    assert!(
+        summary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let text = String::from_utf8_lossy(&summary.stdout);
+    assert_eq!(
+        text,
+        "\
+compiles: 2
+worst_ru_maxrss_kb: 4096
+worst_command: gcc -O2 -ftree-vectorize -march=znver4 -fno-math-errno -c sample.c
+worst_exit: 0
+worst_mib: 4
+headroom: 1/4
+suggested_mib_per_job: 5
+note: suggested_mib_per_job is the worst peak rounded up to MiB, plus headroom, rounded up; it is not a measurement of a named package
+"
+    );
+
+    let dir = std::env::temp_dir().join(format!(
+        "eb-stack-rss-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let recorded = dir.join("compile-rss.jsonl");
+    let launch = Command::new("python3")
+        .arg(&script)
+        .arg("python3")
+        .arg("-c")
+        .arg("import sys; sys.exit(0)")
+        .env("EB_STACK_COMPILE_RSS_LOG", &recorded)
+        .current_dir(&dir)
+        .output()
+        .expect("launch");
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    let written = std::fs::read_to_string(&recorded).expect("log");
+    assert!(written.contains("\"exit\":0"), "{written}");
+    assert!(written.contains("\"argv\":[\"python3\""), "{written}");
+    let kb = written
+        .split("\"ru_maxrss_kb\":")
+        .nth(1)
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches(['}', '\n']);
+    assert!(kb.parse::<u64>().unwrap_or(0) > 0, "{written}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Each checked bash block in the how-to prints the example that follows
+/// it, run from the repository root. `eb-stack stack oom` blocks and the
+/// compile-RSS summary are checked. A `text` block is not run.
 #[test]
 fn the_how_to_shows_the_real_output() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let page = std::fs::read_to_string(root.join("docs/orgmode/howto/oom-profile.org")).unwrap();
     let mut lines = page.lines();
-    let mut checked = 0;
+    let mut oom_blocks = 0;
+    let mut rss_blocks = 0;
     while let Some(line) = lines.next() {
         if line != "#+begin_src bash" {
             continue;
@@ -237,25 +409,40 @@ fn the_how_to_shows_the_real_output() {
             .collect::<Vec<_>>()
             .join(" ");
         let args: Vec<&str> = command.split_whitespace().collect();
-        assert_eq!(&args[..3], ["eb-stack", "stack", "oom"], "{command}");
         lines.by_ref().find(|l| *l == "#+begin_example").unwrap();
         let expected: String = lines
             .by_ref()
             .take_while(|l| *l != "#+end_example")
             .map(|l| format!("{l}\n"))
             .collect();
-        let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
-            .args(&args[1..])
-            .current_dir(&root)
-            .output()
-            .expect("run eb-stack");
+        let output = if args.len() >= 3 && args[..3] == ["eb-stack", "stack", "oom"] {
+            oom_blocks += 1;
+            Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+                .args(&args[1..])
+                .current_dir(&root)
+                .output()
+                .expect("run eb-stack")
+        } else if args.first() == Some(&"python3")
+            && args
+                .get(1)
+                .is_some_and(|arg| arg.ends_with("compile_rss.py"))
+        {
+            rss_blocks += 1;
+            Command::new("python3")
+                .args(&args[1..])
+                .current_dir(&root)
+                .output()
+                .expect("run compile_rss.py")
+        } else {
+            panic!("howto bash block is not a checked command: {command}");
+        };
         assert!(output.status.success(), "{command}");
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             expected,
             "{command}"
         );
-        checked += 1;
     }
-    assert_eq!(checked, 5);
+    assert_eq!(oom_blocks, 7);
+    assert_eq!(rss_blocks, 1);
 }

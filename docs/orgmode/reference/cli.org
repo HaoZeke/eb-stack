@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -517,12 +517,13 @@ eb-stack stack known-failures \
   [--strict]
 
 eb-stack stack oom \
-  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  (--easystack EASYSTACK.yml... | --node CORES:MEMORY_MIB[:TARGET]...) \
   [--arch x86_64/amd/zen4]... \
   [--easyconfigs TREE]... \
   [--installed INSTALLED.txt] \
   [--profile BUILD-MEMORY.toml] \
-  [--resources BOT-RESOURCES.toml]
+  [--resources BOT-RESOURCES.toml] \
+  [--job-memory JOB-MEMORY.toml]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -1027,6 +1028,12 @@ and node, the estimate, and the job's memory. ~parallel~ is how the
 level was reached. The parallel level starts at the node's cores, capped
 at EasyBuild's ~max-parallel~ of 16, then lowered by the EESSI
 ~PARALLELISM_LIMITS~ and by ~maxparallel~ in the easyconfig.
+The hook ops are ~divide_by_factor~, ~max(1, parallel // factor)~, and
+~set_maximum~, ~min(parallel, n)~. A CPU-target key overrides ~'*'~.
+Software with no entry takes the target's own limit, a divide by 4 on
+A64FX. A ~divide~ that is not an integer is a warning of its own:
+Python's ~//~ returns a float, and ~16 // 2.5~ is ~6.0~. The estimate
+uses the numeric floor. Write the factor as an integer.
 ~oom=~ counts warnings. ~fits=~ counts build and node pairs with a
 memory figure that fit. ~builds=~ and ~nodes=~ are what was checked.
 
@@ -1037,7 +1044,17 @@ already installed. ~--arch~ repeats and takes a target or a prefix such
 as ~aarch64~. No ~--arch~ checks every node in the table; a target with
 no node is reported and skipped. ~--profile~ replaces
 ~data/build-memory.toml~. ~--resources~ replaces
-~data/eessi-bot-resources.toml~. The command exits 0 when it warns. See
+~data/eessi-bot-resources.toml~. ~--job-memory~ replaces
+~data/job-memory.toml~, the per-package ~mib_per_job~ table. A row with
+no number is unmeasured. libxc 7.0 is unmeasured; the peak RSS of its
+worst compile has not been measured, and the table does not guess.
+~--node~ repeats. Each value is ~CORES:MEMORY_MIB~ or
+~CORES:MEMORY_MIB:TARGET~, and memory is MiB. It prints the parallelism
+the current hook leaves beside ~limit_by_memory(parallel, mib_per_job)~,
+which is ~max(1, min(parallel, memory_mib // mib_per_job))~. The memory
+a hook would read on the build machine is the smallest cgroup v2
+~memory.max~ on the process's cgroup path, else ~MemTotal~. Pass
+~--easystack~, ~--node~, or both. The command exits 0 when it warns. See
 [[file:../howto/oom-profile.org][warn before a bot job runs out of memory]].
 
 ** ~stack bot-classify~
@@ -1625,9 +1642,11 @@ needs one ~easystack~ or ~pr~. It returns the same report as
 ~easyconfigs~, ~installed~, ~known_failures~, ~eessi_version~, and
 ~easybuild_version~. It returns ~text~, the ~stack known-failures~
 stdout, and ~hits~, one object per line. Warnings are not a tool error.
-~eb_stack_oom~ requires ~easystack~ and takes ~arch~, ~easyconfigs~,
-~installed~, ~profile~, and ~resources~. It returns the ~stack oom~ text
-and one object per warning; a warning is not a tool error.
+~eb_stack_oom~ takes ~easystack~, ~arch~, ~easyconfigs~,
+~installed~, ~profile~, ~resources~, ~node~, and ~job_memory~. It needs
+an easystack or a node. It returns the ~stack oom~ text, one object per
+warning, and ~factor_warnings~ for a divide factor that is not an
+integer. A warning is not a tool error.
 ~eb_stack_bot_classify~ requires ~files~. It returns ~text~, the
 ~stack bot-classify~ stdout, ~jobs~, one object per job, and ~counts~.
 ~eb_stack_batch~ takes ~arch~, ~unsupported~, ~known_failures~,
