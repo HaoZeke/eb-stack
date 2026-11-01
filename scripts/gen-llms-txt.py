@@ -227,6 +227,19 @@ def table_line(stripped: str, previous: list[str]) -> str:
     return "| " + " | ".join(rendered) + " |"
 
 
+# Org marks inline code with ~...~ and verbatim with =...=. Both become a
+# markdown backtick span. They are matched in one left-to-right pass so a
+# delimiter inside one span (~a=b~, ={workspaceFolder}=) stays literal and is
+# never paired with a delimiter in a later span. Two passes, one per marker,
+# paired the = of ~a=b~ with the = of a following ~c=d~.
+MARKUP = re.compile(r"~(?P<tilde>[^~\n]+)~|=(?P<eq>[^=\n]+)=")
+
+
+def markup_body(match: re.Match[str]) -> str:
+    tilde = match.group("tilde")
+    return tilde if tilde is not None else match.group("eq")
+
+
 def inline(text: str) -> str:
     text = re.sub(
         r"\[\[file:([^]\n]+?)\]\[([^]\n]+?)\]\]",
@@ -244,12 +257,7 @@ def inline(text: str) -> str:
         text,
     )
     text = re.sub(r"<<[^>\n]+>>", "", text)
-
-    def code(match: re.Match[str]) -> str:
-        return "`" + match.group(1) + "`"
-
-    text = re.sub(r"~([^~\n]+)~", code, text)
-    text = re.sub(r"=([^=\n]+)=", code, text)
+    text = MARKUP.sub(lambda match: "`" + markup_body(match) + "`", text)
     text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"**\1**", text)
     return text
 
@@ -262,8 +270,7 @@ def file_link(target: str, label: str) -> str:
 
 
 def inline_plain(text: str) -> str:
-    text = re.sub(r"~([^~\n]+)~", r"\1", text)
-    text = re.sub(r"=([^=\n]+)=", r"\1", text)
+    text = MARKUP.sub(markup_body, text)
     text = re.sub(r"\[\[https?://[^]\s]+\]\[([^]\n]+)\]\]", r"\1", text)
     text = re.sub(r"\[\[file:[^]\n]+\]\[([^]\n]+)\]\]", r"\1", text)
     text = text.replace("*", "")

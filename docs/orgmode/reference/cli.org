@@ -569,46 +569,44 @@ behind. A module whose name or versionsuffix says CUDA gets
 dependencies to ~eb --robot~. ~stack sbom --lock~ re-reads the easyconfigs
 named in the lock and restores their runtime ~dependsOn~ edges.
 
-~stack order~ sequences the recipes the roots pin. It does not pick one
-version per name, so two builds of one name both appear and stdout reports
-~multiple builds of NAME~. ~--filter-deps~ drops each named dependency
-before that order is built, together with the subtree under it, using the
-same matching as ~stack solve~. When the flag is absent the command reads
-~EASYBUILD_FILTER_DEPS~. ~--oldest~ takes the oldest admissible version of
-an unpinned requirement. ~--easystack-out~ writes that build order.
-~--hashes-out~ writes one ~hash  name-version-toolchain~ line per module.
-~stack easystack~ writes the lock, which is sorted by package name, as the
-easystack ~eb --easystack~ consumes. ~--option~ is
-~<file.eb>:<option>=<value>~. ~stack sections~ regroups a Jenkins list under
-the ~#### Title ####~ headers of a previous list. Commented entries stay
-commented. A name no previous section files goes under ~--unfiled~, whose
-default is ~New in this generation~.
-
-~stack order~ keeps every build the recipes pin. A name the generation
-builds twice stays twice, in an order that respects every dependency.
-~stack solve~ picks one version of that name; this command does not.
-~--root~ repeats, and ~name==version~ pins one build. ~--oldest~ takes the
-oldest admissible version of an unpinned requirement. The default is the
+~stack order~ sequences the recipes the roots pin, in an order that
+respects every dependency. It keeps every build the recipes pin and
+does not pick one version per name, so a name the generation builds
+twice stays twice and both builds appear; ~stack solve~ picks one
+version of that name, this command does not. ~--root~ repeats, and
+~name==version~ pins one build. ~--filter-deps~ drops each named
+dependency before that order is built, together with the subtree under
+it, using the same matching as ~stack solve~; when the flag is absent
+the command reads ~EASYBUILD_FILTER_DEPS~. ~--oldest~ takes the oldest
+admissible version of an unpinned requirement, and the default is the
 newest. ~--out~ is one easyconfig path per line (default
 ~build-order.txt~). ~--easystack-out~ writes that same sequence as an
-easystack. ~--hashes-out~ writes one line per module, ~<sha256>  <module>~,
-a digest of the easyconfig and of the hashes of everything it needs. A
-module whose recipe could not be read is still listed, and the stdout line
-~incomplete=~ counts those. Stdout ends with ~order=<path> builds=<N>~.
-A name with two builds also prints ~multiple builds of <name>:~.
+easystack. ~--hashes-out~ writes one line per module,
+~<sha256>  <module>~, a digest of the easyconfig and of the hashes of
+everything it needs. A module whose recipe could not be read is still
+listed, and the stdout line ~incomplete=~ counts those. Stdout ends
+with ~order=<path> builds=<N>~, and a name with two builds also prints
+~multiple builds of <name>:~.
 
-~stack easystack~ writes ~easyconfigs:~ as a YAML list of filenames, in
-lock order. ~--option~ repeats. The option is spelled as on the ~eb~
-command line without its dashes, for example
-~--option CUDA-12.8.0.eb:accept-eula-for=CUDA~. A file with options is a
-mapping; a file without them is a string. Stdout is
-~easystack=<path> entries=<N> of=<packages>~.
-~--eessi-version~ writes the EESSI software-layer layout under ~--out-dir~
-instead of one ~--out~ file:
+~stack easystack~ writes the lock, sorted by package name, as the
+easystack ~eb --easystack~ consumes: ~easyconfigs:~ is a YAML list of
+filenames in lock order. ~--option~ repeats and is spelled as on the
+~eb~ command line without its dashes, so it is
+~<file.eb>:<option>=<value>~, for example
+~--option CUDA-12.8.0.eb:accept-eula-for=CUDA~. A file with options is
+a mapping; a file without them is a string. Stdout is
+~easystack=<path> entries=<N> of=<packages>~. ~--eessi-version~ writes
+the EESSI software-layer layout under ~--out-dir~ instead of one
+~--out~ file:
 ~easystacks/software.eessi.io/<V>/eessi-<V>-eb-<X>-<generation>.yml~ for
 the ~--generation~ toolchains, ~eessi-<V>-eb-<X>-001-system.yml~ for
 recipes on the system toolchain, and the same names under ~accel/nvidia/~
 for CUDA builds. A recipe on another generation's toolchain is an error.
+
+~stack sections~ regroups a Jenkins list under the ~#### Title ####~
+headers of a previous list. Commented entries stay commented. A name no
+previous section files goes under ~--unfiled~, whose default is
+~New in this generation~.
 
 ~stack gap~ compares the module listings a site provides (~--site~,
 repeatable, ~Name/Version~ or a bare name per line) with a stack's
@@ -788,15 +786,17 @@ them, for the second-version check. ~--allow-versions~ takes ~NAME~ or
 ~NAME@GENERATION~. ~--generations~ replaces
 ~data/eessi-generations.toml~.
 
-The last token of the file name, after ~eb-<X.Y.Z>-~, is the
-generation the easystack is for, as in ~-2025b.yml~. An added entry
-whose own generation is carried by the EESSI version but differs from
-that token is a ~filename~ finding: it belongs in the generation's own
-easystack. A non-generation group such as ~001-system~, ~010-CUDA~ or
-~cc70-CUDA~ names no generation and is not checked.
+The generation the easystack is for is the token after
+~eb-<X.Y.Z>-~, up to the next ~-~ or the ~.yml~, as in ~-2025b.yml~ or
+~-2023a-CUDA.yml~. It counts only when it is a generation the table
+knows. An added entry whose own generation is carried by the EESSI
+version but differs from the file name's generation is a ~filename~
+finding: it belongs in the generation's own easystack. A
+non-generation group such as ~001-system~, ~010-CUDA~ or ~cc70-CUDA~
+names no known generation and is not checked.
 
 [[file:../howto/generation-lint.org][Refuse entries outside the EESSI version's generations]]
-shows the two-version and second-version lines.
+shows the two-version, second-version and file-name lines.
 
 ** ~stack cuda-cc~
 

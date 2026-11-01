@@ -48,6 +48,28 @@ fn llms_txt_matches_the_org_manual() {
     assert!(full.contains("# Command-line reference"));
     assert!(full.contains("eb-stack package plan"));
 
+    // Org code (~...~) and verbatim (=...=) markers each render as one
+    // backtick span, even when they contain or sit next to an equals sign.
+    // A regression in scripts/gen-llms-txt.py once paired the equals inside
+    // one span with the equals of a following span, splicing a backtick over
+    // the equals that belonged in the text.
+    for span in [
+        "`recipes_read=58`",
+        "`==0.3.24`",
+        "`${workspaceFolder}`",
+        "`-DQMC_COMPLEX=ON`",
+        "`oom=`",
+        "`~/.copilot/mcp-config.json`",
+    ] {
+        assert!(full.contains(span), "llms-full.txt is missing {span}");
+    }
+    for mangled in ["`recipes_read`58`", "`=`0.3.24`", "`-DQMC_COMPLEX`ON`"] {
+        assert!(
+            !full.contains(mangled),
+            "llms-full.txt still has the spliced rendering {mangled}"
+        );
+    }
+
     let pages = Command::new("python3")
         .arg(root.join("scripts/gen-llms-txt.py"))
         .arg("--pages-only")
