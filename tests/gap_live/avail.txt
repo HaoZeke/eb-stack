@@ -1,0 +1,5 @@
+/site/modules/all:
+code-server/4.96.2(default)
+
+Where:
+--------

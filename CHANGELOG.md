@@ -20,6 +20,12 @@ All notable changes to this project are documented here.
   A toolchain whose version is the generation (`lfoss-2026.1`) counts as
   a recipe on that generation, as does an extra toolchain from
   `data/eessi-generations.toml`.
+- `stack gap --site`, `--older`, and `--installed` read an Lmod module
+  tree or `module -t avail` / `module spider -t` text. `--older` is an
+  EESSI version loaded beside the site. `--installed` repeats for a CPU
+  tree and an accelerator compute-capability tree. `--eessi-version`
+  keeps `--open-layer` easystacks of that version. The open-pull-request
+  match stays the filename the pull request adds.
 
 ### Changed
 

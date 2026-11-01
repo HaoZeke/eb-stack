@@ -1,0 +1,26 @@
+[
+  {
+    "number": 1600,
+    "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "title": "2025.06",
+    "easystacks": [
+      {
+        "path": "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.1.1-2025a.yml",
+        "base": "easyconfigs:\n",
+        "head": "easyconfigs:\n  - QuantumESPRESSO-7.3-foss-2025a.eb\n"
+      }
+    ]
+  },
+  {
+    "number": 1700,
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "title": "LAMMPS",
+    "easystacks": [
+      {
+        "path": "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.2-2026.1.yml",
+        "base": "easyconfigs:\n",
+        "head": "easyconfigs:\n  - LAMMPS-2025.0-foss-2026.1.eb\n"
+      }
+    ]
+  }
+]

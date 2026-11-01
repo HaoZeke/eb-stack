@@ -3964,6 +3964,43 @@ request adds, not a dependency that line would build.
 `open_easyconfigs` are arrays of the same pull-request JSON
 `pr-overlap --pr` reads.
 
+# A live module tree
+
+`--site`, `--older`, and `--installed` also take a directory. The walk
+reads `Name/version.lua` and skips `.modulerc.lua` and `default`, so
+pass the `modules` root and not only `modules/all`. A file may be
+`module -t avail` or `module spider -t` output. `--older` is an EESSI
+version users load beside the site. Repeat `--installed` for the CPU
+tree and the accelerator compute-capability tree. ~--eessi-version
+2026.06~ drops an open software-layer easystack from another EESSI
+version. The pull-request match is still the filename that was added.
+
+`tests/gap_live` is a site tree, an older tree, a CPU target, an
+accelerator target, and one `module -t avail` file. CUDA is only in
+the accelerator tree. FFTW is only in the CPU tree. Pull request 1700
+adds LAMMPS to 2026.06. Pull request 1600 adds QuantumESPRESSO to
+2025.06, and `--eessi-version 2026.06` leaves that name as `no-recipe`.
+
+```bash
+eb-stack stack gap \
+  --site tests/gap_live/site/modules \
+  --site tests/gap_live/avail.txt \
+  --older tests/gap_live/older/modules \
+  --installed tests/gap_live/target-cpu/modules \
+  --installed tests/gap_live/target-cc90/modules \
+  --easyconfigs tests/gap_routes/easyconfigs \
+  --generation 2026.1 \
+  --eessi-version 2026.06 \
+  --exclude-file tests/gap_live/exclude.tsv \
+  --filter-deps binutils \
+  --open-layer tests/gap_live/open-layer.json \
+  --out-dir /tmp/gap-live
+```
+
+That command prints ~site`7 in-stack`2 filtered`1 open-layer`1 recipe=0
+open-easyconfigs`0 no-recipe`1 excluded=2~. The seven names are CUDA,
+FFTW, MATLAB, code-server, binutils, LAMMPS, and QuantumESPRESSO.
+
 # Check CUDA compute capabilities in an easystack plan
 
 What it does: `stack cuda-cc` reads one or more easystacks as a plan,
@@ -4982,10 +5019,12 @@ eb-stack stack easystack \
   [--option FILE.eb:OPTION=VALUE]...
 
 eb-stack stack gap \
-  --site SITE-MODULES.txt [--site OTHER.txt]... \
-  --installed INSTALLED.txt \
+  --site SITE-MODULES [--site OTHER]... \
+  [--older EESSI-2025.06-MODULES]... \
+  --installed CPU-MODULES [--installed ACCEL-CC-MODULES]... \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
   --generation 2026.1 \
+  [--eessi-version 2026.06] \
   [--exclude-file SITE-ONLY.tsv] \
   [--filter-deps NAME,NAME...] \
   [--open-layer OPEN.json]... [--open-easyconfigs OPEN.json]... \
@@ -5175,10 +5214,16 @@ headers of a previous list. Commented entries stay commented. A name no
 previous section files goes under `--unfiled`, whose default is
 `New in this generation`.
 
-`stack gap` compares the module listings a site provides (`--site`,
-repeatable, `Name/Version` or a bare name per line) with a stack's
-`--installed` list. A name the stack has is `in-stack` (matched without
-regard to case). Each other name takes the first route that applies:
+`stack gap` compares the modules users load with a target stack.
+`--site` is the site's live trees. `--older` is an older EESSI version
+loaded beside them (repeatable). At least one of the two is required.
+`--installed` is the target and repeats for the CPU module tree and an
+accelerator compute-capability tree. A directory is walked (`Name/version.lua`
+under `modules/all`, `Compiler`, and `MPI`; `.modulerc.lua` and `default`
+are not modules). A file is `module -t avail`, `module spider -t`, or
+`Name/version` lines. Versions are ignored. A name the target has is
+`in-stack` (matched without regard to case). Each other name takes the
+first route that applies:
 `excluded` (a `--exclude-file` line, `name<TAB>reason`, for licensed,
 vendor, conda, and portal software), `filtered` (`--filter-deps`, or
 `EASYBUILD_FILTER_DEPS` when the flag is absent), `open-layer` (an
@@ -5186,8 +5231,11 @@ vendor, conda, and portal software), `filtered` (`--filter-deps`, or
 `recipe` (the newest easyconfig on the `--generation` toolchains, on a
 toolchain whose version is that generation, or on the system toolchain),
 `open-easyconfigs` (an `--open-easyconfigs` pull request adds a recipe at
-that generation), or `no-recipe` (the newest easyconfig on any toolchain
-is named as the bump source). The command writes `gap.tsv`, one TSV per
+that generation; the match is the filename, and a toolchain version equal
+to `--generation` counts), or `no-recipe` (the newest easyconfig on any
+toolchain is named as the bump source). `--eessi-version` keeps
+`--open-layer` easystacks of that version; without it every easystack
+version counts. The command writes `gap.tsv`, one TSV per
 route (`site-only.tsv` for `excluded`, `bump.tsv` for `no-recipe`, and
 `in-stack.tsv`, `filtered.tsv`, `open-layer.tsv`, `recipe.tsv`,
 `open-easyconfigs.tsv`), `roots.txt` for `stack batch --roots-file` (the

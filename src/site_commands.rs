@@ -1074,10 +1074,12 @@ pub fn run_easyblock_reach(args: &EasyblockReachRequest) -> Result<EasyblockReac
 /// Release easyconfigs plus one tree per commit pin.
 /// Arguments for `stack gap`.
 pub struct StackGapRequest {
-    /// Site module listings (`Name/Version` lines or names). Repeatable.
+    /// Site module trees or listings. Repeatable.
     pub site: Vec<PathBuf>,
-    /// The stack's installed modules.
-    pub installed: PathBuf,
+    /// Older EESSI module trees or listings users load beside the site. Repeatable.
+    pub older: Vec<PathBuf>,
+    /// Target module trees or listings. Repeat for a CPU tree and an accelerator tree.
+    pub installed: Vec<PathBuf>,
     /// Easyconfig trees to find recipes in.
     pub easyconfigs: Vec<PathBuf>,
     /// Toolchain generation, `2026.1`.
@@ -1090,6 +1092,8 @@ pub struct StackGapRequest {
     pub open_layer: Vec<PathBuf>,
     /// Open easybuild-easyconfigs pull requests, `pr-overlap --pr` JSON. Repeatable.
     pub open_easyconfigs: Vec<PathBuf>,
+    /// Keep open software-layer easystacks of this EESSI version only, `2026.06`.
+    pub eessi_version: Option<String>,
     /// Output directory.
     pub out_dir: PathBuf,
 }
@@ -1128,16 +1132,32 @@ impl StackGapRun {
 /// without one).
 pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
     use std::collections::{BTreeMap, BTreeSet};
+    if args.site.is_empty() && args.older.is_empty() {
+        return Err(usage("pass at least one --site or --older module tree"));
+    }
+    if args.installed.is_empty() {
+        return Err(usage("pass at least one --installed target tree"));
+    }
     let mut site = BTreeSet::new();
     for path in &args.site {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("--site {}: not readable", path.display()))?;
-        site.extend(crate::gap::names_from_listing(&text));
+        site.extend(
+            crate::gap::names_from_module_source(path)
+                .with_context(|| format!("--site {}", path.display()))?,
+        );
     }
-    let stack = crate::gap::names_from_listing(
-        &std::fs::read_to_string(&args.installed)
-            .with_context(|| format!("--installed {}: not readable", args.installed.display()))?,
-    );
+    for path in &args.older {
+        site.extend(
+            crate::gap::names_from_module_source(path)
+                .with_context(|| format!("--older {}", path.display()))?,
+        );
+    }
+    let mut stack = BTreeSet::new();
+    for path in &args.installed {
+        stack.extend(
+            crate::gap::names_from_module_source(path)
+                .with_context(|| format!("--installed {}", path.display()))?,
+        );
+    }
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter = FilterDeps::parse(&filter_specs)
         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
@@ -1193,7 +1213,11 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
             "--open-easyconfigs",
         )?);
     }
-    let open_layer = crate::gap::carries_from_layer(&layer_prs);
+    let eessi_version = args
+        .eessi_version
+        .as_deref()
+        .filter(|version| !version.is_empty());
+    let open_layer = crate::gap::carries_from_layer_version(&layer_prs, eessi_version);
     let open_easyconfigs =
         crate::gap::carries_from_easyconfigs(&easy_prs, &args.generation, &members);
     let rows = crate::gap::gap(&crate::gap::GapInput {

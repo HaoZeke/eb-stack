@@ -380,19 +380,21 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_gap",
-            "Classify every package in site module listings against a stack's installed modules, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). Writes gap.tsv, one TSV per route, roots.txt and bump-sources.txt under out_dir.",
+            "Classify every package in site and older module trees against a target stack, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). A path may be an Lmod directory or module -t avail / module spider -t text. installed repeats for a CPU tree and an accelerator tree. eessi_version keeps open software-layer easystacks of that version. Writes gap.tsv, one TSV per route, roots.txt and bump-sources.txt under out_dir.",
             &[
-                ("site", "array"),
-                ("installed", "string"),
+                ("installed", "array"),
                 ("easyconfigs", "array"),
                 ("generation", "string"),
                 ("out_dir", "string"),
             ],
             &[
+                ("site", "array"),
+                ("older", "array"),
                 ("exclude_file", "string"),
                 ("filter_deps", "string"),
                 ("open_layer", "array"),
                 ("open_easyconfigs", "array"),
+                ("eessi_version", "string"),
             ],
         ),
         tool_with_optional(
@@ -3002,15 +3004,21 @@ fn filter_deps_argument(arguments: &Value) -> Vec<String> {
 }
 
 fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
+    let installed = optional_paths(arguments, "installed")?;
+    if installed.is_empty() {
+        return Err("argument installed requires at least one path".to_string());
+    }
     let run = crate::site_commands::run_stack_gap(&crate::site_commands::StackGapRequest {
-        site: path_array(arguments, "site")?,
-        installed: required_path(arguments, "installed")?,
+        site: optional_paths(arguments, "site")?,
+        older: optional_paths(arguments, "older")?,
+        installed,
         easyconfigs: path_array(arguments, "easyconfigs")?,
         generation: required_string(arguments, "generation")?,
         exclude_file: optional_path(arguments, "exclude_file"),
         filter_deps: filter_deps_argument(arguments),
         open_layer: optional_paths(arguments, "open_layer")?,
         open_easyconfigs: optional_paths(arguments, "open_easyconfigs")?,
+        eessi_version: optional_string(arguments, "eessi_version"),
         out_dir: required_path(arguments, "out_dir")?,
     })
     .map_err(workflow_error)?;

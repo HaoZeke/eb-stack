@@ -1071,26 +1071,33 @@ enum StackCommand {
     },
     /// What a site provides that a stack lacks, and the recipe that closes it.
     ///
-    /// Every package in the `--site` module listings is `in-stack` (the
-    /// stack's `--installed` list has it, matched without regard to case),
-    /// `recipe` (an easyconfig on the generation's toolchains or the system
-    /// toolchain exists; the newest is named), `no-recipe` (the newest
-    /// easyconfig on any toolchain is named as the bump source),
-    /// `filtered` (`--filter-deps`), `open-layer` (an open software-layer
-    /// pull request adds it), `open-easyconfigs` (an open easyconfigs pull
-    /// request adds a recipe at this generation), or `excluded`. Writes
+    /// Every package in the `--site` and `--older` module trees is
+    /// `in-stack` (a `--installed` tree has it, matched without regard to
+    /// case), `recipe` (an easyconfig on the generation's toolchains, on a
+    /// toolchain of that version, or on the system toolchain exists; the
+    /// newest is named), `no-recipe` (the newest easyconfig on any toolchain
+    /// is named as the bump source), `filtered` (`--filter-deps`),
+    /// `open-layer` (an open software-layer pull request adds it),
+    /// `open-easyconfigs` (an open easyconfigs pull request adds a recipe at
+    /// this generation), or `excluded`. A directory is an Lmod tree. A file
+    /// is `module -t avail`, `module spider -t`, or `Name/version`. Writes
     /// `gap.tsv`, one TSV per route, `roots.txt` for `stack batch
     /// --roots-file`, and `bump-sources.txt`.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack gap --site snellius-2025.txt --site snellius-2024.txt --installed eessi-2026.06-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --exclude-file site-only.tsv --filter-deps zlib,binutils --open-layer open-layer.json --open-easyconfigs open-easyconfigs.json --out-dir gap"
+        after_long_help = "Examples:\n  eb-stack stack gap --site /site/modules --older /eessi/2025.06/modules --installed /eessi/2026.06/zen4/modules --installed /eessi/2026.06/zen4/accel/nvidia/cc90/modules --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --eessi-version 2026.06 --exclude-file site-only.tsv --filter-deps zlib,binutils --open-layer open-layer.json --open-easyconfigs open-easyconfigs.json --out-dir gap"
     )]
     Gap {
-        /// Site module listing, `Name/Version` per line or a bare name. Repeatable.
-        #[arg(long = "site", required = true)]
+        /// Site module tree or listing. A directory is walked. Repeatable.
+        #[arg(long = "site")]
         site: Vec<PathBuf>,
-        /// The stack's installed modules.
-        #[arg(long)]
-        installed: PathBuf,
+        /// Older EESSI module tree or listing users load beside the site.
+        /// Repeatable.
+        #[arg(long = "older")]
+        older: Vec<PathBuf>,
+        /// Target module tree or listing. Repeat for the CPU tree and an
+        /// accelerator compute-capability tree. A directory is walked.
+        #[arg(long = "installed", required = true)]
+        installed: Vec<PathBuf>,
         /// Easyconfig tree to find recipes in. Repeatable.
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
@@ -1113,6 +1120,10 @@ enum StackCommand {
         /// when the trees have no recipe for it there. Repeatable.
         #[arg(long = "open-easyconfigs")]
         open_easyconfigs: Vec<PathBuf>,
+        /// Keep `--open-layer` easystacks of this EESSI version, `2026.06`.
+        /// Absent, every easystack version counts.
+        #[arg(long)]
+        eessi_version: Option<String>,
         /// Output directory.
         #[arg(long)]
         out_dir: PathBuf,
@@ -2788,6 +2799,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
         }
         StackCommand::Gap {
             site,
+            older,
             installed,
             easyconfigs,
             generation,
@@ -2795,11 +2807,13 @@ fn run_stack(command: StackCommand) -> Result<()> {
             filter_deps,
             open_layer,
             open_easyconfigs,
+            eessi_version,
             out_dir,
         } => {
             let run = eb_stack::site_commands::run_stack_gap(
                 &eb_stack::site_commands::StackGapRequest {
                     site,
+                    older,
                     installed,
                     easyconfigs,
                     generation,
@@ -2807,6 +2821,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     filter_deps,
                     open_layer,
                     open_easyconfigs,
+                    eessi_version,
                     out_dir,
                 },
             )?;

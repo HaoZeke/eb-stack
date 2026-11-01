@@ -77,3 +77,40 @@ request adds, not a dependency that line would build.
 ~eb_stack_gap~ writes the same files. ~open_layer~ and
 ~open_easyconfigs~ are arrays of the same pull-request JSON
 ~pr-overlap --pr~ reads.
+
+* A live module tree
+
+~--site~, ~--older~, and ~--installed~ also take a directory. The walk
+reads ~Name/version.lua~ and skips ~.modulerc.lua~ and ~default~, so
+pass the ~modules~ root and not only ~modules/all~. A file may be
+~module -t avail~ or ~module spider -t~ output. ~--older~ is an EESSI
+version users load beside the site. Repeat ~--installed~ for the CPU
+tree and the accelerator compute-capability tree. ~--eessi-version
+2026.06~ drops an open software-layer easystack from another EESSI
+version. The pull-request match is still the filename that was added.
+
+~tests/gap_live~ is a site tree, an older tree, a CPU target, an
+accelerator target, and one ~module -t avail~ file. CUDA is only in
+the accelerator tree. FFTW is only in the CPU tree. Pull request 1700
+adds LAMMPS to 2026.06. Pull request 1600 adds QuantumESPRESSO to
+2025.06, and ~--eessi-version 2026.06~ leaves that name as ~no-recipe~.
+
+#+begin_src bash
+eb-stack stack gap \
+  --site tests/gap_live/site/modules \
+  --site tests/gap_live/avail.txt \
+  --older tests/gap_live/older/modules \
+  --installed tests/gap_live/target-cpu/modules \
+  --installed tests/gap_live/target-cc90/modules \
+  --easyconfigs tests/gap_routes/easyconfigs \
+  --generation 2026.1 \
+  --eessi-version 2026.06 \
+  --exclude-file tests/gap_live/exclude.tsv \
+  --filter-deps binutils \
+  --open-layer tests/gap_live/open-layer.json \
+  --out-dir /tmp/gap-live
+#+end_src
+
+That command prints ~site=7 in-stack=2 filtered=1 open-layer=1 recipe=0
+open-easyconfigs=0 no-recipe=1 excluded=2~. The seven names are CUDA,
+FFTW, MATLAB, code-server, binutils, LAMMPS, and QuantumESPRESSO.

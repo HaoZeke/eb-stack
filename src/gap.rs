@@ -13,11 +13,13 @@ use crate::domain::Candidate;
 use crate::easystack::filename_toolchain;
 use crate::hierarchy::is_system_toolchain;
 use crate::jenkins::package_name;
-use crate::pr_overlap::{added_entries, FileChange, PrInput};
+use crate::pr_overlap::{self, added_entries, FileChange, PrInput};
 use crate::version::cmp_version;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 /// One site package and what closing it takes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -89,6 +91,46 @@ pub fn names_from_listing(text: &str) -> BTreeSet<String> {
         .map(|n| n.trim_end_matches(".lua").to_string())
         .filter(|n| !n.is_empty())
         .collect()
+}
+
+/// Package names from a listing file or an Lmod module tree.
+///
+/// A directory is walked: `Name/version.lua` under `modules/all`,
+/// `Compiler`, and `MPI` all count, and `.modulerc.lua` and `default` do
+/// not. A file is `module -t avail`, `module spider -t`, or the same
+/// `Name/version` lines as [`names_from_listing`].
+pub fn names_from_module_source(path: &Path) -> Result<BTreeSet<String>> {
+    if path.is_dir() {
+        names_from_module_tree(path).with_context(|| path.display().to_string())
+    } else {
+        let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+        Ok(names_from_live_listing(&text))
+    }
+}
+
+/// Names in `module -t avail` or `module spider -t` output.
+///
+/// Path headers, `(default)`, and a `Name: Name/version, ...` spider line
+/// are read. A plain `Name/version` or bare name is unchanged.
+pub fn names_from_live_listing(text: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in text.lines() {
+        for module in live_module_tokens(line) {
+            let Some(name) = module.split('/').next() else {
+                continue;
+            };
+            if !name.is_empty() {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn names_from_module_tree(root: &Path) -> std::io::Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    walk_module_tree(root, &mut names)?;
+    Ok(names)
 }
 
 /// One tab-separated file per route `stack gap` writes, besides `gap.tsv`.
@@ -315,16 +357,180 @@ fn remember(map: &mut BTreeMap<String, OpenCarry>, name: &str, file: &str, label
 /// the name as a dependency of some other line is not recorded: the route
 /// is the line the pull request adds.
 pub fn carries_from_layer(prs: &[PrInput]) -> BTreeMap<String, OpenCarry> {
+    carries_from_layer_version(prs, None)
+}
+
+/// [`carries_from_layer`], keeping easystacks of `eessi_version` only.
+///
+/// `None` keeps every easystack, which is what [`carries_from_layer`] does.
+/// `Some("2026.06")` leaves a 2025.06 pull request out of a 2026.06 gap.
+/// The match is still the filename the pull request adds.
+pub fn carries_from_layer_version(
+    prs: &[PrInput],
+    eessi_version: Option<&str>,
+) -> BTreeMap<String, OpenCarry> {
     let mut out = BTreeMap::new();
     for pr in prs {
         let label = format!("software-layer#{}", pr.number);
         for change in &pr.easystacks {
+            if let Some(version) = eessi_version {
+                if pr_overlap::eessi_version_of(&change.path).as_deref() != Some(version) {
+                    continue;
+                }
+            }
             for entry in added_entries(change) {
                 if let Some(name) = software_name(&entry.file) {
                     remember(&mut out, &name, &entry.file, &label);
                 }
             }
         }
+    }
+    out
+}
+
+fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result<()> {
+    let entries = std::fs::read_dir(dir).map_err(|error| io_at(dir, error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| io_at(dir, error))?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name.starts_with('.') || file_name == "__pycache__" {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| io_at(&path, error))?;
+        if file_type.is_symlink() {
+            match std::fs::metadata(&path) {
+                Ok(meta) if meta.is_dir() => continue,
+                Ok(_) => {}
+                Err(_) => continue,
+            }
+        } else if file_type.is_dir() {
+            walk_module_tree(&path, names)?;
+            continue;
+        }
+        if !is_module_file(&file_name) {
+            continue;
+        }
+        let Some(parent) = path.parent().and_then(|parent| parent.file_name()) else {
+            continue;
+        };
+        let software = parent.to_string_lossy();
+        if software.starts_with('.') {
+            continue;
+        }
+        let stem = file_name.strip_suffix(".lua").unwrap_or(&file_name);
+        if stem.is_empty() || stem == "default" {
+            continue;
+        }
+        names.insert(software.to_string());
+    }
+    Ok(())
+}
+
+fn io_at(path: &Path, error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+}
+
+fn is_module_file(name: &str) -> bool {
+    if name.starts_with('.') || name == "default" {
+        return false;
+    }
+    if let Some(stem) = name.strip_suffix(".lua") {
+        return !stem.is_empty() && stem != "default";
+    }
+    name.chars().any(|c| c.is_ascii_digit())
+        && !name.ends_with(".txt")
+        && !name.ends_with(".md")
+        && !name.ends_with(".json")
+        && !name.ends_with(".yml")
+        && !name.ends_with(".eb")
+}
+
+fn live_module_tokens(line: &str) -> Vec<String> {
+    let line = strip_ansi(line).replace("->", " ");
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') || line.ends_with(':') {
+        return Vec::new();
+    }
+    let body = if let Some((head, rest)) = line.split_once(':') {
+        if rest.contains('/') {
+            rest
+        } else if live_module_token(head).is_some() {
+            head
+        } else {
+            return Vec::new();
+        }
+    } else {
+        line
+    };
+    body.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(live_module_token)
+        .collect()
+}
+
+fn live_module_token(raw: &str) -> Option<String> {
+    let mut token = raw.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if let Some(index) = token.find('(') {
+        token = token[..index].trim();
+    }
+    token = token.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | ','));
+    token = token.trim_end_matches(':').trim().trim_matches('/');
+    if token.is_empty() || token.starts_with('.') {
+        return None;
+    }
+    let token = token.strip_suffix(".lua").unwrap_or(token);
+    let parts: Vec<&str> = token.split('/').filter(|part| !part.is_empty()).collect();
+    let (name, version) = match parts.as_slice() {
+        [name] => (*name, None),
+        [.., name, version] => (*name, Some(*version)),
+        _ => return None,
+    };
+    if !is_software_name(name) {
+        return None;
+    }
+    match version {
+        None => Some(name.to_string()),
+        Some(version) => {
+            let version = version.strip_suffix(".lua").unwrap_or(version);
+            if version.is_empty() || version.eq_ignore_ascii_case("default") {
+                return None;
+            }
+            Some(format!("{name}/{version}"))
+        }
+    }
+}
+
+fn is_software_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '.'))
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
     }
     out
 }
@@ -627,5 +833,80 @@ mod tests {
                 .collect(),
             file_list_truncated: false,
         }
+    }
+
+    #[test]
+    fn a_plain_listing_and_a_live_listing_name_the_same_packages() {
+        let text = "\
+BLAST+/2.16.0-gompi-2024a
+LAMMPS
+Julia/1.10.4
+# comment
+";
+        assert_eq!(names_from_listing(text), names_from_live_listing(text));
+    }
+
+    #[test]
+    fn avail_and_spider_text_drops_headers() {
+        let text = "\
+\u{1b}[1m/opt/modules/all:\u{1b}[0m
+zlib/1.3.1(default)
+GCCcore/14.2.0 (D)
+LAMMPS
+zlib: zlib/1.2.13, zlib/1.3.1
+Where:
+--------
+";
+        let names = names_from_live_listing(text);
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "zlib".to_string(),
+                "GCCcore".to_string(),
+                "LAMMPS".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_module_tree_walk_skips_modulerc_and_reads_the_hierarchy() {
+        let root = tempfile::tempdir().unwrap();
+        let all = root.path().join("all");
+        std::fs::create_dir_all(all.join("zlib")).unwrap();
+        std::fs::create_dir_all(all.join("LAMMPS")).unwrap();
+        std::fs::write(all.join("zlib/1.3.1.lua"), "").unwrap();
+        std::fs::write(all.join("zlib/.modulerc.lua"), "").unwrap();
+        std::fs::write(all.join(".modulerc.lua"), "").unwrap();
+        std::fs::write(all.join("LAMMPS/default"), "").unwrap();
+        std::fs::write(all.join("LAMMPS/2024.0.lua"), "").unwrap();
+        std::fs::write(all.join("README"), "not a module").unwrap();
+        let binutils = root.path().join("Compiler/GCCcore/13.2.0/binutils");
+        std::fs::create_dir_all(&binutils).unwrap();
+        std::fs::write(binutils.join("2.42.lua"), "").unwrap();
+        let names = names_from_module_tree(root.path()).unwrap();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "zlib".to_string(),
+                "LAMMPS".to_string(),
+                "binutils".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_older_eessi_pull_request_is_not_the_target_version() {
+        let current = pr_layer(1700, "  - LAMMPS-2025.0-foss-2026.1.eb\n");
+        let mut older = pr_layer(1600, "  - QuantumESPRESSO-7.3-foss-2025a.eb\n");
+        older.easystacks[0].path =
+            "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.1.1-2025a.yml".into();
+        let kept = carries_from_layer_version(&[current, older], Some("2026.06"));
+        assert!(kept.contains_key("lammps"));
+        assert!(!kept.contains_key("quantumespresso"));
+        let all = carries_from_layer_version(
+            &[pr_layer(1600, "  - QuantumESPRESSO-7.3-foss-2025a.eb\n")],
+            None,
+        );
+        assert!(all.contains_key("quantumespresso"));
     }
 }
