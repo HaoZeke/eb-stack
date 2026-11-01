@@ -1217,6 +1217,9 @@ pub struct StackBatchRequest {
     pub generation: String,
     /// `--filter-deps` as EESSI-extend sets it.
     pub filter_deps: Vec<String>,
+    /// `NAME` or `NAME@GENERATION` allowed a second version by the
+    /// `stack generation` second-version check `stack batch` runs.
+    pub allow_versions: Vec<String>,
     /// Most roots per pull request.
     pub size: usize,
     /// easybuild-easyconfigs checkout: a root not in the release tag gets a
@@ -1285,6 +1288,13 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
     if args.roots.is_empty() {
         return Err(usage("pass at least one --root or --roots-file entry"));
     }
+    // Parse the second-version allow list before any output is written, so a
+    // bad spec is a usage error with exit status 2.
+    let allow_versions = args
+        .allow_versions
+        .iter()
+        .map(|spec| crate::generation_lint::VersionAllow::parse(spec))
+        .collect::<Result<Vec<_>>>()?;
     let (robot, _) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
@@ -1446,6 +1456,19 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
         })
         .collect();
 
+    // The second-version check `stack generation` runs: a name with two
+    // versions in one toolchain generation is a warning unless the allow list
+    // accepts it. A version the generation table does not carry is skipped for
+    // the whole run. `existing` starts as the installed modules turned into
+    // easyconfig file names and grows with each batch's roots, so a pair split
+    // across two batches is reported once, in the later batch.
+    let generations = crate::generation_lint::GenerationTable::bundled()?;
+    let check_versions = generations.generations(&args.eessi_version).is_some();
+    let mut existing: BTreeSet<String> = installed
+        .iter()
+        .map(|module| format!("{}.eb", module.replacen('/', "-", 1)))
+        .collect();
+
     std::fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("create {}", args.out_dir.display()))?;
     let mut plan_md = format!(
@@ -1514,6 +1537,44 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             resources: args.oom_resources.clone(),
         })?
         .warnings;
+
+        // The second-version check this batch gets. `detected` ignores the
+        // allow list, so a pair the reviewer accepted still records a `versions`
+        // object in batch.json with a zero count; `warnings` are the pairs the
+        // allow list did not accept, which also head the pr-body and plan.md
+        // blocks. A batch with no second-version pair writes none of the three,
+        // so its outputs stay byte-for-byte what they were.
+        let (detected, warnings): (bool, Vec<String>) = if check_versions {
+            let lint = |allow: &[crate::generation_lint::VersionAllow]| -> Result<Vec<String>> {
+                let plan = crate::generation_lint::Plan {
+                    label: None,
+                    files: vec![crate::generation_lint::PlanFile {
+                        path: stacks
+                            .keys()
+                            .next()
+                            .cloned()
+                            .unwrap_or_else(|| args.eessi_version.clone()),
+                        added: batch.roots.clone(),
+                        kept: Vec::new(),
+                    }],
+                };
+                Ok(crate::generation_lint::lint_plan(
+                    &generations,
+                    &plan,
+                    Some(&args.eessi_version),
+                    &existing,
+                    allow,
+                )?
+                .into_iter()
+                .filter(|finding| finding.kind == crate::generation_lint::FindingKind::Versions)
+                .map(|finding| finding.message)
+                .collect())
+            };
+            (!lint(&[])?.is_empty(), lint(&allow_versions)?)
+        } else {
+            (false, Vec::new())
+        };
+        existing.extend(batch.roots.iter().cloned());
 
         let mut packages: Vec<LockPackage> = batch
             .modules
@@ -1613,25 +1674,39 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             }
             body.push_str("```\n");
         }
+        if !warnings.is_empty() {
+            body.push_str(
+                "\nSecond versions in one generation, from `eb-stack stack generation`:\n\n```\n",
+            );
+            for warning in &warnings {
+                body.push_str(warning);
+                body.push('\n');
+            }
+            body.push_str("```\n");
+        }
         crate::write_text(&dir.join("pr-body.md"), &body)?;
-        crate::write_json_pretty(
-            &dir.join("batch.json"),
-            &serde_json::json!({
-                "index": batch.index,
-                "title": title,
-                "roots": batch.roots,
-                "modules": batch.modules,
-                "pins": pins,
-                "known_failures": known,
-                "oom": {
-                    "warnings": oom.iter().map(crate::oom_profile::OomWarning::lines).collect::<Vec<_>>(),
-                    "count": oom.len(),
-                },
-                "easystacks": stacks.keys().collect::<Vec<_>>(),
-                "digest": digest,
-                "command": args.command_line,
-            }),
-        )?;
+        let mut record = serde_json::json!({
+            "index": batch.index,
+            "title": title,
+            "roots": batch.roots,
+            "modules": batch.modules,
+            "pins": pins,
+            "known_failures": known,
+            "oom": {
+                "warnings": oom.iter().map(crate::oom_profile::OomWarning::lines).collect::<Vec<_>>(),
+                "count": oom.len(),
+            },
+            "easystacks": stacks.keys().collect::<Vec<_>>(),
+            "digest": digest,
+            "command": args.command_line,
+        });
+        if detected {
+            record["versions"] = serde_json::json!({
+                "warnings": warnings,
+                "count": warnings.len(),
+            });
+        }
+        crate::write_json_pretty(&dir.join("batch.json"), &record)?;
         plan_md.push_str(&format!(
             "## {slug}\n\n{title}\n\n{} module(s) to build.\n\n",
             batch.modules.len()
@@ -1646,6 +1721,12 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             plan_md.push_str(&format!(
                 "{} out-of-memory warning(s); `pr-body.md` has the remedies.\n\n",
                 oom.len()
+            ));
+        }
+        if !warnings.is_empty() {
+            plan_md.push_str(&format!(
+                "{} second-version warning(s); `pr-body.md` has the details.\n\n",
+                warnings.len()
             ));
         }
     }

@@ -1,0 +1,15 @@
+easyblock = 'CMakeMake'
+
+name = 'GROMACS'
+version = '2026.2'
+
+homepage = 'https://www.gromacs.org'
+description = """Fixture GROMACS on foss-2026.1, the later of two versions in generation 2026.1."""
+
+toolchain = {'name': 'foss', 'version': '2026.1'}
+
+source_urls = ['https://ftp.gromacs.org/pub/gromacs/']
+sources = [SOURCELOWER_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'bio'

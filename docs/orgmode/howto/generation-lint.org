@@ -98,6 +98,17 @@ CMake 3.31.8 and 4.0.3 on GCCcore-14.3.0, does not fail a later pull
 request. To count easystacks the pull request does not touch, pass
 ~--deployed~ with the version's easystack directory.
 
+* The same check inside ~stack batch~
+
+~stack batch~ runs this second-version check over each pull request it
+plans. A batch that adds a version next to one an earlier batch of the
+same run adds, or one the installed list already carries, gets a "Second
+versions in one generation" block in its ~pr-body.md~ and a
+~versions~ object in its ~batch.json~; ~plan.md~ counts them per batch.
+These are warnings, so the batch still exits 0. Pass the same
+~--allow-versions NAME~ or ~--allow-versions NAME@GENERATION~ to
+~stack batch~ to accept a second version there.
+
 * Where the generations come from
 
 ~data/eessi-generations.toml~ lists each EESSI version's generations.

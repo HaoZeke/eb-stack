@@ -393,6 +393,15 @@ All notable changes to this project are documented here.
   pre-bot script or CI job can fail on a known failure with no remedy in
   place. Remedied hits never count, so a plan whose every hit is remedied
   exits 0. Without it the behavior and output are unchanged.
+- `stack batch` and the MCP tool `eb_stack_batch` run the `stack generation`
+  second-version check over each planned pull request: a name with two
+  versions in one toolchain generation, next to one an earlier batch of the
+  same run adds or the installed list already carries, is a warning in
+  `pr-body.md`, `batch.json` (`versions.warnings`, `versions.count`) and
+  `plan.md`. `--allow-versions NAME[@GENERATION]` (repeatable, `allow_versions`
+  for the MCP tool) accepts one, as it does for `stack generation`. The
+  warnings do not fail the batch; a bad spec is a usage error. The check is
+  skipped when the EESSI version is not in the generation table.
 - `stack bot-classify` and the MCP tool `eb_stack_bot_classify` read EESSI
   bot comments, `_bot_job<id>.result` files and job output, and classify
   each bot job as a real failure (with the campaign build-finding class),

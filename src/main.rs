@@ -942,6 +942,11 @@ struct BatchArgs {
     /// `--filter-deps` as EESSI-extend sets it. Absent, `EASYBUILD_FILTER_DEPS` is read.
     #[arg(long, value_delimiter = ',')]
     filter_deps: Vec<String>,
+    /// Accept a second version of `NAME`, or of `NAME@GENERATION`, in the
+    /// second-version check `stack generation` runs over each batch.
+    /// Repeatable.
+    #[arg(long = "allow-versions")]
+    allow_versions: Vec<String>,
     /// Most roots per pull request.
     #[arg(long, default_value_t = 3)]
     size: usize,
@@ -2714,6 +2719,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 easybuild_version,
                 generation,
                 filter_deps,
+                allow_versions,
                 size,
                 arch,
                 unsupported,
@@ -2751,6 +2757,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     easybuild_version,
                     generation,
                     filter_deps,
+                    allow_versions,
                     size,
                     easyconfigs_repo,
                     generated_at,

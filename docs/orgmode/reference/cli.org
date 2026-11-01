@@ -448,6 +448,7 @@ eb-stack stack batch \
   [--open-prs OPEN.json]... [--open-repo EESSI/software-layer] \
   --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 \
   [--filter-deps NAME,NAME...] \
+  [--allow-versions NAME@GENERATION]... \
   [--size 3] \
   [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
   [--generated-at 2026-10-29T00:00:00Z] \
@@ -648,7 +649,17 @@ remedy is already pinned or in the easyconfig is left out.
 The same plan is checked with ~stack oom~ and its warnings are written to
 ~pr-body.md~, ~batch.json~ (~oom.warnings~), and ~plan.md~. ~--oom-profile~
 and ~--oom-resources~ replace the bundled build-memory and bot-resource
-tables for those warnings.
+tables for those warnings. Each batch also runs the ~stack generation~
+second-version check: a name with two versions in one toolchain
+generation, next to one an earlier batch of the same run adds or the
+installed list already carries, is a warning. ~pr-body.md~ gets a "Second
+versions in one generation" block, ~batch.json~ records ~versions.warnings~
+and ~versions.count~, and ~plan.md~ counts them per batch, like the
+known-failure and out-of-memory warnings. ~--allow-versions NAME~ or
+~--allow-versions NAME@GENERATION~ accepts one, as it does for
+~stack generation~, and repeats. These are warnings, so a batch still
+exits 0; a bad ~--allow-versions~ spec is a usage error. When the EESSI
+version is not in the generation table, the check is skipped for the run.
 
 ** ~stack arch~
 
