@@ -44,6 +44,19 @@ fn llms_txt_matches_the_org_manual() {
     assert!(index.contains("skills/new-package/SKILL.md"));
     assert!(index.contains("AGENTS.md"));
 
+    // A page summary is already markdown, so summarize() must not re-read it
+    // as Org. A regression ran inline_plain() over the markdown and paired
+    // the equals inside one code span with the next equals in the line,
+    // dropping the equals that belongs in the cran-extend summary.
+    assert!(
+        index.contains("exts_defaultclass = 'RPackage'"),
+        "llms.txt dropped the equals in the cran-extend summary"
+    );
+    assert!(
+        !index.contains("exts_defaultclass 'RPackage'"),
+        "llms.txt still has the equals-dropping cran-extend summary"
+    );
+
     let full = std::fs::read_to_string(root.join("llms-full.txt")).expect("read llms-full.txt");
     assert!(full.contains("# Command-line reference"));
     assert!(full.contains("eb-stack package plan"));

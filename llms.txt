@@ -14,7 +14,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Run an annual toolchain-generation bump](https://eb-stack.rgoswami.me/howto/run-annual-bump.html.md): The annual workflow applies the canonical bump bundle to each maintained recipe, then drives every bundle through the same target-routed build campaign.
 - [Author a new package from conda-forge or Spack](https://eb-stack.rgoswami.me/howto/new-package.html.md): This workflow turns a foreign package recipe into a canonical manifest, planned Software Bill of Materials (SBOM), Resolvo profile locks, conventional EasyBuild recipes, and a persisted build-evaluation campaign.
 - [Site Python extras on EESSI](https://eb-stack.rgoswami.me/howto/pypi-extend.html.md): Turn a PyPI package or requirements.txt into an easyconfig that installs on top of an EasyBuild robot.
-- [Site R extras on EESSI](https://eb-stack.rgoswami.me/howto/cran-extend.html.md): Turn a Comprehensive R Archive Network (CRAN) DESCRIPTION, CRAN JSON object, or package list into a Bundle easyconfig with exts_defaultclass 'RPackage'.
+- [Site R extras on EESSI](https://eb-stack.rgoswami.me/howto/cran-extend.html.md): Turn a Comprehensive R Archive Network (CRAN) DESCRIPTION, CRAN JSON object, or package list into a Bundle easyconfig with exts_defaultclass = 'RPackage'.
 - [eOn on EESSI with EESSI-extend and eb --robot](https://eb-stack.rgoswami.me/howto/eon-eessi-extend.html.md): Install eOn, and the dependencies the European Environment for Scientific Software Installations (EESSI) lacks, into a user or project prefix on top of EESSI.
 - [Spack on EESSI with EESSI installs as externals](https://eb-stack.rgoswami.me/howto/spack-externals-eessi.html.md): Concretize a Spack package on top of installs that already have an easyconfig beside them.
 - [Repair a failed campaign](https://eb-stack.rgoswami.me/howto/repair-campaign.html.md): Use this procedure when eb-stack campaign run records a failed attempt.
@@ -52,7 +52,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [From recipe to verified package](https://eb-stack.rgoswami.me/explanation/lifecycle.html.md): The lifecycle has three claims. Treating them as one is the main source of incorrect status reports.
 - [Architecture](https://eb-stack.rgoswami.me/explanation/architecture.html.md): eb-stack separates package intent, dependency selection, recipe emission, and empirical build evidence.
 - [The optimization model](https://eb-stack.rgoswami.me/explanation/optimization-model.html.md): eb-stack uses resolvo, a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) solver, as its feasibility core.
-- [The parser approach](https://eb-stack.rgoswami.me/explanation/parser-approach.html.md): An EasyBuild easyconfig (.eb) is, syntactically, a Python source file.
+- [The parser approach](https://eb-stack.rgoswami.me/explanation/parser-approach.html.md): An EasyBuild easyconfig (*.eb) is, syntactically, a Python source file.
 - [Reproduction fidelity and limitations](https://eb-stack.rgoswami.me/explanation/fidelity.html.md): eb-stack separates deterministic package planning from empirical build evidence.
 - [From one easystack line to a build set](https://eb-stack.rgoswami.me/explanation/pr-overlap.html.md): eb-stack pr-overlap lists the modules a pull request would build, starting from the easystack lines it adds.
 - [What an in-place patch forces a rebuild of](https://eb-stack.rgoswami.me/explanation/rebuild-set.html.md): The patch keeps the easyconfig filename and the version.

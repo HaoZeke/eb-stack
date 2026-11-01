@@ -296,9 +296,14 @@ def summarize(body: str) -> str:
                 break
             continue
         paragraph.append(line.strip())
-    text = inline_plain(" ".join(paragraph))
+    # body is already markdown, so strip markdown spans rather than org
+    # markup; inline_plain reads = and ~ as org verbatim and would pair a
+    # delimiter from inside a code span with one in a later span.
+    text = " ".join(paragraph)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", text)
     text = text.replace("`", "")
+    text = " ".join(text.split())
     if ". " in text:
         first = text.split(". ", 1)[0]
         if len(first) >= 40:

@@ -4840,7 +4840,8 @@ eb-stack stack known-failures \
   [--easyconfigs TREE]... \
   [--installed INSTALLED.txt] \
   [--known-failures TABLE.toml] \
-  [--eessi-version 2025.06] [--easybuild-version 5.4.0]
+  [--eessi-version 2025.06] [--easybuild-version 5.4.0] \
+  [--strict]
 
 eb-stack stack oom \
   --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
@@ -5128,7 +5129,7 @@ them, for the second-version check. `--allow-versions` takes `NAME` or
 `data/eessi-generations.toml`.
 
 The generation the easystack is for is the token after
-`eb-<X.Y.Z>-`, up to the next `-` or the `.yml`, as in `-2025b.yml` or
+`eb-<X.Y.Z>-`, up to the next `-` or the `.yml` or `.yaml`, as in `-2025b.yml` or
 `-2023a-CUDA.yml`. It counts only when it is a generation the table
 knows. An added entry whose own generation is carried by the EESSI
 version but differs from the file name's generation is a `filename`
