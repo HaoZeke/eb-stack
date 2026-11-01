@@ -899,6 +899,15 @@ struct SolveArgs {
     /// Markdown diff of this solve against the baseline.
     #[arg(long)]
     stack_diff_out: Option<PathBuf>,
+    /// Graphviz drawing of the solved dependency DAG.
+    ///
+    /// A node is `name/version` plus the toolchain, and the versionsuffix
+    /// when the recipe has one. An edge points from a package to a
+    /// dependency it selected and is labelled with that requirement; a
+    /// builddependency is dashed. A `.svg` or `.png` path is rendered with
+    /// `dot`. Any other suffix is the DOT source.
+    #[arg(long)]
+    dot_out: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -2483,6 +2492,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 jenkins_gpu_systems,
                 jenkins_roots_only,
                 stack_diff_out,
+                dot_out,
             } = *args;
             for path in &roots_from_build_list {
                 let text = std::fs::read_to_string(path)
@@ -2637,11 +2647,18 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     error
                 }
             })?;
+            if let Some(path) = &dot_out {
+                eb_stack::write_solved_dependency_graph(&lock, &lock_out, path)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+            }
             println!(
                 "lock={} packages={}",
                 lock_out.display(),
                 lock.packages.len()
             );
+            if let Some(path) = &dot_out {
+                println!("dot={}", path.display());
+            }
             Ok(())
         }
         StackCommand::Order {

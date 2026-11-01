@@ -387,6 +387,12 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack solve --dot-out` and the MCP field `dot_out` write the solved
+  dependency DAG. A node is `name/version` plus the toolchain, and the
+  versionsuffix when the recipe has one. An edge points from a package to a
+  dependency it selected and is labelled with the requirement; a
+  builddependency is dashed. A `.svg` or `.png` path is rendered with
+  Graphviz `dot`. Any other suffix is the DOT source.
 - `stack generation` and `eb_stack_generation` check each added entry's
   toolchain generation against the generation the easystack file name names,
   the token after `eb-<X.Y.Z>-` such as `-2025b.yml`. An entry whose
