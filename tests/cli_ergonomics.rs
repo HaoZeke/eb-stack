@@ -241,6 +241,76 @@ fn flag_is_described(lines: &[&str], index: usize) -> bool {
         && !following_trim.starts_with("-h,")
 }
 
+/// A help-example token that names a stand-in rather than a file in this tree.
+fn example_placeholder(token: &str) -> bool {
+    if token.starts_with('<') && token.ends_with('>') && token.len() > 2 {
+        return true;
+    }
+    let bare = token.trim_end_matches('/');
+    !bare.is_empty()
+        && bare
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+}
+
+/// `foss/2026.1` and `GCCcore/15.2.0` are toolchain specs. `x86_64/amd/zen4`
+/// and `aarch64/a64fx` are architecture ids.
+fn example_spec(token: &str) -> bool {
+    let Some((head, tail)) = token.split_once('/') else {
+        return false;
+    };
+    if head.chars().any(|c| c.is_ascii_lowercase())
+        && tail.chars().next().is_some_and(|c| c.is_ascii_digit())
+    {
+        return !tail.contains('.');
+    }
+    matches!(head, "x86_64" | "aarch64" | "riscv64" | "amd" | "generic")
+}
+
+fn example_path_token(token: &str) -> bool {
+    const EXTS: &[&str] = &[
+        ".txt", ".tsv", ".yml", ".yaml", ".eb", ".json", ".toml", ".md", ".py", ".list", ".org",
+    ];
+    if token.starts_with('-') || token.starts_with('$') || token.starts_with('~') {
+        return false;
+    }
+    if example_placeholder(token) || example_spec(token) {
+        return false;
+    }
+    token.contains('/') || EXTS.iter().any(|ext| token.ends_with(ext))
+}
+
+#[test]
+fn stack_gap_help_example_paths_exist() {
+    let text = help_text(&["stack".into(), "gap".into()]);
+    let examples = text
+        .split_once("Examples:")
+        .expect("stack gap help has an example")
+        .1;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut checked = 0;
+    for raw in examples.split_whitespace() {
+        let token = raw.trim_matches(|c| matches!(c, '\'' | '"' | ','));
+        if !example_path_token(token) {
+            continue;
+        }
+        // `COMMIT=DIR` names the directory after `=`.
+        let path = token.split_once('=').map(|(_, dir)| dir).unwrap_or(token);
+        if example_placeholder(path) || !example_path_token(path) {
+            continue;
+        }
+        assert!(
+            root.join(path).exists(),
+            "stack gap --help names {path}, which is not in the tree"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "stack gap --help example should name a path that exists"
+    );
+}
+
 #[test]
 fn every_command_help_has_an_example_and_describes_every_flag() {
     let commands = leaves();
