@@ -6338,7 +6338,10 @@ do not fit one line they are written one per `configopts +=` line.
 expression builds it, and adds one `configopts +=` line per option after its
 last statement, every layer's list in layer order. A bump also writes a
 layer's `dependencies.requirements` with the `build` role into
-`builddependencies` when the recipe does not name them, and a layer
+`builddependencies`. A requirement whose roles are only build or test
+replaces a runtime role the source recipe carried, and the tuple moves out
+of `dependencies`. `source_checksums` on the layer, one digest per source,
+is the bump checksum when the command line does not pass one. A layer
 parameter replaces the recipe's whole value, `+=` continuations included.
 
 EasyBuild finds a software-specific easyblock by name, and its own easyconfigs

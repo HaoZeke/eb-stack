@@ -6,6 +6,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A package layer's `source_checksums` (one SHA-256 per plan source) is
+  applied to the plan and used as the bump checksum when `--source-checksum`
+  is absent. The command-line digest still wins. SeisSol's layer records the
+  recursive git archive digest and marks Eigen build-only; a bump moves an
+  existing runtime Eigen tuple into `builddependencies`.
+  `-DCMAKE_BUILD_TYPE=Release` stays in the SeisSol config options.
 - Verification commands and the doctor `eb --version` probe set
   `EASYBUILD_TMPDIR` and the target's EasyBuild environment, the same workload
   prefix a build uses. Compiler-wrapper scrubbing is unchanged.

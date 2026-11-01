@@ -920,3 +920,88 @@ fn a_requirement_defaults_to_the_run_role() {
     let requirement = &layer.dependencies.as_ref().unwrap().requirements[0];
     assert_eq!(requirement.roles, vec![DependencyRole::Run]);
 }
+
+#[test]
+fn source_checksums_zip_onto_every_plan_source() {
+    let digest_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let digest_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest_a}\", \"{digest_b}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources = vec![
+        eb_stack::package::SourceArtifact {
+            filename: Some("a.tar.gz".into()),
+            ..eb_stack::package::SourceArtifact::default()
+        },
+        eb_stack::package::SourceArtifact {
+            filename: Some("b.tar.gz".into()),
+            ..eb_stack::package::SourceArtifact::default()
+        },
+    ];
+    apply_package_layers(&mut plan, &[config]).expect("zip checksums");
+    assert_eq!(plan.sources[0].sha256.as_deref(), Some(digest_a));
+    assert_eq!(plan.sources[1].sha256.as_deref(), Some(digest_b));
+}
+
+#[test]
+fn source_checksums_count_must_match_plan_sources() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources = vec![
+        eb_stack::package::SourceArtifact::default(),
+        eb_stack::package::SourceArtifact::default(),
+    ];
+    let error = apply_package_layers(&mut plan, &[config]).expect_err("count mismatch");
+    assert!(
+        error.to_string().contains("source_checksums has 1"),
+        "{error}"
+    );
+}
+
+#[test]
+fn source_checksums_reject_a_short_digest() {
+    let error =
+        PackageConfigLayer::from_toml_str("schema_version = 1\nsource_checksums = [\"abcd\"]\n")
+            .expect_err("short digest");
+    assert!(
+        error.to_string().contains("not a SHA-256") && error.to_string().contains("abcd"),
+        "{error}"
+    );
+}
+
+#[test]
+fn seissol_layer_records_the_archive_digest_and_eigen_build_role() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let layer = PackageConfigLayer::from_path(&root.join("examples/packages/seissol.toml"))
+        .expect("seissol layer");
+    assert_eq!(
+        layer.source_checksums,
+        ["a0dd4f33d7d72c4a5eb6f01f0a96bc410af20c95a496e5cf1532ee8a20561612"]
+    );
+    let options = layer
+        .build
+        .as_ref()
+        .and_then(|build| build.config_options.as_ref())
+        .expect("config options");
+    assert!(
+        options
+            .iter()
+            .any(|option| option == "-DCMAKE_BUILD_TYPE=Release"),
+        "Release stays in the config options: {options:?}"
+    );
+    let eigen = layer
+        .dependencies
+        .as_ref()
+        .expect("dependencies")
+        .requirements
+        .iter()
+        .find(|requirement| requirement.name == "Eigen")
+        .expect("Eigen");
+    assert_eq!(eigen.roles, vec![DependencyRole::Build]);
+}

@@ -1173,12 +1173,24 @@ pub fn prepare_package_bump(
         &resolved,
         &request.toolchain,
         request.version.as_deref(),
-        request.source_checksum.as_deref(),
+        resolved_bump_source_checksum(request),
     );
     pin_version_derived_dependencies(&mut plan, request, &resolved);
     apply_dependency_overrides(&mut plan, &request.overrides);
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    // Layers write source_checksums onto every source. A CLI digest is the
+    // later word and must win on the first source, which is what emit rewrites.
+    if let Some(checksum) = request.source_checksum.as_deref() {
+        if let Some(source) = plan.sources.first_mut() {
+            source.sha256 = Some(checksum.to_string());
+        } else {
+            plan.sources.push(SourceArtifact {
+                sha256: Some(checksum.to_string()),
+                ..SourceArtifact::default()
+            });
+        }
+    }
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
@@ -1500,7 +1512,7 @@ pub fn complete_package_bump_with_options(
             )
             .map(|hierarchy| hierarchy.members)
             .unwrap_or_default(),
-            source_checksum: request.source_checksum.clone(),
+            source_checksum: resolved_bump_source_checksum(request).map(str::to_string),
         },
     )
     .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
@@ -1544,7 +1556,7 @@ pub fn complete_package_bump_with_options(
         .iter()
         .filter(|dependency| dependency.build)
     {
-        result.text = crate::eb_emit::insert_build_dependency(
+        result.text = crate::eb_emit::move_dependency_to_build(
             &result.text,
             &dependency.name,
             &dependency.version,
@@ -1796,6 +1808,18 @@ pub fn plan_package_bump_with(
     let mut candidates = tree.candidates;
     candidates.extend(options.extra_candidates.iter().cloned());
     complete_package_bump_with_options(request, plan, &candidates, &stack_policy, options)
+}
+
+/// CLI checksum wins. Otherwise the last package layer that lists digests
+/// supplies the first one, which is the archive a single-source bump injects.
+fn resolved_bump_source_checksum(request: &BumpPackageRequest) -> Option<&str> {
+    request.source_checksum.as_deref().or_else(|| {
+        request
+            .package_layers
+            .iter()
+            .rev()
+            .find_map(|layer| layer.source_checksums.first().map(String::as_str))
+    })
 }
 
 fn package_plan_from_easyconfig(

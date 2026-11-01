@@ -1299,3 +1299,179 @@ fn version_bump_does_not_invent_mpi_test_ranks_off_policy() {
         "only overlay-policy names get the GPU MPI test env:\n{text}"
     );
 }
+
+fn synthetic_bump(
+    source_text: &str,
+    source_name: &str,
+    version: Option<&str>,
+    source_checksum: Option<&str>,
+    layer: &str,
+    robot_files: &[(&str, &str)],
+) -> eb_stack::PackageBundle {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join(source_name);
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(&source, source_text).expect("source recipe");
+    for (name, text) in robot_files {
+        fs::write(robot.join(name), text).expect("robot recipe");
+    }
+    let config_path = temp.path().join("layer.toml");
+    fs::write(&config_path, layer).expect("layer");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: version.map(str::to_string),
+        source_checksum: source_checksum.map(str::to_string),
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+    })
+    .expect("bump")
+}
+
+#[test]
+fn version_bump_uses_the_layer_source_checksum_when_the_cli_omits_one() {
+    let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let bundle = synthetic_bump(
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'tools'\n",
+        "Alpha-1.0-foss-2023a.eb",
+        Some("1.1"),
+        None,
+        &format!("schema_version = 1\nsource_checksums = [\"{digest}\"]\n"),
+        &[],
+    );
+    assert_eq!(
+        bundle
+            .plan
+            .sources
+            .first()
+            .and_then(|source| source.sha256.as_deref()),
+        Some(digest)
+    );
+    assert!(
+        bundle.easyconfigs[0].text.contains(digest),
+        "emitted recipe must carry the layer digest:\n{}",
+        bundle.easyconfigs[0].text
+    );
+}
+
+#[test]
+fn version_bump_cli_source_checksum_wins_over_the_layer() {
+    let layer = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let cli = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let bundle = synthetic_bump(
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']\n\
+         moduleclass = 'tools'\n",
+        "Alpha-1.0-foss-2023a.eb",
+        Some("1.1"),
+        Some(cli),
+        &format!("schema_version = 1\nsource_checksums = [\"{layer}\"]\n"),
+        &[],
+    );
+    assert_eq!(
+        bundle
+            .plan
+            .sources
+            .first()
+            .and_then(|source| source.sha256.as_deref()),
+        Some(cli)
+    );
+    assert!(
+        bundle.easyconfigs[0].text.contains(cli),
+        "{}",
+        bundle.easyconfigs[0].text
+    );
+    assert!(
+        !bundle.easyconfigs[0].text.contains(layer),
+        "the layer digest must not replace the command-line one:\n{}",
+        bundle.easyconfigs[0].text
+    );
+}
+
+#[test]
+fn version_bump_moves_a_build_only_requirement_out_of_dependencies() {
+    let eigen = "\
+name = 'Eigen'\nversion = '3.4.0'\n\
+homepage = 'https://example.invalid/'\ndescription = 'Eigen 3.4'\n\
+toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+moduleclass = 'lib'\n";
+    let bundle = synthetic_bump(
+        "easyblock = 'CMakeMake'\nname = 'SeisSol'\nversion = '1.1.4'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['seissol-1.1.4.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('Eigen', '3.4.0'),\n    ('HDF5', '1.14.0'),\n]\n\
+         moduleclass = 'geo'\n",
+        "SeisSol-1.1.4-foss-2023a.eb",
+        None,
+        None,
+        "schema_version = 1\n\n[[dependencies.requirements]]\n\
+         name = \"Eigen\"\nconstraint = \">=3.4,<5\"\nroles = [\"build\"]\n\
+         [[dependencies.requirements]]\nname = \"HDF5\"\n",
+        &[
+            ("Eigen-3.4.0-GCCcore-14.2.0.eb", eigen),
+            (
+                "HDF5-1.14.0-gompi-2025a.eb",
+                "name = 'HDF5'\nversion = '1.14.0'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'HDF5'\n\
+                 toolchain = {'name': 'gompi', 'version': '2025a'}\n\
+                 moduleclass = 'data'\n",
+            ),
+        ],
+    );
+    let eigen_lock = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Eigen")
+        .expect("Eigen locked");
+    assert!(eigen_lock.build, "Eigen must be build-only: {eigen_lock:?}");
+    assert!(
+        eigen_lock.version.starts_with("3.4"),
+        "{}",
+        eigen_lock.version
+    );
+    let text = &bundle.easyconfigs[0].text;
+    let build = text.split("\ndependencies =").next().unwrap_or(text);
+    assert!(
+        build.contains("builddependencies") && build.contains("Eigen"),
+        "Eigen belongs in builddependencies:\n{text}"
+    );
+    let runtime = text.split("builddependencies").nth(1).unwrap_or(text);
+    let runtime = runtime.split("dependencies =").nth(1).unwrap_or("");
+    assert!(
+        !runtime
+            .split("moduleclass")
+            .next()
+            .unwrap_or(runtime)
+            .contains("Eigen"),
+        "Eigen must leave the runtime list:\n{text}"
+    );
+    assert!(
+        text.contains("HDF5"),
+        "a runtime requirement stays in dependencies:\n{text}"
+    );
+}

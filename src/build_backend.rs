@@ -254,6 +254,7 @@ pub fn build_requirement_layer(
             ..Default::default()
         }),
         profiles: Vec::new(),
+        source_checksums: Vec::new(),
     };
     Ok((Some(layer), mapped))
 }

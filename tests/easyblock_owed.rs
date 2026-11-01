@@ -178,6 +178,12 @@ fn a_layer_that_ships_the_class_owes_nothing() {
         Some("CMakeMake"),
         vec![profile("default", true, &[])],
     );
+    // The layer names one digest for the recursive git archive. The synthetic
+    // plan has to have that one source or the checksums cannot zip onto it.
+    plan.sources.push(eb_stack::package::SourceArtifact {
+        filename: Some("SeisSol-1.3.2.tar.xz".into()),
+        ..eb_stack::package::SourceArtifact::default()
+    });
     apply_package_layers(&mut plan, &layers).expect("apply SeisSol layers");
 
     assert_eq!(plan.build.easyblock.as_deref(), Some("EB_SeisSol"));

@@ -36,6 +36,12 @@ pub struct PackageConfigLayer {
     /// Profile definitions, matched to existing profiles by name.
     #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
+    /// SHA-256 digests for source artifacts, in source order. Empty leaves the
+    /// plan's checksums alone. A non-empty list must name one digest per plan
+    /// source. A bump uses the last layer's first digest when the command line
+    /// does not pass one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_checksums: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -383,6 +389,11 @@ impl PackageConfigLayer {
         for profile in &self.profiles {
             validate_easyconfig_parameter_names(&profile.easyconfig_parameters)?;
         }
+        for checksum in &self.source_checksums {
+            if !is_sha256_hex(checksum) {
+                return Err(PackageConfigError::InvalidSourceChecksum(checksum.clone()));
+            }
+        }
         if let Some(dependencies) = &self.dependencies {
             for requirement in &dependencies.requirements {
                 if requirement.name.trim().is_empty() {
@@ -512,6 +523,7 @@ pub fn apply_package_layers(
                 ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
             }
         }
+        apply_layer_source_checksums(plan, &layer.source_checksums)?;
         for patch in &layer.profiles {
             let existing_index = plan
                 .profiles
@@ -631,9 +643,20 @@ fn ensure_dependency_requirement(
         if let Some(constraint) = &requirement.constraint {
             dependency.constraint = Some(constraint.clone());
         }
-        for role in &requirement.roles {
-            if !dependency.roles.contains(role) {
-                dependency.roles.push(*role);
+        // A build-only or test-only requirement is the whole role set. Merging
+        // it onto a runtime edge would leave the tuple in `dependencies`.
+        let build_only = !requirement.roles.is_empty()
+            && requirement
+                .roles
+                .iter()
+                .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
+        if build_only {
+            dependency.roles = requirement.roles.clone();
+        } else {
+            for role in &requirement.roles {
+                if !dependency.roles.contains(role) {
+                    dependency.roles.push(*role);
+                }
             }
         }
         dependency.condition = condition;
@@ -656,6 +679,29 @@ fn ensure_dependency_requirement(
         solver_excluded: false,
         provenance: Vec::new(),
     });
+}
+
+fn is_sha256_hex(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn apply_layer_source_checksums(
+    plan: &mut PackagePlan,
+    checksums: &[String],
+) -> Result<(), PackageConfigError> {
+    if checksums.is_empty() {
+        return Ok(());
+    }
+    if checksums.len() != plan.sources.len() {
+        return Err(PackageConfigError::SourceChecksumCount {
+            expected: plan.sources.len(),
+            actual: checksums.len(),
+        });
+    }
+    for (source, checksum) in plan.sources.iter_mut().zip(checksums) {
+        source.sha256 = Some(checksum.clone());
+    }
+    Ok(())
 }
 
 fn requirement_condition(features: &BTreeMap<String, bool>) -> ConditionExpr {
@@ -751,6 +797,17 @@ pub enum PackageConfigError {
     /// what `--include-easyblocks` and the easyblocks package both expect.
     #[error("easyblock filename must be a bare module name ending in .py: {0:?}")]
     InvalidEasyblockFilename(String),
+    /// A `source_checksums` entry is not a SHA-256 hex digest.
+    #[error("source checksum {0:?} is not a SHA-256 hex digest")]
+    InvalidSourceChecksum(String),
+    /// `source_checksums` must name one digest per plan source.
+    #[error("source_checksums has {actual} digest(s), plan has {expected} source(s)")]
+    SourceChecksumCount {
+        /// Sources on the plan.
+        expected: usize,
+        /// Digests the layer listed.
+        actual: usize,
+    },
     /// A profile inherits from one that does not exist in the plan.
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent {

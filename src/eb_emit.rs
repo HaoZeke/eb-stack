@@ -448,6 +448,155 @@ pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<S
     })
 }
 
+/// Move `name` from the runtime `dependencies` list into `builddependencies`.
+///
+/// [`insert_build_dependency`] leaves a tuple that is already in the recipe
+/// where it stands. A build-only requirement has to leave `dependencies`
+/// first, then land on `builddependencies` at the version the solve selected.
+pub fn move_dependency_to_build(src: &str, name: &str, version: &str) -> Result<String, EmitError> {
+    let Some((open, close)) = find_list_span(src, "dependencies")? else {
+        return insert_build_dependency(src, name, version);
+    };
+    let body = &src[open..close];
+    let Some(stripped) = strip_named_tuple(body, name) else {
+        return insert_build_dependency(src, name, version);
+    };
+    let text = format!("{}{}{}", &src[..open], stripped, &src[close..]);
+    insert_build_dependency(&text, name, version)
+}
+
+/// Drop the first tuple whose name is `name` from a dependency-list body.
+fn strip_named_tuple(body: &str, name: &str) -> Option<String> {
+    let (start, end) = named_tuple_span(body, name)?;
+    let bytes = body.as_bytes();
+    let mut drop_from = start;
+    let mut drop_to = end;
+    let mut cursor = end;
+    while cursor < bytes.len() && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    if cursor < bytes.len() && bytes[cursor] == b',' {
+        drop_to = cursor + 1;
+        if drop_to < bytes.len() && bytes[drop_to] == b'\n' {
+            drop_to += 1;
+        }
+        let mut indent = start;
+        while indent > 0 && matches!(bytes[indent - 1], b' ' | b'\t') {
+            indent -= 1;
+        }
+        if indent < start && indent > 0 && bytes[indent - 1] == b'\n' {
+            drop_from = indent;
+        }
+    } else {
+        let mut indent = start;
+        while indent > 0 && matches!(bytes[indent - 1], b' ' | b'\t') {
+            indent -= 1;
+        }
+        if indent > 0 && bytes[indent - 1] == b',' {
+            drop_from = indent - 1;
+            while drop_from > 0 && matches!(bytes[drop_from - 1], b' ' | b'\t') {
+                drop_from -= 1;
+            }
+        } else if indent < start && indent > 0 && bytes[indent - 1] == b'\n' {
+            drop_from = indent;
+            if drop_to < bytes.len() && bytes[drop_to] == b'\n' {
+                drop_to += 1;
+            }
+        }
+    }
+    let mut out = String::with_capacity(body.len());
+    out.push_str(&body[..drop_from]);
+    out.push_str(&body[drop_to..]);
+    Some(out)
+}
+
+fn named_tuple_span(body: &str, name: &str) -> Option<(usize, usize)> {
+    let single = format!("'{name}'");
+    let double = format!("\"{name}\"");
+    let bytes = body.as_bytes();
+    let mut index = 0;
+    let mut in_string: Option<u8> = None;
+    let mut in_comment = false;
+    while index < bytes.len() {
+        let character = bytes[index];
+        if in_comment {
+            if character == b'\n' {
+                in_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(quote) = in_string {
+            if character == b'\\' {
+                index += 2;
+                continue;
+            }
+            if character == quote {
+                in_string = None;
+            }
+            index += 1;
+            continue;
+        }
+        match character {
+            b'\'' | b'"' => {
+                in_string = Some(character);
+                index += 1;
+            }
+            b'#' => {
+                in_comment = true;
+                index += 1;
+            }
+            b'(' => {
+                let rest = body[index + 1..].trim_start();
+                if rest.starts_with(&single) || rest.starts_with(&double) {
+                    let mut depth = 0i32;
+                    let mut cursor = index;
+                    let mut inner_string: Option<u8> = None;
+                    let mut inner_comment = false;
+                    while cursor < bytes.len() {
+                        let next = bytes[cursor];
+                        if inner_comment {
+                            if next == b'\n' {
+                                inner_comment = false;
+                            }
+                            cursor += 1;
+                            continue;
+                        }
+                        if let Some(quote) = inner_string {
+                            if next == b'\\' {
+                                cursor += 2;
+                                continue;
+                            }
+                            if next == quote {
+                                inner_string = None;
+                            }
+                            cursor += 1;
+                            continue;
+                        }
+                        match next {
+                            b'\'' | b'"' => inner_string = Some(next),
+                            b'#' => inner_comment = true,
+                            b'(' => depth += 1,
+                            b')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    return Some((index, cursor + 1));
+                                }
+                            }
+                            _ => {}
+                        }
+                        cursor += 1;
+                    }
+                    return None;
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 /// Append `line` (an indented entry ending in a newline) to the list whose
 /// body spans `open..close`, keeping the entries comma-separated: a
 /// single-line `[('binutils', '2.45')]` gains a comma and a line break first.
@@ -2092,6 +2241,34 @@ mod tests {
             name: "foss".into(),
             version: ver.into(),
         }
+    }
+
+    #[test]
+    fn move_dependency_to_build_leaves_the_other_runtime_tuples() {
+        let src = "\
+dependencies = [
+    ('Python', '3.11.3'),
+    ('Eigen', '3.4.0'),
+    ('HDF5', '1.14.0'),
+]
+moduleclass = 'geo'
+";
+        let out = move_dependency_to_build(src, "Eigen", "3.4.0").expect("move");
+        assert!(
+            out.contains("builddependencies = [") && out.contains("('Eigen', '3.4.0')"),
+            "{out}"
+        );
+        let runtime = out
+            .split("builddependencies")
+            .nth(1)
+            .expect("runtime section")
+            .split("dependencies =")
+            .nth(1)
+            .expect("runtime list");
+        let runtime = runtime.split("moduleclass").next().unwrap_or(runtime);
+        assert!(!runtime.contains("Eigen"), "{out}");
+        assert!(out.contains("('Python', '3.11.3')"), "{out}");
+        assert!(out.contains("('HDF5', '1.14.0')"), "{out}");
     }
 
     fn nvofbf(ver: &str) -> Toolchain {
