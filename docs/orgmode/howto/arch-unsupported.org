@@ -85,8 +85,9 @@ The command also parses each easyconfig for each target architecture
 (~x86_64~, ~aarch64~, ~riscv64~ by default, or the families named with
 ~--arch~). A file named in the plan that parses on one architecture but
 not another is reported before any bot build. Software-layer pull
-request 1798 failed this way: ~Go-1.26.7.eb~ used an ARCH-indexed map
-that had no ~riscv64~ entry.
+request 1798 failed this way: ~Go-1.26.7.eb~ indexes ~sources~ by ~ARCH~
+and has no ~riscv64~ entry. The parser does not evaluate that lookup, so
+the report is that ~sources~ could not be read:
 
 #+begin_src bash
 eb-stack stack arch \
@@ -96,7 +97,7 @@ eb-stack stack arch \
 #+end_src
 
 #+begin_example
-Go-1.26.7.eb failed to parse on riscv64: parse <string>: line 8: key 'riscv64' not in dict
+Go-1.26.7.eb failed to parse on riscv64: parse tests/arch_unsupported_fixtures/easyconfigs/g/Go/Go-1.26.7.eb: sources is assigned but could not be read, so planning with this recipe would get its identity, dependencies, or sources wrong
 parse_failed=1 unsupported=0 flagged=0
 #+end_example
 

@@ -25,8 +25,9 @@ The command prints:
 LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 drops compute capabilities 12.0f, 9.0a (software-layer #1461)
 LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 is below grace-cc90 minimum CUDA 13.1 (software-layer #1461)
 LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: LAMMPS easyblock map rejects compute capabilities 12.0f, 9.0a: LAMMPS easyblock has no mapping for these compute capabilities (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: missing target capabilities 9.0 for grace-cc90 (aarch64/nvidia/grace) (software-layer #1461)
 LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: missing target capabilities 9.0 for zen4-cc90 (x86_64/amd/zen4) (software-layer #1461)
-checked=1 findings=4 targets=2
+checked=1 findings=5 targets=2
 #+end_example
 
 Each line names the easyconfig file and one incompatible combination.

@@ -19,7 +19,7 @@ A rejected value names the flag and the value. A missing file names the flag and
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
-Package commands take the toolchain as ~--toolchain name/version~, the spelling ~stack solve~ uses. ~--toolchain system~, ~--toolchain SYSTEM~, and ~--toolchain system/~ select the SYSTEM toolchain. Its version is empty. ~package inspect~ and ~package plan~ accept a lone ~--toolchain-version~ and use ~foss~. ~package bump~ does not.
+Package commands take the toolchain as ~--toolchain name/version~, the spelling ~stack solve~ uses. ~--toolchain system~, ~--toolchain SYSTEM~, and ~--toolchain system/~ select the SYSTEM toolchain. Its version is empty. ~package inspect~ and ~package plan~ accept a lone ~--toolchain-version~ and use ~foss~. ~package bump~ does not: it accepts ~--toolchain-name~ only together with ~--toolchain-version~. Both split flags are hidden compatibility spellings. An empty ~--toolchain-name~ is status 2.
 
 * Command map
 
@@ -28,6 +28,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~package inspect~ | Parse conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, or Raku into a manifest and planned software bill of materials (SBOM) |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
+| ~package latest~ | Report the newest stable upstream release of EasyBuild recipes |
 | ~recipe easyblock~ | Print the easyblock class name EasyBuild derives for a software name |
 | ~recipe templates~ | Emit template constants and derived-key rules, or the values `--name` and `--version` resolve |
 | ~recipe hierarchy~ | Emit known toolchain hierarchies as JSON |
@@ -35,6 +36,8 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
 | ~stack order~ | Sequence every pinned build a set of roots needs |
+| ~stack gap~ | Classify site modules the stack lacks and name the recipe that closes each |
+| ~stack batch~ | Plan software-layer pull requests whose builds do not overlap |
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
@@ -349,9 +352,11 @@ the check-contrib pycodestyle codes E501 (longer than 120) and
 E225/E226/E227/E228/E231; the easyconfigs test-suite checks
 ~EB_PY_NO_USER_SITE~, ~EB_SANITY_PATHS_SHAPE~, ~EB_LOCAL_VAR_NAMING~,
 ~EB_REDEFINED_PARAM~, and ~EB_CHECKSUM_COUNT~; and the review conventions
-~EB_FMT_MISSING_F~, ~EB_FSTRING_QUOTE_REUSE~, ~EB_TEMPLATE_UNKNOWN~ (errors)
+~EB_FMT_MISSING_F~, ~EB_FSTRING_QUOTE_REUSE~, ~EB_TEMPLATE_UNKNOWN~, and
+~EB_PARAM_TUPLE_COMMA~ (errors)
 and ~EB_FMT_PERCENT~, ~EB_FMT_CONCAT~, ~EB_FMT_TEMPLATE_VAR~,
-~EB_SHLIB_HARDCODED~, and ~EB_DEP_DUPLICATE~ (warnings).
+~EB_SHLIB_HARDCODED~, ~EB_DEP_DUPLICATE~, ~EB_SANITY_CMD_BUILDDIR~, and
+~EB_SANITY_CMD_CD_INSTALLDIR~ (warnings).
 ~clean~ is false while any error or any in-scope ~EB_FMT_*~ finding
 remains; ~error_free~ counts errors only. An ~EB_FMT_*~ finding with
 ~info~ true is outside the review scope (an untouched ~%%(...)s~-escaped
@@ -550,6 +555,7 @@ writes that same document, checksums included. The MCP tool
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON ~Policy~ schema. The policy file is
 ~--stack-policy~, the same flag ~package plan~ and ~package bump~ take.
+~--policy~ is a hidden alias of that flag and prints a compatibility warning.
 
 ~--dot-out~ writes the solved dependency DAG. A node is ~name/version~ plus
 the toolchain, and the versionsuffix when the recipe has one. An edge points
@@ -1603,7 +1609,8 @@ current directory is the root.
 The stdio server exposes one MCP tool for each of these CLI workflows,
 plus sandboxed recipe and easyblock tools:
 
-- ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
+- ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~,
+  ~eb_package_latest~;
 - ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~,
   ~eb_recipe_grep~, ~eb_recipe_apply_suggestion~, ~eb_recipe_diff~,
   ~eb_dep_versions~;
@@ -1612,8 +1619,11 @@ plus sandboxed recipe and easyblock tools:
 - ~eb_module_lint~, ~eb_easyblock_dry_run~, ~eb_build_log~, ~eb_build_test~
   (easyblocks; ~eb_build_test~ only with ~EB_STACK_ALLOW_BUILD=1~);
 - ~eb_stack_solve~, ~eb_stack_sbom~, ~eb_stack_order~,
-  ~eb_stack_easystack~, ~eb_stack_sections~, ~eb_stack_from_commit~,
-  ~eb_stack_gap~, ~eb_stack_provided~;
+  ~eb_stack_easystack~, ~eb_stack_gap~, ~eb_stack_provided~,
+  ~eb_stack_batch~, ~eb_stack_arch~, ~eb_stack_files~,
+  ~eb_stack_generation~, ~eb_stack_cuda_cc~, ~eb_stack_known_failures~,
+  ~eb_stack_oom~, ~eb_stack_bot_classify~, ~eb_stack_sections~,
+  ~eb_stack_from_commit~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~;
@@ -1654,19 +1664,22 @@ synthetic GCC-family rule, the same split as ~recipe hierarchy --export~.
 ~oldest~, ~easystack_out~, ~hashes_out~, and ~filter_deps~.
 ~filter_deps~ drops the same dependencies ~--filter-deps~ drops.
 ~eb_stack_easystack~ requires ~lock~ and takes ~out~ and ~option~, each
-option a ~<file.eb>:<option>=<value>~ string. ~eb_stack_sections~ requires
+option a ~<file.eb>:<option>=<value>~ string, and ~eessi_version~,
+~easybuild_version~, ~generation~, and ~out_dir~ for the software-layer
+layout. ~eb_stack_sections~ requires
 ~list~, ~from~, and ~out~, and takes ~unfiled~. ~eb_stack_from_commit~
 requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
-~easybuild_version~, and ~json~. It returns the same report as
-~stack from-commit~. ~eb_stack_gap~ requires ~site~, ~installed~,
-~easyconfigs~, ~generation~, and ~out_dir~, and takes ~exclude_file~,
-~filter_deps~, ~open_layer~, and ~open_easyconfigs~. ~eb_stack_provided~
-requires ~build_list~ and takes ~installed~, ~baseline_lock~, ~allow~,
-~family_lock~, ~licensed~, ~licensed_file~, ~json~, ~format~, and
-~strict~. A hit, an unparsed line, a wrong toolchain, a ~--hooks~ flag,
-or a family-lock name is a tool error. A licensed warning is not,
-unless ~strict~ is true. The text is the same report as
-~stack provided~. ~eb_stack_arch~ requires ~easystack~ and takes
+~easybuild_version~, ~json~, and ~rewrite~. It returns the same report as
+~stack from-commit~. ~eb_stack_gap~ requires ~installed~,
+~easyconfigs~, ~generation~, and ~out_dir~, and takes ~site~, ~older~,
+~exclude_file~, ~filter_deps~, ~open_layer~, ~open_easyconfigs~, and
+~eessi_version~. ~eb_stack_provided~ requires ~build_list~ and takes
+~installed~, ~baseline_lock~, ~allow~, ~family_lock~, ~licensed~,
+~licensed_file~, ~json~, ~format~, and ~strict~. A hit, an unparsed
+line, a wrong toolchain, a ~--hooks~ flag, or a family-lock name is a
+tool error. A licensed warning is not, unless ~strict~ is true. The
+text is the same report as ~stack provided~. ~eb_stack_arch~ requires
+~easystack~ and takes
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
 ~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the
 same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
@@ -1682,9 +1695,10 @@ finding is a tool error. ~eb_stack_generation~ takes ~easystack~, ~pr~,
 needs one ~easystack~ or ~pr~. It returns the same report as
 ~stack generation~, and a finding is a tool error.
 ~eb_stack_known_failures~ requires ~easystack~ and takes ~arch~,
-~easyconfigs~, ~installed~, ~known_failures~, ~eessi_version~, and
-~easybuild_version~. It returns ~text~, the ~stack known-failures~
-stdout, and ~hits~, one object per line. Warnings are not a tool error.
+~easyconfigs~, ~installed~, ~known_failures~, ~eessi_version~,
+~easybuild_version~, and ~strict~. It returns ~text~, the ~stack known-failures~
+stdout, and ~hits~, one object per line. Warnings are not a tool error
+unless ~strict~ is true, when a remaining warning is.
 ~eb_stack_oom~ takes ~easystack~, ~arch~, ~easyconfigs~,
 ~installed~, ~profile~, ~resources~, ~node~, and ~job_memory~. It needs
 an easystack or a node. It returns the ~stack oom~ text, one object per

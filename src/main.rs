@@ -547,9 +547,10 @@ struct PackagePlanArgs {
     /// Repository index giving versions for dependencies that state none.
     ///
     /// The format is the one CRAN publishes as `PACKAGES`: stanzas of
-    /// `Field: value` separated by blank lines. A bare dependency name is
-    /// normal in CRAN and on PyPI, and an `exts_list` entry still needs one
-    /// concrete version.
+    /// `Field: value` separated by blank lines. A file with no `Package:`
+    /// field is a `name==version` list, one pin per line. A range is not a
+    /// version. A bare dependency name is normal in CRAN and on PyPI, and an
+    /// `exts_list` entry still needs one concrete version.
     #[arg(long = "package-index", value_name = "FILE")]
     package_index: Option<PathBuf>,
     /// Optional package-source catalog layers for recursive robot-hole closure.
