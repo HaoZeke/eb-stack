@@ -77,9 +77,9 @@ stable` provide a new enough compiler.
 The crates.io package and the GitHub release are both 0.3.0. That
 binary's `stack solve` flag is `--policy`. It does not include `stack
 gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
-`component-reach`. `eb-stack --version` prints `0.3.0` for that binary
-and for a build of main. The commands below use `--stack-policy` and
-those reports. Build from main for them.
+`component-reach`. `eb-stack --version` prints `0.3.0` for that binary.
+A build of this tree prints `0.4.0`. The commands below use
+`--stack-policy` and those reports. Build from main for them.
 
 `cargo binstall` is not part of a Rust install. `cargo binstall
 eb_stack` fails with `no such command: binstall` until that program is
@@ -97,7 +97,7 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
 Add `~/.local/bin` to `PATH`. `eb-stack --version` then prints
-`eb-stack 0.3.0`. The test suite is `cargo test --locked`, in
+`eb-stack 0.4.0`. The test suite is `cargo test --locked`, in
 [Tests](#tests). It is not required before the first solve.
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.

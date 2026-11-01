@@ -74,12 +74,19 @@ layer. Public files contain reusable package intent and target topology.
 
 * Releasing
 
-Version source of truth is ~version~ in root ~Cargo.toml~. Keep these aligned:
+Version source of truth is ~version~ in root ~Cargo.toml~ (currently *0.4.0*).
+Keep these aligned:
 
 1. ~Cargo.toml~ / ~pixi.toml~ ~version~
-2. ~CITATION.cff~ ~version~ and ~date-released~ for a published version
-3. ~docs/source/conf.py~ ~release~
-4. ~CHANGELOG.md~ version heading and release date
+2. ~pyproject.toml~ ~version~ and ~server.json~ (both ~version~ fields)
+3. ~CITATION.cff~ ~version~
+4. ~docs/source/conf.py~ ~release~
+5. ~CHANGELOG.md~ version heading and release date
+6. ~CITATION.cff~ ~date-released~ when the version is published
 
-Tag ~vX.Y.Z~ and push the tag. The release workflow builds the Linux archive
-and checksum and publishes the GitHub Release.
+~tests/public_metadata.rs~ rejects a ~date-released~ line, so that field
+stays absent until the test is updated for a published citation.
+
+Tag ~vX.Y.Z~ and push the tag. ~.github/workflows/release.yml~ (cargo-dist)
+builds the installers and publishes the GitHub Release. It does not publish
+to crates.io.

@@ -1,8 +1,8 @@
 #+TITLE: Changelog
 #+OPTIONS: toc:nil num:nil
 
-The tagged release is 0.3.0. Cargo, CITATION, and Sphinx still report
-*0.3.0*. Changes since that tag are the Unreleased section of
+Cargo, CITATION, and Sphinx report *0.4.0*, and the notes since tag
+v0.3.0 are the 0.4.0 section of
 [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]].
 
 The version-one design provides:

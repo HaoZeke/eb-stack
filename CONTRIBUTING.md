@@ -77,21 +77,26 @@ layer. The public files contain reusable package intent and target topology.
 
 ## Releasing
 
-Version source of truth: `version` in root `Cargo.toml` (currently **0.3.0**).
+Version source of truth: `version` in root `Cargo.toml` (currently **0.4.0**).
 Keep these in lockstep on every release:
 
 1. `Cargo.toml` / `pixi.toml` `version`
-2. `CITATION.cff` `version`
-3. `docs/source/conf.py` `release`
-4. `CHANGELOG.md`: move Unreleased notes into `## [X.Y.Z] - YYYY-MM-DD`
-5. `CITATION.cff`: add `date-released` when the version is published
+2. `pyproject.toml` `version` and `server.json` (both `version` fields)
+3. `CITATION.cff` `version`
+4. `docs/source/conf.py` `release`
+5. `CHANGELOG.md`: move Unreleased notes into `## X.Y.Z - YYYY-MM-DD`
+6. `CITATION.cff`: add `date-released` when the version is published
+
+`tests/public_metadata.rs` rejects a `date-released` line, so that field
+stays absent until the test is updated for a published citation.
 
 Then:
 
 ```bash
-git tag -a v0.3.0 -m "eb-stack 0.3.0"
-git push origin v0.3.0
-# GitHub Actions ci_release.yml builds linux x86_64 tarball + checksum
+git tag -a v0.4.0 -m "eb-stack 0.4.0"
+git push origin v0.4.0
+# .github/workflows/release.yml (cargo-dist) builds the installers
+# and publishes the GitHub Release. It does not publish to crates.io.
 ```
 
 Verify the binary surface:
@@ -99,5 +104,5 @@ Verify the binary surface:
 ```bash
 cargo build --release
 ./target/release/eb-stack --version
-# prints eb-stack 0.3.0
+# prints eb-stack 0.4.0
 ```

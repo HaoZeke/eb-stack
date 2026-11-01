@@ -90,4 +90,4 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 ## Optional
 
 - [Contributing](https://eb-stack.rgoswami.me/contributing.html.md): This page mirrors the repository CONTRIBUTING.md for the documentation site.
-- [Changelog](https://eb-stack.rgoswami.me/changelog.html.md): The tagged release is 0.3.0. Cargo, CITATION, and Sphinx still report 0.3.0. Changes since that tag are the Unreleased section of CHANGELOG.md.
+- [Changelog](https://eb-stack.rgoswami.me/changelog.html.md): Cargo, CITATION, and Sphinx report 0.4.0, and the notes since tag v0.3.0 are the 0.4.0 section of CHANGELOG.md.

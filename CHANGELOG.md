@@ -2,7 +2,17 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.4.0 - 2026-11-01
+
+`stack solve` in 0.3.0 took the policy file as `--policy`. The flag is
+now `--stack-policy`, the same spelling `package plan` and `package bump`
+already used. `--policy` remains a hidden alias: `--help` does not list
+it, the file is read the same way, and the command prints
+`warning: --policy is accepted for compatibility. Use --stack-policy.`
+The Model Context Protocol argument `policy` warns and is still read;
+`stack_policy` is the spelling to pass. Commands added since 0.3.0
+include `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`,
+`pr-overlap`, and `component-reach`.
 
 ### Added
 
@@ -51,9 +61,26 @@ All notable changes to this project are documented here.
 
 - `stack gap` classifies `--filter-deps` names as `filtered`. They were
   `excluded`, in the same bucket as a `--exclude-file` line.
+- The markdown stack diff labels a module the baseline has and this solve
+  did not select as `baseline not in this layer`. The machine-readable
+  kind stays `removed`.
+- Rust 1.88 is the minimum. `time` 0.3.55, pulled in by cyclonedx-bom,
+  sets `rust-version` 1.88.0. The CI minimum job builds every target
+  with that compiler.
+- `scripts/fetch-upstream-trees.sh` exports `EB_EASYCONFIGS` as the robot
+  directory `easybuild/easyconfigs`. The clone root is
+  `EB_EASYCONFIGS_DEVELOP`.
 
 ### Fixed
 
+- A root with no easyconfig on the requested generation is a missing
+  recipe, including after the GCCcore, gompi, and foss hierarchy is
+  searched. The error lists the toolchains and versions that have an
+  easyconfig and names the nearest file to pass as `--toolchain`.
+- A CVE whose only OSV range is GIT is mapped onto release versions.
+  `component-reach` uses the advisory `versions` list when it names the
+  releases, and otherwise resolves upstream tags with a cached blobless
+  fetch. An offline lookup keeps the range unparsed.
 - A package layer's `source_checksums` (one SHA-256 per plan source) is
   applied to the plan and used as the bump checksum when `--source-checksum`
   is absent. The command-line digest still wins. SeisSol's layer records the
@@ -352,6 +379,25 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The manual defines closure, generation, baseline, reachability, and
+  the claim ladder in the glossary, and the pages that use those words
+  point at it.
+- `stack gap --help` names fixture files in this repository. A missing
+  `--site` file exits 1 and names the path.
+- `package plan --help` names both `--package-index` shapes. A file that
+  contains a `Package:` field is the CRAN `PACKAGES` index. A file with
+  no `Package:` field is a `name==version` list.
+- The install notes require Rust 1.88, write the binary with
+  `install -Dm755` to `~/.local/bin/eb-stack`, and say to put
+  `~/.local/bin` on `PATH`. The published 0.3.0 binary lacks `stack gap`,
+  `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, and
+  `component-reach`. A build of this tree prints `eb-stack 0.4.0`.
+- The site-layer walk in `docs/orgmode/howto/emit-reports.org` runs
+  `stack solve` for EESSI 2026.06 against the trees
+  `scripts/fetch-upstream-trees.sh` checks out. There is no
+  `GROMACS-*-foss-2026.1.eb` in that pin, so the command exits 1 and
+  names the easyconfigs that do exist. `baseline not in this layer` in
+  the diff is the rest of the baseline a one-root solve did not select.
 - Crate keywords are `easybuild`, `resolvo`, `sbom`, `hpc`, and `mcp`.
   Categories add `parser-implementations` and `config` to
   `command-line-utilities`, `development-tools`, and `science`.
@@ -931,10 +977,15 @@ All notable changes to this project are documented here.
 
 - Package commands, `stack solve`, the MCP tools, and
   `skills/golden-replay/replay.sh` pass `--toolchain name/version` and
-  `--stack-policy`. The older spellings stay accepted, are omitted
-  from `--help`, and warn on the CLI and in the MCP result when the
-  call accepts them. The MCP package tools require a toolchain through
-  the schema's `anyOf`, and a call without one names `toolchain`.
+  `--stack-policy`. `stack solve --policy` from 0.3.0 is a hidden
+  alias of `--stack-policy`: it is omitted from `--help`, it still
+  names the policy file, and it warns
+  `warning: --policy is accepted for compatibility. Use --stack-policy.`
+  `--toolchain-name` and `--toolchain-version` are hidden aliases of
+  `--toolchain name/version` and warn the same way. The MCP argument
+  `policy` warns and is still read; `stack_policy` is the spelling to
+  pass. The MCP package tools require a toolchain through the schema's
+  `anyOf`, and a call without one names `toolchain`.
 - The CLI and the MCP tools share one usage error, one toolchain
   parser, and one foreign-format parser.
 - `--toolchain system` and `--toolchain SYSTEM` select the SYSTEM

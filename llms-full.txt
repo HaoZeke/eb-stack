@@ -45,8 +45,8 @@ rustc --version
   stack with `--policy`, not `--stack-policy`, and it serves `mcp`. It
   does not provide `stack gap`, `stack oom`, `stack from-commit`,
   `rebuild-set`, `pr-overlap`, or `component-reach`. `eb-stack --version`
-  prints `0.3.0` for the release and for a build of main. Build from
-  main for the commands in this manual:
+  prints `0.3.0` for that release. A build of this tree prints `0.4.0`.
+  Build from main for the commands in this manual:
 
 ```bash
 git clone https://github.com/HaoZeke/eb-stack.git
@@ -56,7 +56,7 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
   `~/.local/bin` is not on `PATH` until you add it. `eb-stack --version`
-  then prints `eb-stack 0.3.0`. `cargo binstall` is a separate program;
+  then prints `eb-stack 0.4.0`. `cargo binstall` is a separate program;
   a stock `cargo` reports `no such command: binstall`. The shell
   installer from the GitHub release installs the 0.3.0 binary. The
   contributor test suite is `cargo test --locked`, on the
@@ -5701,7 +5701,9 @@ writes that same document, checksums included. The MCP tool
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON `Policy` schema. The policy file is
 `--stack-policy`, the same flag `package plan` and `package bump` take.
-`--policy` is a hidden alias of that flag and prints a compatibility warning.
+0.3.0 called this flag `--policy` on `stack solve`. That spelling is a
+hidden alias. It is left out of `--help`, it still names the policy file,
+and it prints `warning: --policy is accepted for compatibility. Use --stack-policy.`
 
 `--dot-out` writes the solved dependency DAG. A node is `name/version` plus
 the toolchain, and the versionsuffix when the recipe has one. An edge points
@@ -7954,7 +7956,7 @@ See
   ],
     "solver": {
     "engine": "resolvo_cdcl_sat",
-    "engine_version": "resolvo+eb_stack-0.3.0",
+    "engine_version": "resolvo+eb_stack-0.4.0",
     "timestamp": "2026-01-01T00:00:00Z",
     "criteria": ["-notuptodate"]
   }
@@ -8094,7 +8096,7 @@ purpose is SBOM emission.
   "version": 1,
   "metadata": {
     "timestamp": "2026-01-01T00:00:00Z",
-    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.3.0"}],
+    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.4.0"}],
     "component": {
       "type": "application",
       "name": "easybuild-stack-foss-2025b",
@@ -9886,7 +9888,7 @@ eb-stack --version
 ```
 
 ```text
-eb-stack 0.3.0
+eb-stack 0.4.0
 ```
 
 The how-tos name the flags for each command:
@@ -10970,20 +10972,27 @@ layer. Public files contain reusable package intent and target topology.
 
 # Releasing
 
-Version source of truth is `version` in root `Cargo.toml`. Keep these aligned:
+Version source of truth is `version` in root `Cargo.toml` (currently **0.4.0**).
+Keep these aligned:
 
 1. `Cargo.toml` / `pixi.toml` `version`
-2. `CITATION.cff` `version` and `date-released` for a published version
-3. `docs/source/conf.py` `release`
-4. `CHANGELOG.md` version heading and release date
+2. `pyproject.toml` `version` and `server.json` (both `version` fields)
+3. `CITATION.cff` `version`
+4. `docs/source/conf.py` `release`
+5. `CHANGELOG.md` version heading and release date
+6. `CITATION.cff` `date-released` when the version is published
 
-Tag `vX.Y.Z` and push the tag. The release workflow builds the Linux archive
-and checksum and publishes the GitHub Release.
+`tests/public_metadata.rs` rejects a `date-released` line, so that field
+stays absent until the test is updated for a published citation.
+
+Tag `vX.Y.Z` and push the tag. `.github/workflows/release.yml` (cargo-dist)
+builds the installers and publishes the GitHub Release. It does not publish
+to crates.io.
 
 # Changelog
 
-The tagged release is 0.3.0. Cargo, CITATION, and Sphinx still report
-**0.3.0**. Changes since that tag are the Unreleased section of
+Cargo, CITATION, and Sphinx report **0.4.0**, and the notes since tag
+v0.3.0 are the 0.4.0 section of
 [CHANGELOG.md](https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md).
 
 The version-one design provides:

@@ -557,7 +557,9 @@ writes that same document, checksums included. The MCP tool
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON ~Policy~ schema. The policy file is
 ~--stack-policy~, the same flag ~package plan~ and ~package bump~ take.
-~--policy~ is a hidden alias of that flag and prints a compatibility warning.
+0.3.0 called this flag ~--policy~ on ~stack solve~. That spelling is a
+hidden alias. It is left out of ~--help~, it still names the policy file,
+and it prints ~warning: --policy is accepted for compatibility. Use --stack-policy.~
 
 ~--dot-out~ writes the solved dependency DAG. A node is ~name/version~ plus
 the toolchain, and the versionsuffix when the recipe has one. An edge points
