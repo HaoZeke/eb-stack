@@ -846,12 +846,34 @@ pub fn solve_with_baseline_source(
     // one absent from every tree. Only on the failure path, so a solve that
     // succeeds pays nothing for it.
     let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| {
+        let text = e.to_string();
+        // A root with no easyconfig on this generation is not a missing
+        // dependency of something the solver did search. The appendix that
+        // lists those dependencies names SYSTEM toolchains from other
+        // generations and hides which GROMACS (or other root) actually exists.
+        let missing_root = text
+            .split("root package ")
+            .nth(1)
+            .and_then(|rest| rest.lines().next())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .and_then(|name| {
+                crate::hierarchy::root_missing_from_generation(
+                    name,
+                    &policy.toolchain,
+                    &universe.candidates,
+                    &all,
+                )
+            });
+        let constraints = crate::select::policy_constraints_report(&policy, &universe.candidates);
+        if let Some(report) = missing_root {
+            return anyhow::anyhow!("{report}{constraints}");
+        }
         let hint = crate::hierarchy::unsatisfiable_deps_report(&universe.candidates, &all);
         // Two different questions the solver cannot answer: what the searched
         // levels do not provide, and which of the constraints were written by
         // hand rather than read off the tree.
-        let constraints = crate::select::policy_constraints_report(&policy, &universe.candidates);
-        anyhow::anyhow!("{e}{hint}{constraints}")
+        anyhow::anyhow!("{text}{hint}{constraints}")
     })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
     write_lock_sbom_and_extras(&lock, baseline.as_ref(), lock_out, sbom_out, extra)?;

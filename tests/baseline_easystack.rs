@@ -324,3 +324,98 @@ fn a_filtered_dependency_is_neither_solved_nor_built() {
     assert!(solved.package("GROMACS").is_some());
     assert!(!std::fs::read_to_string(&list).unwrap().contains("FFTW"));
 }
+
+fn write_easyconfig(dir: &std::path::Path, rel: &str, body: &str) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+}
+
+/// A root that lives on a subtoolchain of foss/2026.1 is a candidate. The
+/// hierarchy walk (GCCcore, GCC, gfbf, gompi, foss) is what finds it.
+#[test]
+fn a_root_on_gcccore_resolves_for_foss_2026_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tree = tmp.path().join("easyconfigs");
+    write_easyconfig(
+        &tree,
+        "c/CMake/CMake-3.31.11-GCCcore-15.2.0.eb",
+        "name = 'CMake'\nversion = '3.31.11'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nhomepage = 'https://cmake.org'\ndescription = 'fixture'\n",
+    );
+    let lock = tmp.path().join("stack.lock.json");
+    let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "solve", "--easyconfigs"])
+        .arg(&tree)
+        .args([
+            "--toolchain",
+            "foss/2026.1",
+            "--root",
+            "CMake",
+            "--lock-out",
+        ])
+        .arg(&lock)
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let solved: StackLock = serde_json::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+    assert_eq!(solved.package("CMake").unwrap().version, "3.31.11");
+}
+
+/// No GROMACS easyconfig on foss/2026.1 is a missing recipe, and the error
+/// names the generations that do have one.
+#[test]
+fn a_root_missing_from_the_generation_names_the_nearest_easyconfig() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tree = tmp.path().join("easyconfigs");
+    write_easyconfig(
+        &tree,
+        "f/FFTW/FFTW-3.3.10-foss-2026.1.eb",
+        "name = 'FFTW'\nversion = '3.3.10'\ntoolchain = {'name': 'foss', 'version': '2026.1'}\nhomepage = 'https://www.fftw.org'\ndescription = 'fixture'\n",
+    );
+    write_easyconfig(
+        &tree,
+        "g/GROMACS/GROMACS-2026.2-foss-2025b.eb",
+        "name = 'GROMACS'\nversion = '2026.2'\ntoolchain = {'name': 'foss', 'version': '2025b'}\nhomepage = 'https://www.gromacs.org'\ndescription = 'fixture'\n",
+    );
+    write_easyconfig(
+        &tree,
+        "g/GROMACS/GROMACS-2026.2-foss-2025b-CUDA-12.9.1.eb",
+        "name = 'GROMACS'\nversion = '2026.2'\nversionsuffix = '-CUDA-12.9.1'\ntoolchain = {'name': 'foss', 'version': '2025b'}\nhomepage = 'https://www.gromacs.org'\ndescription = 'fixture'\n",
+    );
+    write_easyconfig(
+        &tree,
+        "g/GROMACS/GROMACS-2024.4-foss-2024a.eb",
+        "name = 'GROMACS'\nversion = '2024.4'\ntoolchain = {'name': 'foss', 'version': '2024a'}\nhomepage = 'https://www.gromacs.org'\ndescription = 'fixture'\n",
+    );
+    let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "solve", "--easyconfigs"])
+        .arg(&tree)
+        .args([
+            "--toolchain",
+            "foss/2026.1",
+            "--root",
+            "GROMACS",
+            "--lock-out",
+        ])
+        .arg(tmp.path().join("stack.lock.json"))
+        .output()
+        .unwrap();
+    assert!(!st.status.success());
+    let err = String::from_utf8_lossy(&st.stderr);
+    assert!(
+        err.contains("no candidates for root package GROMACS on foss/2026.1"),
+        "{err}"
+    );
+    assert!(err.contains("GCCcore-15.2.0"), "{err}");
+    assert!(err.contains("gompi-2026.1"), "{err}");
+    assert!(
+        err.contains("Nearest: GROMACS-2026.2-foss-2025b.eb on foss/2025b"),
+        "{err}"
+    );
+    assert!(err.contains("--toolchain foss/2025b"), "{err}");
+    assert!(!err.contains("impi"), "{err}");
+}

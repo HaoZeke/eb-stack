@@ -233,6 +233,193 @@ pub fn unsatisfiable_deps_report(universe: &[Candidate], all: &[Candidate]) -> S
     out
 }
 
+/// A root the searched generation does not carry, and where an easyconfig does.
+///
+/// `searched` is the hierarchy-filtered universe (the policy toolchain and
+/// its subtoolchains, GCCcore through foss). A name that is already in it is
+/// a different failure, so this returns `None` and the solver's own message
+/// stands. A name that exists only in `all` is absent from this generation:
+/// the message lists the toolchains that have an easyconfig and names the
+/// nearest one to pass as `--toolchain`.
+pub fn root_missing_from_generation(
+    name: &str,
+    toolchain: &Toolchain,
+    searched: &[Candidate],
+    all: &[Candidate],
+) -> Option<String> {
+    if searched.iter().any(|candidate| candidate.name == name) {
+        return None;
+    }
+    Some(render_missing_root(name, toolchain, all))
+}
+
+fn version_and_suffix(candidate: &Candidate) -> String {
+    format!(
+        "{}{}",
+        candidate.version,
+        candidate.versionsuffix.as_deref().unwrap_or("")
+    )
+}
+
+fn easyconfig_filename(path: &str) -> &str {
+    path.rsplit(['/', '\\'])
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or(path)
+}
+
+/// Greatest version that is not newer than `target`, else the oldest.
+fn closest_version<'a>(
+    versions: impl IntoIterator<Item = &'a str>,
+    target: &str,
+) -> Option<&'a str> {
+    let mut versions: Vec<&str> = versions.into_iter().collect();
+    versions.sort_by(|left, right| cmp_version(left, right).then_with(|| left.cmp(right)));
+    versions.dedup();
+    let at_or_below: Vec<&str> = versions
+        .iter()
+        .copied()
+        .filter(|version| cmp_version(version, target) != Ordering::Greater)
+        .collect();
+    at_or_below
+        .last()
+        .copied()
+        .or_else(|| versions.first().copied())
+}
+
+fn nearest_root_candidate<'a>(
+    named: &[&'a Candidate],
+    policy: &Toolchain,
+) -> Option<&'a Candidate> {
+    let mut keys: Vec<(&str, &str)> = named
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.toolchain.name.as_str(),
+                candidate.toolchain.version.as_str(),
+            )
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    let same_family: Vec<(&str, &str)> = keys
+        .iter()
+        .copied()
+        .filter(|(name, _)| *name == policy.name)
+        .collect();
+    let pool: &[_] = if same_family.is_empty() {
+        keys.as_slice()
+    } else {
+        same_family.as_slice()
+    };
+    let version = closest_version(pool.iter().map(|(_, version)| *version), &policy.version)?;
+    let toolchain_name = pool
+        .iter()
+        .filter(|(_, candidate_version)| *candidate_version == version)
+        .map(|(name, _)| *name)
+        .min()?;
+    let mut on_toolchain: Vec<&Candidate> = named
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            candidate.toolchain.name == toolchain_name && candidate.toolchain.version == version
+        })
+        .collect();
+    on_toolchain.sort_by(|left, right| {
+        cmp_version(&right.version, &left.version)
+            .then_with(|| {
+                let left_plain = left.versionsuffix.as_deref().unwrap_or("").is_empty();
+                let right_plain = right.versionsuffix.as_deref().unwrap_or("").is_empty();
+                right_plain.cmp(&left_plain)
+            })
+            .then_with(|| left.versionsuffix.cmp(&right.versionsuffix))
+            .then_with(|| left.easyconfig_path.cmp(&right.easyconfig_path))
+    });
+    on_toolchain.first().copied()
+}
+
+fn render_missing_root(name: &str, toolchain: &Toolchain, all: &[Candidate]) -> String {
+    let levels = match hierarchy_for_with_tree(toolchain, None, all) {
+        Ok(hierarchy) => hierarchy.member_labels().join(", "),
+        Err(_) => format!("{}/{}", toolchain.name, toolchain.version),
+    };
+    let mut out = format!(
+        "no candidates for root package {name} on {}/{}\n\n\
+         Searched this generation's toolchain hierarchy: {levels}. ",
+        toolchain.name, toolchain.version
+    );
+    let named: Vec<&Candidate> = all
+        .iter()
+        .filter(|candidate| candidate.name == name)
+        .collect();
+    if named.is_empty() {
+        out.push_str(&format!("No easyconfig named {name} is in the trees.\n"));
+        return out;
+    }
+    out.push_str(&format!(
+        "No {name} easyconfig is built with any of them.\n\n\
+         {name} easyconfigs in the trees:\n"
+    ));
+
+    let mut groups: Vec<(String, String, Vec<&Candidate>)> = Vec::new();
+    for candidate in &named {
+        let key = (
+            candidate.toolchain.name.clone(),
+            candidate.toolchain.version.clone(),
+        );
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|(group_name, group_version, _)| (group_name, group_version) == (&key.0, &key.1))
+        {
+            group.2.push(*candidate);
+        } else {
+            groups.push((key.0, key.1, vec![*candidate]));
+        }
+    }
+    groups.sort_by(|left, right| {
+        let left_same = left.0 == toolchain.name;
+        let right_same = right.0 == toolchain.name;
+        match (left_same, right_same) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => cmp_version(&right.1, &left.1).then_with(|| left.0.cmp(&right.0)),
+        }
+    });
+    const GROUPS: usize = 12;
+    const SPECS: usize = 8;
+    let extra_groups = groups.len().saturating_sub(GROUPS);
+    for (group_name, group_version, candidates) in groups.iter().take(GROUPS) {
+        let mut specs: Vec<String> = candidates.iter().map(|c| version_and_suffix(c)).collect();
+        specs.sort_by(|left, right| cmp_version(right, left).then_with(|| left.cmp(right)));
+        specs.dedup();
+        let extra = specs.len().saturating_sub(SPECS);
+        let shown = specs.into_iter().take(SPECS).collect::<Vec<_>>().join(", ");
+        let more = if extra > 0 {
+            format!(", +{extra} more")
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("  {group_name}/{group_version}: {shown}{more}\n"));
+    }
+    if extra_groups > 0 {
+        out.push_str(&format!("  ... and {extra_groups} more toolchains\n"));
+    }
+    if let Some(nearest) = nearest_root_candidate(&named, toolchain) {
+        let file = easyconfig_filename(&nearest.easyconfig_path);
+        out.push_str(&format!(
+            "\nNearest: {file} on {}/{}. Pass --toolchain {}/{} to solve that generation, \
+             or add a {name} easyconfig for {}/{}.\n",
+            nearest.toolchain.name,
+            nearest.toolchain.version,
+            nearest.toolchain.name,
+            nearest.toolchain.version,
+            toolchain.name,
+            toolchain.version
+        ));
+    }
+    out
+}
+
 impl ToolchainHierarchy {
     /// Labels `name-version` for each member (system empty version → `system`).
     pub fn member_labels(&self) -> Vec<String> {
@@ -1808,6 +1995,38 @@ mod tests {
         assert!(
             msg.contains("available at other generations") && msg.contains("6.7.1 @ gfbf-2023b"),
             "got {msg}"
+        );
+    }
+
+    #[test]
+    fn a_root_absent_from_the_generation_names_the_easyconfigs_that_exist() {
+        let mut plain = cand("GROMACS", "2026.2", "foss", "2025b", None);
+        plain.easyconfig_path = "g/GROMACS/GROMACS-2026.2-foss-2025b.eb".into();
+        let mut cuda = cand("GROMACS", "2026.2", "foss", "2025b", Some("-CUDA-12.9.1"));
+        cuda.easyconfig_path = "g/GROMACS/GROMACS-2026.2-foss-2025b-CUDA-12.9.1.eb".into();
+        let mut older = cand("GROMACS", "2024.4", "foss", "2024a", None);
+        older.easyconfig_path = "g/GROMACS/GROMACS-2024.4-foss-2024a.eb".into();
+        let fftw = cand("FFTW", "3.3.10", "foss", "2026.1", None);
+        let all = vec![plain, cuda, older, fftw.clone()];
+        let searched = vec![fftw];
+        let msg = root_missing_from_generation("GROMACS", &foss("2026.1"), &searched, &all)
+            .expect("GROMACS is not on foss-2026.1");
+        assert!(msg.contains("GCCcore-15.2.0"), "{msg}");
+        assert!(msg.contains("gompi-2026.1"), "{msg}");
+        assert!(msg.contains("foss-2026.1"), "{msg}");
+        assert!(
+            msg.contains("foss/2025b: 2026.2, 2026.2-CUDA-12.9.1"),
+            "{msg}"
+        );
+        assert!(msg.contains("foss/2024a: 2024.4"), "{msg}");
+        assert!(
+            msg.contains("Nearest: GROMACS-2026.2-foss-2025b.eb on foss/2025b"),
+            "{msg}"
+        );
+        assert!(msg.contains("--toolchain foss/2025b"), "{msg}");
+        assert!(
+            root_missing_from_generation("FFTW", &foss("2026.1"), &searched, &all).is_none(),
+            "a root the searched hierarchy already carries is a different failure"
         );
     }
 
