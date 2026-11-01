@@ -55,6 +55,7 @@ pub mod miner;
 pub mod modulerc;
 pub mod oom_profile;
 pub mod osv;
+mod osv_git;
 pub mod package;
 pub mod package_catalog;
 pub mod package_closure;

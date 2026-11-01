@@ -892,23 +892,25 @@ fn cve_closure_totals(
 
 /// Write the component-reach report.
 pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReachRun> {
+    let git = crate::osv::CachingGitRanges::from_env();
     if let Some(dir) = &args.osv_cache {
         let client = crate::osv::load_recorded_osv(dir)
             .map_err(|error| anyhow!("--osv-cache {}: {error}", dir.display()))?;
-        return run_component_reach_with(args, &client);
+        return run_component_reach_with(args, &client, &git);
     }
-    run_component_reach_with(args, &crate::registry::UreqClient)
+    run_component_reach_with(args, &crate::registry::UreqClient, &git)
 }
 
 fn run_component_reach_with(
     args: &ComponentReachRequest,
     client: &dyn crate::registry::RegistryClient,
+    git: &dyn crate::osv::GitRangeSource,
 ) -> Result<ComponentReachRun> {
     use crate::component_reach::{
         component_reach, cve_reach, cve_to_toml, fetch_easystack_urls, render_cve_markdown,
         render_markdown, to_toml, ReachQuery, ReachScope,
     };
-    use crate::osv::{parse_purl, resolve_vulnerability};
+    use crate::osv::{parse_purl, resolve_vulnerability_with};
 
     // A purl the carrier model does not know is a usage error. Reject it
     // before any output directory is created.
@@ -971,7 +973,8 @@ fn run_component_reach_with(
     };
     std::fs::create_dir_all(&args.out_dir)?;
     if let Some(cve) = &args.cve {
-        let resolution = resolve_vulnerability(cve, client).map_err(|error| anyhow!(error))?;
+        let resolution =
+            resolve_vulnerability_with(cve, client, git).map_err(|error| anyhow!(error))?;
         let mut notes = resolution.notes;
         if let Some(skipped) = skipped {
             notes.push(skipped);
@@ -2212,6 +2215,7 @@ mod tests {
                 osv_cache: None,
             },
             &MapClient { pages },
+            &crate::osv::NoGit,
         )
         .unwrap();
         assert!(report.carriers >= 1, "carriers {}", report.carriers);
@@ -2229,5 +2233,126 @@ mod tests {
             "{summary}"
         );
         assert!(!summary.contains("must-rebuild=0"), "{summary}");
+    }
+
+    /// EESSI 2026.06 fixtures pin urllib3 2.6.3 and 2.7.0. Both are past the
+    /// 2.6.0 fix, so a parsed GIT range has no carrier. Offline, the same
+    /// empty carrier list is still review because the GIT range was not parsed.
+    #[test]
+    fn cve_2025_66471_in_the_eessi_2026_06_fixtures() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let easyconfigs = root.join("tests/sbom_recorded/rebuild/easybuild/easyconfigs");
+        let stack =
+            root.join("tests/sbom_recorded/rebuild/easystacks/eessi-2026.06-eb-5.4.0-2026.1.yml");
+        let recorded = root.join("tests/component_reach_eessi/osv");
+        let client = crate::osv::load_recorded_osv(&recorded).unwrap();
+        let offline = reach_cve(&easyconfigs, &stack, &client, &crate::osv::NoGit);
+        assert_eq!(offline.carriers, 0, "{}", offline.summary());
+        assert_eq!(offline.review, 1, "{}", offline.summary());
+        assert!(
+            offline.document["unresolved"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str().unwrap().contains("GIT range not parsed")),
+            "{}",
+            offline.summary()
+        );
+
+        let parsed = reach_cve(&easyconfigs, &stack, &client, &Urllib3Tags);
+        assert_eq!(parsed.carriers, 0, "{}", parsed.summary());
+        assert_eq!(parsed.review, 0, "{}", parsed.summary());
+        let unresolved = parsed.document["unresolved"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        assert!(
+            unresolved
+                .iter()
+                .all(|item| !item.as_str().unwrap_or("").contains("GIT range not parsed")),
+            "{unresolved:?}"
+        );
+        let urllib = parsed.document["resolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "urllib3" && item["ecosystem"] == "PyPI")
+            .expect("PyPI urllib3");
+        assert!(urllib["version_reqs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|req| req == ">=1.0,<2.6.0"));
+        assert!(urllib["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|version| version == "2.5.0"));
+        assert!(urllib["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|version| version != "2.6.3" && version != "2.7.0"));
+    }
+
+    fn reach_cve(
+        easyconfigs: &Path,
+        stack: &Path,
+        client: &crate::registry::MapClient,
+        git: &dyn crate::osv::GitRangeSource,
+    ) -> ComponentReachRun {
+        let out = tempfile::tempdir().unwrap();
+        run_component_reach_with(
+            &ComponentReachRequest {
+                component: None,
+                version: None,
+                purl: None,
+                cve: Some("CVE-2025-66471".into()),
+                generation: "2026.1".into(),
+                easyconfigs: vec![easyconfigs.to_path_buf()],
+                installed: None,
+                easystacks: vec![stack.to_path_buf()],
+                easystack_urls: Vec::new(),
+                compat_layer: None,
+                filter_deps: Vec::new(),
+                generated_at: Some("2026-11-01T00:00:00Z".into()),
+                out_dir: out.path().join("out"),
+                osv_cache: None,
+            },
+            client,
+            git,
+        )
+        .unwrap()
+    }
+
+    struct Urllib3Tags;
+
+    impl crate::osv::GitRangeSource for Urllib3Tags {
+        fn release_tags(
+            &self,
+            repo: &str,
+        ) -> std::result::Result<Vec<crate::osv_git::ReleaseTag>, String> {
+            assert!(repo == "https://github.com/urllib3/urllib3", "{repo}");
+            Ok(vec![
+                crate::osv_git::ReleaseTag {
+                    version: "1.0".into(),
+                    commit: "04c6c18b6630386334fb010079a3ae3cdc59eea2".into(),
+                },
+                crate::osv_git::ReleaseTag {
+                    version: "2.6.0".into(),
+                    commit: "720f484b605f18887a48eef448d0084e2b76902d".into(),
+                },
+            ])
+        }
+
+        fn is_ancestor(
+            &self,
+            _repo: &str,
+            ancestor: &str,
+            descendant: &str,
+        ) -> std::result::Result<bool, String> {
+            Ok(ancestor == "c19571de34c47de3a766541b041637ba5f716ed7"
+                && descendant == "720f484b605f18887a48eef448d0084e2b76902d")
+        }
     }
 }

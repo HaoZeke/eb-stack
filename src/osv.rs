@@ -2,10 +2,16 @@
 //!
 //! The CVE record often has only a git range. The package name and the
 //! versions EasyBuild actually pins are on the GHSA or RUSTSEC alias, or in
-//! `name-version` tags such as `libXpm-3.5.17`.
+//! `name-version` tags such as `libXpm-3.5.17`. A GIT range is mapped onto
+//! release versions from `affected[].versions` when that list is present, and
+//! otherwise from tags in the upstream repository. An offline tag lookup
+//! leaves the range unresolved.
 
+use crate::osv_git::map_git_events;
 use crate::registry::{MapClient, RegistryClient};
-use crate::version::parse_requirement;
+use crate::version::{cmp_version, parse_requirement};
+
+pub use crate::osv_git::{CachingGitRanges, GitRangeSource, NoGit};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -101,9 +107,21 @@ pub fn parse_purl(raw: &str) -> Result<ParsedPurl, String> {
 }
 
 /// Fetch `id` and the advisory aliases that carry a package.
+///
+/// GIT ranges are not resolved against upstream tags. Use
+/// [`resolve_vulnerability_with`] when a [`GitRangeSource`] is available.
 pub fn resolve_vulnerability(
     id: &str,
     client: &dyn RegistryClient,
+) -> Result<OsvResolution, String> {
+    resolve_vulnerability_with(id, client, &NoGit)
+}
+
+/// Fetch `id`, and map GIT ranges with `git` when the advisory has no versions.
+pub fn resolve_vulnerability_with(
+    id: &str,
+    client: &dyn RegistryClient,
+    git: &dyn GitRangeSource,
 ) -> Result<OsvResolution, String> {
     let id = id.trim();
     if id.is_empty() || id.chars().any(|c| c.is_whitespace() || c == '/') {
@@ -112,7 +130,7 @@ pub fn resolve_vulnerability(
     let primary = fetch_vuln(client, id)?;
     let mut notes = Vec::new();
     let mut map: BTreeMap<(String, String), ResolvedComponent> = BTreeMap::new();
-    let mut unresolved = absorb_document(&primary, &mut map);
+    let mut unresolved = absorb_document(&primary, &mut map, git);
     let mut seen = BTreeSet::from([id.to_string()]);
     let mut fetched = 0usize;
     for alias in aliases_of(&primary) {
@@ -125,10 +143,15 @@ pub fn resolve_vulnerability(
         }
         fetched += 1;
         match fetch_vuln(client, &alias) {
-            Ok(document) => unresolved.extend(absorb_document(&document, &mut map)),
+            Ok(document) => unresolved.extend(absorb_document(&document, &mut map, git)),
             Err(error) => notes.push(format!("{alias}: {error}")),
         }
     }
+    // A GIT range with no package name is the repository's last path segment.
+    // When an alias already named that package in a language ecosystem, the
+    // tag bounds belong on that package. The language purl is what matches an
+    // extension; a generic purl would not.
+    fold_repo_name_into_ecosystem(&mut map);
     let mut components: Vec<ResolvedComponent> = map.into_values().collect();
     for component in &mut components {
         component.version_reqs = dedup(std::mem::take(&mut component.version_reqs));
@@ -201,13 +224,14 @@ fn fetch_vuln(client: &dyn RegistryClient, id: &str) -> Result<serde_json::Value
 fn absorb_document(
     document: &serde_json::Value,
     map: &mut BTreeMap<(String, String), ResolvedComponent>,
+    git: &dyn GitRangeSource,
 ) -> Vec<String> {
     let Some(affected) = document.get("affected").and_then(|value| value.as_array()) else {
         return Vec::new();
     };
     let mut unresolved = Vec::new();
     for entry in affected {
-        unresolved.extend(absorb_affected(entry, map));
+        unresolved.extend(absorb_affected(entry, map, git));
     }
     unresolved
 }
@@ -215,6 +239,7 @@ fn absorb_document(
 fn absorb_affected(
     entry: &serde_json::Value,
     map: &mut BTreeMap<(String, String), ResolvedComponent>,
+    git: &dyn GitRangeSource,
 ) -> Vec<String> {
     let package = entry
         .get("package")
@@ -223,7 +248,8 @@ fn absorb_affected(
     let ecosystem = text_field(&package, "ecosystem");
     let name = text_field(&package, "name");
     let purl = text_field(&package, "purl");
-    let (reqs, dropped) = range_reqs(entry);
+    let (reqs, dropped) = range_reqs(entry, git);
+    let listed = string_list(entry, "versions");
     if !name.is_empty() {
         let slot = map
             .entry((ecosystem.clone(), name.clone()))
@@ -239,16 +265,34 @@ fn absorb_affected(
             slot.purl = purl;
         }
         slot.version_reqs.extend(reqs);
-        slot.versions.extend(plain_versions(entry, &name));
+        slot.versions.extend(release_versions(&listed, &name));
         slot.unresolved.extend(dropped);
         return Vec::new();
     }
     // A converted CVE often has no package. `libXpm-3.5.17` is still a name
     // and a version. Git tags such as `XORG-6_8_0` are not.
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for raw in string_list(entry, "versions") {
-        if let Some((tagged, version)) = split_named_version(&raw) {
+    for raw in &listed {
+        if let Some((tagged, version)) = split_named_version(raw) {
             by_name.entry(tagged).or_default().push(version);
+        }
+    }
+    let covered = !by_name.is_empty() && entry_has_git(entry);
+    if by_name.is_empty() && !reqs.is_empty() {
+        if let Some(inferred) = repo_name(entry) {
+            let slot = map
+                .entry((String::new(), inferred.clone()))
+                .or_insert_with(|| ResolvedComponent {
+                    ecosystem: String::new(),
+                    name: inferred,
+                    purl: String::new(),
+                    version_reqs: Vec::new(),
+                    versions: Vec::new(),
+                    unresolved: Vec::new(),
+                });
+            slot.version_reqs.extend(reqs);
+            slot.unresolved.extend(dropped);
+            return Vec::new();
         }
     }
     for (tagged, versions) in by_name {
@@ -262,15 +306,36 @@ fn absorb_affected(
                 versions: Vec::new(),
                 unresolved: Vec::new(),
             });
+        if covered {
+            if let Some(span) = span_req(&versions) {
+                slot.version_reqs.push(span);
+            }
+        }
         slot.versions.extend(versions);
+    }
+    // Named tags already carry the releases the GIT commits map onto, so the
+    // unparsed-GIT note is not returned with them. A failed tag lookup still is.
+    if covered {
+        return dropped
+            .into_iter()
+            .filter(|item| item != "GIT range not parsed")
+            .collect();
     }
     dropped
 }
 
-fn range_reqs(entry: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+fn range_reqs(entry: &serde_json::Value, git: &dyn GitRangeSource) -> (Vec<String>, Vec<String>) {
     let Some(ranges) = entry.get("ranges").and_then(|value| value.as_array()) else {
         return (Vec::new(), Vec::new());
     };
+    let package_name = text_field(
+        &entry
+            .get("package")
+            .cloned()
+            .unwrap_or(serde_json::json!({})),
+        "name",
+    );
+    let listed = string_list(entry, "versions");
     let mut reqs = Vec::new();
     let mut unresolved = Vec::new();
     for range in ranges {
@@ -279,6 +344,36 @@ fn range_reqs(entry: &serde_json::Value) -> (Vec<String>, Vec<String>) {
             .and_then(|value| value.as_str())
             .unwrap_or("");
         let label = if kind.is_empty() { "range" } else { kind };
+        if kind == "GIT" {
+            if versions_cover_git(&package_name, &listed) {
+                // The advisory already enumerated the releases those commits
+                // affect. The span is that set; exact versions are stored too.
+                if !package_name.is_empty() {
+                    let releases = release_versions(&listed, &package_name);
+                    if let Some(span) = span_req(&releases) {
+                        push_req(&mut reqs, &mut unresolved, &span);
+                    }
+                }
+                continue;
+            }
+            let repo = range
+                .get("repo")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let Some(events) = range.get("events").and_then(|value| value.as_array()) else {
+                unresolved.push("GIT range has no events".to_string());
+                continue;
+            };
+            match map_git_events(repo, events, git) {
+                Ok(parsed) => {
+                    for req in parsed {
+                        push_req(&mut reqs, &mut unresolved, &req);
+                    }
+                }
+                Err(_) => unresolved.push("GIT range not parsed".to_string()),
+            }
+            continue;
+        }
         if kind != "SEMVER" && kind != "ECOSYSTEM" {
             unresolved.push(format!("{label} range not parsed"));
             continue;
@@ -344,9 +439,9 @@ fn push_req(reqs: &mut Vec<String>, dropped: &mut Vec<String>, req: &str) {
     }
 }
 
-fn plain_versions(entry: &serde_json::Value, name: &str) -> Vec<String> {
+fn release_versions(raws: &[String], name: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for raw in string_list(entry, "versions") {
+    for raw in raws {
         if let Some(rest) = raw.strip_prefix("v/").or_else(|| raw.strip_prefix('v')) {
             if rest.starts_with(|c: char| c.is_ascii_digit()) {
                 out.push(rest.to_string());
@@ -354,16 +449,123 @@ fn plain_versions(entry: &serde_json::Value, name: &str) -> Vec<String> {
             }
         }
         if raw.starts_with(|c: char| c.is_ascii_digit()) {
-            out.push(raw);
+            out.push(raw.clone());
             continue;
         }
-        if let Some((tagged, version)) = split_named_version(&raw) {
+        if let Some((tagged, version)) = split_named_version(raw) {
             if tagged.eq_ignore_ascii_case(name) {
                 out.push(version);
             }
         }
     }
     out
+}
+
+/// `versions` names the releases a GIT range affects when the package is
+/// known, or when nameless entries use `name-version` tags.
+fn versions_cover_git(package_name: &str, listed: &[String]) -> bool {
+    if !package_name.is_empty() {
+        return !release_versions(listed, package_name).is_empty();
+    }
+    listed.iter().any(|raw| split_named_version(raw).is_some())
+}
+
+fn entry_has_git(entry: &serde_json::Value) -> bool {
+    entry
+        .get("ranges")
+        .and_then(|value| value.as_array())
+        .is_some_and(|ranges| {
+            ranges
+                .iter()
+                .any(|range| range.get("type").and_then(|value| value.as_str()) == Some("GIT"))
+        })
+}
+
+fn span_req(versions: &[String]) -> Option<String> {
+    let mut ordered: Vec<&str> = versions.iter().map(String::as_str).collect();
+    if ordered.is_empty() {
+        return None;
+    }
+    ordered.sort_by(|left, right| cmp_version(left, right).then(left.cmp(right)));
+    ordered.dedup();
+    let first = ordered[0];
+    let last = ordered[ordered.len() - 1];
+    Some(format!(">={first},<={last}"))
+}
+
+fn repo_name(entry: &serde_json::Value) -> Option<String> {
+    let ranges = entry.get("ranges")?.as_array()?;
+    for range in ranges {
+        if range.get("type").and_then(|value| value.as_str()) != Some("GIT") {
+            continue;
+        }
+        let repo = range
+            .get("repo")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if let Some(name) = name_from_repo(repo) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn name_from_repo(repo: &str) -> Option<String> {
+    let trimmed = repo.trim().trim_end_matches('/').trim_end_matches(".git");
+    let name = trimmed.rsplit('/').next()?;
+    let mut chars = name.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Move a repository-named component onto the language package of the same name.
+fn fold_repo_name_into_ecosystem(map: &mut BTreeMap<(String, String), ResolvedComponent>) {
+    let bare_keys: Vec<(String, String)> = map
+        .keys()
+        .filter(|(ecosystem, _)| ecosystem.is_empty())
+        .cloned()
+        .collect();
+    for key in bare_keys {
+        let name = key.1.clone();
+        let targets: Vec<(String, String)> = map
+            .keys()
+            .filter(|(ecosystem, other)| {
+                language_ecosystem(ecosystem) && other.eq_ignore_ascii_case(&name)
+            })
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            continue;
+        }
+        let Some(bare) = map.remove(&key) else {
+            continue;
+        };
+        for target in targets {
+            if let Some(slot) = map.get_mut(&target) {
+                slot.version_reqs.extend(bare.version_reqs.iter().cloned());
+                slot.versions.extend(bare.versions.iter().cloned());
+                slot.unresolved.extend(bare.unresolved.iter().cloned());
+                if slot.purl.is_empty() {
+                    slot.purl.clone_from(&bare.purl);
+                }
+            }
+        }
+    }
+}
+
+fn language_ecosystem(ecosystem: &str) -> bool {
+    matches!(
+        ecosystem,
+        "PyPI" | "crates.io" | "Go" | "npm" | "RubyGems" | "Maven"
+    )
 }
 
 fn split_named_version(raw: &str) -> Option<(String, String)> {
@@ -548,13 +750,16 @@ mod tests {
             libxpm.components[0].versions,
             vec!["3.5.17".to_string(), "3.5.18".to_string()]
         );
-        assert!(libxpm.components[0].version_reqs.is_empty());
+        assert_eq!(
+            libxpm.components[0].version_reqs,
+            vec![">=3.5.17,<=3.5.18".to_string()]
+        );
         assert_eq!(libxpm.components[0].purl, "pkg:generic/libXpm");
         assert!(
             libxpm
                 .unresolved
                 .iter()
-                .any(|item| item.contains("GIT range not parsed")),
+                .all(|item| !item.contains("GIT range not parsed")),
             "{:?}",
             libxpm.unresolved
         );
@@ -621,5 +826,185 @@ mod tests {
             text.contains("requirement not parsed") && text.contains("1.2.3,ubuntu"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_git_range_with_a_versions_list_maps_onto_those_releases() {
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            "https://api.osv.dev/v1/vulns/CVE-2099-1000".into(),
+            br#"{"id":"CVE-2099-1000","affected":[{"package":{"ecosystem":"PyPI","name":"urllib3","purl":"pkg:pypi/urllib3"},"ranges":[{"type":"GIT","repo":"https://github.com/urllib3/urllib3","events":[{"introduced":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"fixed":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}],"versions":["2.5.0","1.0.0"]}]}"#.to_vec(),
+        );
+        // NoGit would fail a tag lookup. The versions list has to be enough.
+        let resolution =
+            resolve_vulnerability_with("CVE-2099-1000", &MapClient { pages }, &NoGit).unwrap();
+        assert!(
+            resolution.unresolved.is_empty(),
+            "{:?}",
+            resolution.unresolved
+        );
+        assert_eq!(
+            resolution.components.len(),
+            1,
+            "{:?}",
+            resolution.components
+        );
+        let component = &resolution.components[0];
+        assert_eq!(component.name, "urllib3");
+        assert_eq!(
+            component.versions,
+            vec!["1.0.0".to_string(), "2.5.0".to_string()]
+        );
+        assert_eq!(component.version_reqs, vec![">=1.0.0,<=2.5.0".to_string()]);
+        assert!(
+            component.unresolved.is_empty(),
+            "{:?}",
+            component.unresolved
+        );
+        let counts = reach_urllib(&resolution);
+        assert_eq!(counts.0, 1, "affected 2.5.0 is a carrier");
+        assert_eq!(counts.1, 0);
+    }
+
+    #[test]
+    fn a_git_only_range_stays_unparsed_when_offline() {
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            "https://api.osv.dev/v1/vulns/CVE-2099-1001".into(),
+            br#"{"id":"CVE-2099-1001","affected":[{"package":{"ecosystem":"PyPI","name":"urllib3","purl":"pkg:pypi/urllib3"},"ranges":[{"type":"GIT","repo":"https://github.com/urllib3/urllib3","events":[{"introduced":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"last_affected":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}]}]}"#.to_vec(),
+        );
+        let resolution =
+            resolve_vulnerability_with("CVE-2099-1001", &MapClient { pages }, &NoGit).unwrap();
+        assert_eq!(
+            resolution.components.len(),
+            1,
+            "{:?}",
+            resolution.components
+        );
+        let component = &resolution.components[0];
+        assert!(
+            component.version_reqs.is_empty(),
+            "{:?}",
+            component.version_reqs
+        );
+        assert!(component.versions.is_empty());
+        assert!(
+            component
+                .unresolved
+                .iter()
+                .any(|item| item.contains("GIT range not parsed")),
+            "{:?}",
+            component.unresolved
+        );
+        let counts = reach_urllib(&resolution);
+        assert_eq!(counts.0, 0);
+        assert_eq!(counts.1, 1, "unparsed GIT range counts as review");
+    }
+
+    #[test]
+    fn a_mixed_semver_and_git_range_keeps_both() {
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            "https://api.osv.dev/v1/vulns/CVE-2099-1002".into(),
+            br#"{"id":"CVE-2099-1002","affected":[{"package":{"ecosystem":"PyPI","name":"urllib3","purl":"pkg:pypi/urllib3"},"ranges":[{"type":"SEMVER","events":[{"introduced":"1.0.0"},{"fixed":"2.6.0"}]},{"type":"GIT","repo":"https://github.com/urllib3/urllib3","events":[{"introduced":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"fixed":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}],"versions":["1.0.0","2.5.0"]}]}"#.to_vec(),
+        );
+        let resolution =
+            resolve_vulnerability_with("CVE-2099-1002", &MapClient { pages }, &NoGit).unwrap();
+        let component = &resolution.components[0];
+        assert!(
+            component
+                .version_reqs
+                .iter()
+                .any(|req| req == ">=1.0.0,<2.6.0"),
+            "{:?}",
+            component.version_reqs
+        );
+        assert!(
+            component
+                .version_reqs
+                .iter()
+                .any(|req| req == ">=1.0.0,<=2.5.0"),
+            "{:?}",
+            component.version_reqs
+        );
+        assert_eq!(
+            component.versions,
+            vec!["1.0.0".to_string(), "2.5.0".to_string()]
+        );
+        assert!(
+            component
+                .unresolved
+                .iter()
+                .all(|item| !item.contains("GIT range not parsed")),
+            "{:?}",
+            component.unresolved
+        );
+        let counts = reach_urllib(&resolution);
+        assert_eq!(counts.0, 1);
+        assert_eq!(counts.1, 0);
+    }
+
+    /// `(carriers, review)` for urllib3 2.5.0 and 2.7.0 in generation 2026.1.
+    fn reach_urllib(resolution: &OsvResolution) -> (usize, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("old.eb"),
+            "\
+easyblock = 'PythonBundle'\n\
+name = 'old'\n\
+version = '1'\n\
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+exts_list = [('urllib3', '2.5.0', {})]\n\
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("new.eb"),
+            "\
+easyblock = 'PythonBundle'\n\
+name = 'new'\n\
+version = '1'\n\
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+exts_list = [('urllib3', '2.7.0', {})]\n\
+",
+        )
+        .unwrap();
+        let parsed = crate::eb_parse::parse_easyconfig_tree(dir.path()).unwrap();
+        let filter = crate::dep_filter::FilterDeps::empty();
+        let document = crate::component_reach::cve_reach(
+            &resolution.id,
+            &resolution.components,
+            &resolution.notes,
+            &resolution.unresolved,
+            &crate::component_reach::ReachScope {
+                candidates: &parsed.candidates,
+                generation: "2026.1",
+                installed: None,
+                easystacks: &[],
+                compat: &[],
+                filter_deps: &filter,
+                generated_at: "2026-11-01T00:00:00Z",
+            },
+        );
+        let carriers = document
+            .results
+            .iter()
+            .map(|item| item.carriers.len())
+            .sum();
+        let review = document
+            .results
+            .iter()
+            .map(|item| item.closure_counts.review)
+            .sum();
+        if carriers == 1 {
+            assert!(document.results[0].carriers.iter().any(|row| {
+                row.version == "2.5.0" && row.role == "extension" && row.easyconfig == "old.eb"
+            }));
+            assert!(document.results[0]
+                .carriers
+                .iter()
+                .all(|row| row.version != "2.7.0"));
+        }
+        (carriers, review)
     }
 }

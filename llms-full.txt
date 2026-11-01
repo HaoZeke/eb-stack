@@ -3322,11 +3322,14 @@ range and no package. Advisory aliases (`GHSA-`, `RUSTSEC-`, `PYSEC-`,
 become exact versions. Git tags such as `XORG-6_8_0` do not. Each
 affected package is searched on its own, and a version matches when any
 of that package's requirements match or when it is one of the exact
-versions. A range whose type is not SEMVER or ECOSYSTEM, and an event
-that does not parse as a version requirement, is listed under
-Unresolved ranges in the markdown. It is not discarded. When every
-range on a package was unparsed, that package counts as review and its
-carrier list stays empty. The three output files are then one document
+versions. A GIT range is mapped onto release versions from the affected
+entry's `versions` list when that list is present, and otherwise from
+tags in the upstream repository (`git ls-remote --tags` and
+`git merge-base --is-ancestor` on a blobless fetch, cached, and skipped
+when the lookup cannot reach the network). A range that still does not
+parse is listed under Unresolved ranges in the markdown. It is not
+discarded. When every range on a package was unparsed, that package
+counts as review and its carrier list stays empty. The three output files are then one document
 with `kind` set to `cve`, and `results` contains one reach document per
 package. The summary line includes the closure counts `changed`,
 `must-rebuild`, `review`, and `no-rebuild`.
@@ -6584,9 +6587,13 @@ component of that language, plus a crate for `cargo` and a wheel for
 carrier model. `pkg:cargo/curl` does not match the cURL recipe.
 `--cve` resolves the id through Open Source Vulnerabilities (OSV), follows GitHub Security Advisory (GHSA), RUSTSEC, PYSEC, and
 GO aliases when the Common Vulnerabilities and Exposures (CVE) record has only a git range, and keeps named
-version tags such as `libXpm-3.5.17`. A range that is not SEMVER or
-ECOSYSTEM, or an event that does not parse, is reported under
-Unresolved ranges. A package whose ranges were all unparsed counts as
+version tags such as `libXpm-3.5.17`. A GIT range is mapped onto
+release versions: the affected entry's `versions` list when it has one,
+and otherwise tags from the upstream repository (`git ls-remote --tags`,
+then `git merge-base --is-ancestor` on a blobless fetch). That lookup is
+cached and is skipped when it cannot reach the network, and the range
+then stays under Unresolved ranges. An event that does not parse is
+reported there too. A package whose ranges were all unparsed counts as
 review. Several affected packages are written as one document with
 `kind` `cve`. The summary line includes `changed`, `must-rebuild`,
 `review`, and `no-rebuild`.
