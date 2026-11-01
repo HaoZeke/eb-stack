@@ -1,8 +1,105 @@
 use eb_stack::mcp::handle_message;
 use serde_json::json;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static WORKSPACE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Integers that a document states as a tool count (`48 tools`).
+fn documented_tool_counts(text: &str) -> Vec<usize> {
+    let mut counts = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(" tools") {
+        let before = &rest[..at];
+        let digits: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        if !digits.is_empty() {
+            let boundary = before.len() - digits.len();
+            let separated = boundary == 0
+                || before[..boundary]
+                    .ends_with(|c: char| c.is_whitespace() || c == '`' || c == '~');
+            if separated {
+                counts.push(digits.parse().expect("digits"));
+            }
+        }
+        rest = &rest[at + " tools".len()..];
+    }
+    counts
+}
+
+fn collect_org(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read docs") {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            collect_org(&path, out);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("org") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn documented_mcp_catalog_matches_the_registry() {
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let names = response["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<BTreeSet<_>>();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut pages = vec![root.join("skills/mcp/SKILL.md")];
+    collect_org(&root.join("docs/orgmode"), &mut pages);
+    let mut saw_count = false;
+    for path in &pages {
+        let text = std::fs::read_to_string(path).expect("read doc");
+        for count in documented_tool_counts(&text) {
+            saw_count = true;
+            assert_eq!(
+                count,
+                names.len(),
+                "{} says {count} tools; tools/list has {}",
+                path.display(),
+                names.len()
+            );
+        }
+    }
+    assert!(
+        saw_count,
+        "a manual page should still state the registry size"
+    );
+
+    let blast =
+        std::fs::read_to_string(root.join("docs/orgmode/explanation/sbom-blast-radius.org"))
+            .expect("blast radius page");
+    let start = blast
+        .find("eb_package_inspect")
+        .expect("tool list in the blast-radius page");
+    let after = &blast[start..];
+    let end = after.find("#+end_src").expect("end of the tool list");
+    let listed = after[..end]
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("eb_"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        listed, names,
+        "documented tool names drifted from tools/list"
+    );
+}
 
 #[test]
 fn mcp_catalog_matches_the_version_one_workflows() {
