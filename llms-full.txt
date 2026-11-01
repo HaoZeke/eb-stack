@@ -1975,7 +1975,7 @@ a Jenkins matrix step, or a plain shell loop.
 # Read the stack diff
 
 Every co-selected package is classified against the baseline lock as
-`unchanged`, `added`, `removed`, or `version-bumped`:
+`unchanged`, `added`, `baseline not in this layer`, or `version-bumped`:
 
 ```markdown
 # Stack diff
@@ -1986,7 +1986,7 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 - **unchanged**: 2
 - **added**: 0
-- **removed**: 0
+- **baseline not in this layer**: 0
 - **version-bumped**: 3
 
 ## Packages
@@ -8029,7 +8029,7 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 - **unchanged**: 2
 - **added**: 0
-- **removed**: 0
+- **baseline not in this layer**: 0
 - **version-bumped**: 3
 
 ## Packages
@@ -8065,8 +8065,9 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 Every package present in either the baseline or the solved lock is
 classified once: `unchanged` (same version both sides), `added` (solved
-only), `removed` (baseline only), or `version-bumped` (present both sides,
-different version). Sections are sorted by package name.
+only), `baseline not in this layer` (in the baseline, absent from this
+solve; the machine token stays `removed`), or `version-bumped` (present
+both sides, different version). Sections are sorted by package name.
 
 # Planned Software Bill of Materials (SBOM) (`--sbom-out`, CycloneDX 1.5)
 
@@ -10010,17 +10011,17 @@ PY
 ```text
 unchanged: 4
 added: 54
-removed: 0
+baseline not in this layer: 0
 version-bumped: 0
 ```
 
 The solve selects 58 packages. Four of them are unchanged from foss-2025a:
 Cbc 2.10.12, Cgl 0.60.9, Clp 1.17.10, and MUMPS 5.8.1. The other 54 are
 added. They are the GCCcore, GCC, and system recipes in the foss-2025b
-closure, which the foss-2025a side of this slice does not carry. Nothing
-is removed and nothing is version-bumped. The Jenkins line is the Cbc
-easyconfig. The four foss-2025a counterparts are the baseline and are not
-on the build list.
+closure, which the foss-2025a side of this slice does not carry. The
+baseline not in this layer count is 0, and nothing is version-bumped.
+The Jenkins line is the Cbc easyconfig. The four foss-2025a counterparts
+are the baseline and are not on the build list.
 
 ```bash
 eb-stack stack sbom \

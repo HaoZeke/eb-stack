@@ -81,7 +81,7 @@ a Jenkins matrix step, or a plain shell loop.
 * Read the stack diff
 
 Every co-selected package is classified against the baseline lock as
-~unchanged~, ~added~, ~removed~, or ~version-bumped~:
+~unchanged~, ~added~, ~baseline not in this layer~, or ~version-bumped~:
 
 #+begin_src markdown
 # Stack diff
@@ -92,7 +92,7 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 - **unchanged**: 2
 - **added**: 0
-- **removed**: 0
+- **baseline not in this layer**: 0
 - **version-bumped**: 3
 
 ## Packages

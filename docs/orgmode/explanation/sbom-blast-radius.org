@@ -173,17 +173,17 @@ PY
 #+begin_src text
 unchanged: 4
 added: 54
-removed: 0
+baseline not in this layer: 0
 version-bumped: 0
 #+end_src
 
 The solve selects 58 packages. Four of them are unchanged from foss-2025a:
 Cbc 2.10.12, Cgl 0.60.9, Clp 1.17.10, and MUMPS 5.8.1. The other 54 are
 added. They are the GCCcore, GCC, and system recipes in the foss-2025b
-closure, which the foss-2025a side of this slice does not carry. Nothing
-is removed and nothing is version-bumped. The Jenkins line is the Cbc
-easyconfig. The four foss-2025a counterparts are the baseline and are not
-on the build list.
+closure, which the foss-2025a side of this slice does not carry. The
+baseline not in this layer count is 0, and nothing is version-bumped.
+The Jenkins line is the Cbc easyconfig. The four foss-2025a counterparts
+are the baseline and are not on the build list.
 
 #+begin_src bash
 eb-stack stack sbom \

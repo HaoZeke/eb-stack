@@ -101,7 +101,7 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 - **unchanged**: 2
 - **added**: 0
-- **removed**: 0
+- **baseline not in this layer**: 0
 - **version-bumped**: 3
 
 ## Packages
@@ -137,8 +137,9 @@ Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 Every package present in either the baseline or the solved lock is
 classified once: ~unchanged~ (same version both sides), ~added~ (solved
-only), ~removed~ (baseline only), or ~version-bumped~ (present both sides,
-different version). Sections are sorted by package name.
+only), ~baseline not in this layer~ (in the baseline, absent from this
+solve; the machine token stays ~removed~), or ~version-bumped~ (present
+both sides, different version). Sections are sorted by package name.
 
 * Planned Software Bill of Materials (SBOM) (~--sbom-out~, CycloneDX 1.5)
 

@@ -185,7 +185,8 @@ pub enum PackageChangeKind {
     Unchanged,
     /// In the solved lock only: the solve pulled it in.
     Added,
-    /// In the baseline only: nothing in the solved stack needs it.
+    /// In the baseline only. The markdown calls this "baseline not in this
+    /// layer": the solve did not select it. [`Self::as_str`] stays `removed`.
     Removed,
     /// In both, at different versions. The direction is not implied; read
     /// `baseline_version` against `solved_version` to see which way it moved.
@@ -194,12 +195,26 @@ pub enum PackageChangeKind {
 
 impl PackageChangeKind {
     /// The stable kebab-case name used in reports and machine-read output.
+    ///
+    /// `removed` stays this token so a consumer of the kind string keeps
+    /// working. The markdown stack diff uses [`Self::markdown_label`].
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unchanged => "unchanged",
             Self::Added => "added",
             Self::Removed => "removed",
             Self::VersionBumped => "version-bumped",
+        }
+    }
+
+    /// Label printed in the human stack diff.
+    ///
+    /// Baseline-only rows are modules the baseline has and this solve did
+    /// not select. They are not a list of modules to delete.
+    pub fn markdown_label(self) -> &'static str {
+        match self {
+            Self::Removed => "baseline not in this layer",
+            other => other.as_str(),
         }
     }
 }
@@ -328,12 +343,12 @@ pub fn format_stack_diff_markdown(baseline: &StackLock, solved: &StackLock) -> S
     ));
     out.push_str("## Summary\n\n");
     out.push_str(&format!(
-        "- **unchanged**: {unchanged}\n- **added**: {added}\n- **removed**: {removed}\n- **version-bumped**: {bumped}\n\n"
+        "- **unchanged**: {unchanged}\n- **added**: {added}\n- **baseline not in this layer**: {removed}\n- **version-bumped**: {bumped}\n\n"
     ));
     out.push_str("## Packages\n\n");
 
     for c in &changes {
-        out.push_str(&format!("### {}: {}\n\n", c.name, c.kind.as_str()));
+        out.push_str(&format!("### {}: {}\n\n", c.name, c.kind.markdown_label()));
         match c.kind {
             PackageChangeKind::Unchanged => {
                 out.push_str(&format!(
@@ -353,7 +368,7 @@ pub fn format_stack_diff_markdown(baseline: &StackLock, solved: &StackLock) -> S
             }
             PackageChangeKind::Removed => {
                 out.push_str(&format!(
-                    "- Baseline: `{}` (`{}`)\n- Solved: *(removed)*\n\n",
+                    "- Baseline: `{}` (`{}`)\n- Solved: *(baseline not in this layer)*\n\n",
                     c.baseline_version.as_deref().unwrap_or("none"),
                     c.baseline_easyconfig_path.as_deref().unwrap_or("none"),
                 ));
@@ -541,10 +556,17 @@ mod tests {
 
         let md = format_stack_diff_markdown(&baseline, &solved);
         assert!(md.contains("**added**: 1"), "{md}");
-        assert!(md.contains("**removed**: 1"), "{md}");
+        assert!(md.contains("**baseline not in this layer**: 1"), "{md}");
+        assert!(!md.contains("**removed**"), "{md}");
+        assert_eq!(PackageChangeKind::Removed.as_str(), "removed");
+        assert_eq!(
+            PackageChangeKind::Removed.markdown_label(),
+            "baseline not in this layer"
+        );
         assert!(md.contains("**version-bumped**: 1"), "{md}");
         assert!(md.contains("*(not present)*"), "{md}");
-        assert!(md.contains("*(removed)*"), "{md}");
+        assert!(md.contains("*(baseline not in this layer)*"), "{md}");
+        assert!(!md.contains("*(removed)*"), "{md}");
         assert!(md.contains(") to solved ("), "{md}");
         assert!(!md.contains("): solved ("), "{md}");
         assert!(md.contains("`0.3.23` to `0.3.27`"), "{md}");
