@@ -2,6 +2,8 @@
 name = "eb_stack"
 version = "0.3.0"
 edition = "2021"
+# Floor is 1.88.0: `time` 0.3.55, pulled in by cyclonedx-bom, sets
+# rust-version 1.88.0. Edition 2024 dependencies need Cargo 1.85, below that.
 rust-version = "1.88"
 description = "Turn conda-forge, Spack, and EasyBuild recipes into Resolvo-solved variants, CycloneDX SBOMs, and build-evaluated package bundles"
 license = "MIT"

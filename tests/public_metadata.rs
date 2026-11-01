@@ -129,7 +129,7 @@ fn ci_enforces_the_declared_msrv_and_quality_gates() {
         .expect("read test workflow");
     for command in [
         "toolchain: 1.88.0",
-        "cargo check --locked --all-targets",
+        "cargo build --locked --all-targets",
         "cargo fmt --all --check",
         "cargo clippy --locked --all-targets -- -D warnings",
         "cargo package --locked",

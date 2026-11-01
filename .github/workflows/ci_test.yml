@@ -41,8 +41,10 @@ jobs:
         with:
           toolchain: 1.88.0
       - uses: Swatinem/rust-cache@v2
-      - name: Locked all-targets check
-        run: cargo check --locked --all-targets
+      # `time` 0.3.55 (cyclonedx-bom) declares rust-version 1.88.0. Cargo
+      # 1.83 cannot parse the edition2024 manifests those crates ship.
+      - name: Locked all-targets build
+        run: cargo build --locked --all-targets
 
   unit:
     name: cargo test --lib
