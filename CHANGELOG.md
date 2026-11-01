@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Added
+
+- `stack provided` fails when a build-list line names software an
+  installed-module list or a baseline lock already provides. The match
+  is the package name, so a different version or toolchain still fails.
+  `--allow` keeps a second version. `eb_stack_provided` is the same check.
+- `stack gap` routes a missing name through an open software-layer pull
+  request (`--open-layer`) and an open easyconfigs pull request at the
+  generation (`--open-easyconfigs`), and writes one TSV per route.
+  A toolchain whose version is the generation (`lfoss-2026.1`) counts as
+  a recipe on that generation, as does an extra toolchain from
+  `data/eessi-generations.toml`.
+
+### Changed
+
+- `stack gap` classifies `--filter-deps` names as `filtered`. They were
+  `excluded`, in the same bucket as a `--exclude-file` line.
+
 ### Fixed
 
 - A package layer's `source_checksums` (one SHA-256 per plan source) is

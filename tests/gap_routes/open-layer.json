@@ -1,0 +1,14 @@
+[
+  {
+    "number": 1787,
+    "head_sha": "0000000000000000000000000000000000001787",
+    "title": "LAMMPS",
+    "easystacks": [
+      {
+        "path": "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.2-2026.1.yml",
+        "base": "easyconfigs:\n",
+        "head": "easyconfigs:\n  - LAMMPS-2025.0-foss-2026.1.eb\n"
+      }
+    ]
+  }
+]

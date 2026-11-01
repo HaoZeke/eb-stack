@@ -90,6 +90,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md),
     [find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md).
     [refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md).
+    [fail a build list that names software the baseline provides](https://eb-stack.rgoswami.me/howto/build-list-provided.html.md).
+    [route the modules a stack does not have](https://eb-stack.rgoswami.me/howto/module-gap.html.md).
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
@@ -3758,6 +3760,169 @@ entries are not checked.
 `eb_stack_generation` is the same check over the Model Context
 Protocol (MCP). See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# Fail a build list that names software the baseline provides
+
+A site layer holds only the software the European Environment for
+Scientific Software Installations (EESSI) does not install.
+`stack solve --build-list-excludes-baseline` writes that list from a
+solve. A later edit can put an EESSI module back on it, and the list
+becomes a full stack again. `eb-stack stack provided` reads the list
+and fails when a line's package name is one the baseline already
+provides. The version and the toolchain are ignored.
+
+# Check the fixture list
+
+`tests/provided_fixtures/site.list` is a Jenkins build list.
+`tests/provided_fixtures/installed.txt` names FFTW and Python.
+`tests/provided_fixtures/baseline.lock.json` names GROMACS. VASP is
+on the list and in neither source, so it is the site layer.
+
+```bash
+eb-stack stack provided \
+  --build-list tests/provided_fixtures/site.list \
+  --installed tests/provided_fixtures/installed.txt \
+  --baseline-lock tests/provided_fixtures/baseline.lock.json
+```
+
+That command printed:
+
+```
+provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list
+provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list
+provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list
+unparsed not-a-version.eb list=tests/provided_fixtures/site.list
+hits=3 unparsed=1 allowed=0 provided=3
+```
+
+The process exited 1. Standard error was:
+
+```
+error: 3 build-list lines name software the baseline already provides; 1 build-list line names no package
+```
+
+Read a hit left to right. `GROMACS-2026.0-foss-2026.1.eb` is the line.
+The baseline lock has GROMACS 2025.2, and the names match, so a newer
+build of the same software still fails. The Python line is a path;
+only the filename is read. `# FFTW-3.3.10-gompi-2026.1.eb` is a
+comment, so it is not a hit. `not-a-version.eb` names no package.
+`VASP-6.5.1-foss-2026.1.eb` is absent from the report.
+
+# Keep a second version
+
+Pass `--allow` for a package the site was asked to build beside the
+baseline's version. The match ignores case.
+
+```bash
+eb-stack stack provided \
+  --build-list tests/provided_fixtures/site.list \
+  --installed tests/provided_fixtures/installed.txt \
+  --baseline-lock tests/provided_fixtures/baseline.lock.json \
+  --allow GROMACS
+```
+
+GROMACS drops out of the hits. The counts line is
+`hits=2 unparsed=1 allowed=1 provided=3`. The process still exits 1,
+because FFTW, Python, and the unparsed line remain.
+
+# A list that passes
+
+```bash
+printf 'VASP-6.5.1-foss-2026.1.eb\n# FFTW-3.3.10-gompi-2026.1.eb\n' > /tmp/site-only.list
+eb-stack stack provided \
+  --build-list /tmp/site-only.list \
+  --installed tests/provided_fixtures/installed.txt
+```
+
+That command printed:
+
+```
+hits=0 unparsed=0 allowed=0 provided=2
+```
+
+The process exited 0. `--installed` and `--baseline-lock` are combined
+when both are set. Passing neither is status 2. `--json` prints the
+same fields as JSON. `eb_stack_provided` is the same check, and a hit
+is a tool error.
+
+# Route the modules a stack does not have
+
+`eb-stack stack gap` takes the module names a site loads and says, for
+each one the stack does not have, which route closes it. The routes
+are tried in order. The first that applies wins.
+
+| Route | When |
+| --- | --- |
+| `in-stack` | The stack's installed list has the name, ignoring case |
+| `excluded` | `--exclude-file` names it (licensed, vendor, conda, portal). Written to `site-only.tsv` |
+| `filtered` | `--filter-deps` names it, or `EASYBUILD_FILTER_DEPS` when the flag is absent |
+| `open-layer` | An `--open-layer` pull request adds an easystack line of that name |
+| `recipe` | The easyconfig trees have a recipe on this generation |
+| `open-easyconfigs` | An `--open-easyconfigs` pull request adds a recipe at this generation |
+| `no-recipe` | Nothing above applies. Written to `bump.tsv`. The newest easyconfig on any toolchain is the bump source |
+
+A toolchain whose version is the generation counts as on it, so
+`lfoss-2026.1` is a 2026.1 recipe. So does a toolchain listed for that
+generation in `data/eessi-generations.toml`, such as
+`llvm-compilers-21.1.8`.
+
+# Run the fixture
+
+The nine names are in `tests/gap_routes/site.txt`. The easyconfig tree
+has BLAST+ on gompi-2026.1 and CP2K on foss-2025b. The installed list
+has FFTW. zlib is filtered. MATLAB is licensed. Pull request 1787 adds
+LAMMPS. Pull request 25001 adds QuantumESPRESSO at foss-2026.1 and
+OldTool at foss-2025b.
+
+```bash
+eb-stack stack gap \
+  --site tests/gap_routes/site.txt \
+  --installed tests/gap_routes/installed.txt \
+  --easyconfigs tests/gap_routes/easyconfigs \
+  --generation 2026.1 \
+  --exclude-file tests/gap_routes/site-only.tsv \
+  --filter-deps zlib \
+  --open-layer tests/gap_routes/open-layer.json \
+  --open-easyconfigs tests/gap_routes/open-easyconfigs.json \
+  --out-dir /tmp/gap-demo
+```
+
+That command printed:
+
+```
+site=9 in-stack=1 filtered=1 open-layer=1 recipe=1 open-easyconfigs=1 no-recipe=3 excluded=1 out=/tmp/gap-demo
+```
+
+The process exited 0. `/tmp/gap-demo/gap.tsv` is every row:
+
+```
+name	route	recipe	newest_elsewhere	reason
+BLAST+	recipe	BLAST+-2.17.0-gompi-2026.1.eb	-	-
+CP2K	no-recipe	-	CP2K-2025.2-foss-2025b.eb	-
+FFTW	in-stack	-	-	-
+Julia	no-recipe	-	-	-
+LAMMPS	open-layer	LAMMPS-2025.0-foss-2026.1.eb	-	software-layer#1787
+MATLAB	excluded	-	-	licensed
+OldTool	no-recipe	-	-	-
+QuantumESPRESSO	open-easyconfigs	QuantumESPRESSO-7.4-foss-2026.1.eb	-	easyconfigs#25001
+zlib	filtered	-	-	filtered to the compatibility layer
+```
+
+OldTool is in the easyconfigs pull request, and the file is
+`foss-2025b`, so it is not `open-easyconfigs`. Julia has no easyconfig
+at all. CP2K's newest file is the bump source. BLAST+ is the only
+`recipe` row, and it is the only line of `roots.txt`, which is the
+input of `stack batch --roots-file`. `bump-sources.txt` names
+`CP2K-2025.2-foss-2025b.eb`.
+
+Each route also has its own file: `in-stack.tsv`, `site-only.tsv`,
+`filtered.tsv`, `open-layer.tsv`, `recipe.tsv`, `open-easyconfigs.tsv`,
+and `bump.tsv`. An `open-layer` match is the easystack line the pull
+request adds, not a dependency that line would build.
+
+`eb_stack_gap` writes the same files. `open_layer` and
+`open_easyconfigs` are arrays of the same pull-request JSON
+`pr-overlap --pr` reads.
+
 # Check CUDA compute capabilities in an easystack plan
 
 What it does: `stack cuda-cc` reads one or more easystacks as a plan,
@@ -4356,7 +4521,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, or names no package, and status 2 when neither `--installed` nor `--baseline-lock` is set.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -4379,6 +4544,8 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack easystack` | Write a lock as the YAML `eb --easystack` reads |
 | `stack sections` | Regroup a Jenkins build list under a previous list's headers |
 | `stack from-commit` | Report `from-commit` pins already contained in an EasyBuild release |
+| `stack gap` | Route each site module the stack lacks, and write one TSV per route |
+| `stack provided` | Fail when a build list names software a baseline already provides |
 | `stack arch` | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | `stack files` | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | `stack generation` | Refuse easystack entries outside their EESSI version's toolchain generations |
@@ -4780,7 +4947,13 @@ eb-stack stack gap \
   --generation 2026.1 \
   [--exclude-file SITE-ONLY.tsv] \
   [--filter-deps NAME,NAME...] \
+  [--open-layer OPEN.json]... [--open-easyconfigs OPEN.json]... \
   --out-dir GAP
+
+eb-stack stack provided \
+  --build-list SITE.list [--build-list OTHER.list]... \
+  (--installed INSTALLED.txt)... [--baseline-lock LOCK.json] \
+  [--allow NAME]... [--json]
 
 eb-stack stack batch \
   (--root FILE.eb... | --roots-file ROOTS.txt) \
@@ -4960,14 +5133,32 @@ previous section files goes under `--unfiled`, whose default is
 
 `stack gap` compares the module listings a site provides (`--site`,
 repeatable, `Name/Version` or a bare name per line) with a stack's
-`--installed` list. Each package is `in-stack` (matched without regard to
-case), `recipe` (the newest easyconfig on the `--generation` toolchains or
-the system toolchain is named), `no-recipe` (the newest easyconfig on any
-toolchain is named as the bump source), or `excluded` by a
-`--exclude-file` line, `name<TAB>reason`. `--filter-deps` names count as
-provided by the compatibility layer. The command writes `gap.tsv`,
-`roots.txt` for `stack batch --roots-file`, and `bump-sources.txt` for
-`package bump --latest`.
+`--installed` list. A name the stack has is `in-stack` (matched without
+regard to case). Each other name takes the first route that applies:
+`excluded` (a `--exclude-file` line, `name<TAB>reason`, for licensed,
+vendor, conda, and portal software), `filtered` (`--filter-deps`, or
+`EASYBUILD_FILTER_DEPS` when the flag is absent), `open-layer` (an
+`--open-layer` pull request adds an easystack line of that name),
+`recipe` (the newest easyconfig on the `--generation` toolchains, on a
+toolchain whose version is that generation, or on the system toolchain),
+`open-easyconfigs` (an `--open-easyconfigs` pull request adds a recipe at
+that generation), or `no-recipe` (the newest easyconfig on any toolchain
+is named as the bump source). The command writes `gap.tsv`, one TSV per
+route (`site-only.tsv` for `excluded`, `bump.tsv` for `no-recipe`, and
+`in-stack.tsv`, `filtered.tsv`, `open-layer.tsv`, `recipe.tsv`,
+`open-easyconfigs.tsv`), `roots.txt` for `stack batch --roots-file` (the
+`recipe` rows only), and `bump-sources.txt` for `package bump --latest`.
+
+`stack provided` reads each `--build-list` (a Jenkins list or one
+easyconfig path per line; `#` comments are skipped) and fails when a
+line's package name is one `--installed` or `--baseline-lock` already
+provides. Version and toolchain are ignored, so a different build of
+the same software still fails. `--allow NAME` keeps a second version.
+A `.eb` line that names no package fails too. Stdout lists each hit as
+`provided <file> name=<Name> list=<path>` and ends with
+`hits= unparsed= allowed= provided=`. `--json` prints those fields as
+JSON. See [fail a build list that names software the baseline provides](https://eb-stack.rgoswami.me/../howto/build-list-provided.html.md)
+and [route the modules a stack does not have](https://eb-stack.rgoswami.me/../howto/module-gap.html.md).
 
 `stack batch` plans software-layer pull requests whose builds do not
 overlap. A root's set is its closure over the robot path minus the
@@ -5843,7 +6034,8 @@ plus sandboxed recipe and easyblock tools:
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
-  `eb_stack_easystack`, `eb_stack_sections`, `eb_stack_from_commit`;
+  `eb_stack_easystack`, `eb_stack_sections`, `eb_stack_from_commit`,
+  `eb_stack_gap`, `eb_stack_provided`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
 - `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`;
@@ -5888,7 +6080,12 @@ option a `<file.eb>:<option>=<value>` string. `eb_stack_sections` requires
 `list`, `from`, and `out`, and takes `unfiled`. `eb_stack_from_commit`
 requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
 `easybuild_version`, and `json`. It returns the same report as
-`stack from-commit`. `eb_stack_arch` requires `easystack` and takes
+`stack from-commit`. `eb_stack_gap` requires `site`, `installed`,
+`easyconfigs`, `generation`, and `out_dir`, and takes `exclude_file`,
+`filter_deps`, `open_layer`, and `open_easyconfigs`. `eb_stack_provided`
+requires `build_list` and takes `installed`, `baseline_lock`, `allow`,
+and `json`. A hit is a tool error, and the text is the same report as
+`stack provided`. `eb_stack_arch` requires `easystack` and takes
 `arch`, `easyconfigs`, `installed`, `additional_arch`, `unsupported`,
 `probe_sources`, `probe_retries`, and `probe_timeout_s`. It returns the
 same report as `stack arch`, with `parse_failed` and `source_findings`,
@@ -9741,7 +9938,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 48 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 49 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -9778,6 +9975,7 @@ eb_stack_order
 eb_stack_easystack
 eb_package_latest
 eb_stack_gap
+eb_stack_provided
 eb_stack_batch
 eb_stack_arch
 eb_stack_files
@@ -9801,7 +9999,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 48 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 49 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:

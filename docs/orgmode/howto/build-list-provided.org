@@ -1,0 +1,84 @@
+#+TITLE: Fail a build list that names software the baseline provides
+#+OPTIONS: toc:t num:nil author:nil
+
+A site layer holds only the software the European Environment for
+Scientific Software Installations (EESSI) does not install.
+~stack solve --build-list-excludes-baseline~ writes that list from a
+solve. A later edit can put an EESSI module back on it, and the list
+becomes a full stack again. ~eb-stack stack provided~ reads the list
+and fails when a line's package name is one the baseline already
+provides. The version and the toolchain are ignored.
+
+* Check the fixture list
+
+~tests/provided_fixtures/site.list~ is a Jenkins build list.
+~tests/provided_fixtures/installed.txt~ names FFTW and Python.
+~tests/provided_fixtures/baseline.lock.json~ names GROMACS. VASP is
+on the list and in neither source, so it is the site layer.
+
+#+begin_src bash
+eb-stack stack provided \
+  --build-list tests/provided_fixtures/site.list \
+  --installed tests/provided_fixtures/installed.txt \
+  --baseline-lock tests/provided_fixtures/baseline.lock.json
+#+end_src
+
+That command printed:
+
+#+begin_example
+provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list
+provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list
+provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list
+unparsed not-a-version.eb list=tests/provided_fixtures/site.list
+hits=3 unparsed=1 allowed=0 provided=3
+#+end_example
+
+The process exited 1. Standard error was:
+
+#+begin_example
+error: 3 build-list lines name software the baseline already provides; 1 build-list line names no package
+#+end_example
+
+Read a hit left to right. ~GROMACS-2026.0-foss-2026.1.eb~ is the line.
+The baseline lock has GROMACS 2025.2, and the names match, so a newer
+build of the same software still fails. The Python line is a path;
+only the filename is read. ~# FFTW-3.3.10-gompi-2026.1.eb~ is a
+comment, so it is not a hit. ~not-a-version.eb~ names no package.
+~VASP-6.5.1-foss-2026.1.eb~ is absent from the report.
+
+* Keep a second version
+
+Pass ~--allow~ for a package the site was asked to build beside the
+baseline's version. The match ignores case.
+
+#+begin_src bash
+eb-stack stack provided \
+  --build-list tests/provided_fixtures/site.list \
+  --installed tests/provided_fixtures/installed.txt \
+  --baseline-lock tests/provided_fixtures/baseline.lock.json \
+  --allow GROMACS
+#+end_src
+
+GROMACS drops out of the hits. The counts line is
+~hits=2 unparsed=1 allowed=1 provided=3~. The process still exits 1,
+because FFTW, Python, and the unparsed line remain.
+
+* A list that passes
+
+#+begin_src bash
+printf 'VASP-6.5.1-foss-2026.1.eb\n# FFTW-3.3.10-gompi-2026.1.eb\n' > /tmp/site-only.list
+eb-stack stack provided \
+  --build-list /tmp/site-only.list \
+  --installed tests/provided_fixtures/installed.txt
+#+end_src
+
+That command printed:
+
+#+begin_example
+hits=0 unparsed=0 allowed=0 provided=2
+#+end_example
+
+The process exited 0. ~--installed~ and ~--baseline-lock~ are combined
+when both are set. Passing neither is status 2. ~--json~ prints the
+same fields as JSON. ~eb_stack_provided~ is the same check, and a hit
+is a tool error.

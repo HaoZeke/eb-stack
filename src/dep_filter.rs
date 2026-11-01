@@ -64,6 +64,13 @@ impl FilterDeps {
         self.by_name.is_empty()
     }
 
+    /// Software names the list filters, in name order.
+    ///
+    /// A `name=version` or `name=[low:high]` entry contributes `name`.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+
     /// Parse EasyBuild's filter list.
     ///
     /// Each entry is a software name, `name=version`, or `name=` followed by

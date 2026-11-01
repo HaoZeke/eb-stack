@@ -1,0 +1,79 @@
+#+TITLE: Route the modules a stack does not have
+#+OPTIONS: toc:t num:nil author:nil
+
+~eb-stack stack gap~ takes the module names a site loads and says, for
+each one the stack does not have, which route closes it. The routes
+are tried in order. The first that applies wins.
+
+| Route | When |
+|-
+| ~in-stack~ | The stack's installed list has the name, ignoring case |
+| ~excluded~ | ~--exclude-file~ names it (licensed, vendor, conda, portal). Written to ~site-only.tsv~ |
+| ~filtered~ | ~--filter-deps~ names it, or ~EASYBUILD_FILTER_DEPS~ when the flag is absent |
+| ~open-layer~ | An ~--open-layer~ pull request adds an easystack line of that name |
+| ~recipe~ | The easyconfig trees have a recipe on this generation |
+| ~open-easyconfigs~ | An ~--open-easyconfigs~ pull request adds a recipe at this generation |
+| ~no-recipe~ | Nothing above applies. Written to ~bump.tsv~. The newest easyconfig on any toolchain is the bump source |
+
+A toolchain whose version is the generation counts as on it, so
+~lfoss-2026.1~ is a 2026.1 recipe. So does a toolchain listed for that
+generation in ~data/eessi-generations.toml~, such as
+~llvm-compilers-21.1.8~.
+
+* Run the fixture
+
+The nine names are in ~tests/gap_routes/site.txt~. The easyconfig tree
+has BLAST+ on gompi-2026.1 and CP2K on foss-2025b. The installed list
+has FFTW. zlib is filtered. MATLAB is licensed. Pull request 1787 adds
+LAMMPS. Pull request 25001 adds QuantumESPRESSO at foss-2026.1 and
+OldTool at foss-2025b.
+
+#+begin_src bash
+eb-stack stack gap \
+  --site tests/gap_routes/site.txt \
+  --installed tests/gap_routes/installed.txt \
+  --easyconfigs tests/gap_routes/easyconfigs \
+  --generation 2026.1 \
+  --exclude-file tests/gap_routes/site-only.tsv \
+  --filter-deps zlib \
+  --open-layer tests/gap_routes/open-layer.json \
+  --open-easyconfigs tests/gap_routes/open-easyconfigs.json \
+  --out-dir /tmp/gap-demo
+#+end_src
+
+That command printed:
+
+#+begin_example
+site=9 in-stack=1 filtered=1 open-layer=1 recipe=1 open-easyconfigs=1 no-recipe=3 excluded=1 out=/tmp/gap-demo
+#+end_example
+
+The process exited 0. ~/tmp/gap-demo/gap.tsv~ is every row:
+
+#+begin_example
+name	route	recipe	newest_elsewhere	reason
+BLAST+	recipe	BLAST+-2.17.0-gompi-2026.1.eb	-	-
+CP2K	no-recipe	-	CP2K-2025.2-foss-2025b.eb	-
+FFTW	in-stack	-	-	-
+Julia	no-recipe	-	-	-
+LAMMPS	open-layer	LAMMPS-2025.0-foss-2026.1.eb	-	software-layer#1787
+MATLAB	excluded	-	-	licensed
+OldTool	no-recipe	-	-	-
+QuantumESPRESSO	open-easyconfigs	QuantumESPRESSO-7.4-foss-2026.1.eb	-	easyconfigs#25001
+zlib	filtered	-	-	filtered to the compatibility layer
+#+end_example
+
+OldTool is in the easyconfigs pull request, and the file is
+~foss-2025b~, so it is not ~open-easyconfigs~. Julia has no easyconfig
+at all. CP2K's newest file is the bump source. BLAST+ is the only
+~recipe~ row, and it is the only line of ~roots.txt~, which is the
+input of ~stack batch --roots-file~. ~bump-sources.txt~ names
+~CP2K-2025.2-foss-2025b.eb~.
+
+Each route also has its own file: ~in-stack.tsv~, ~site-only.tsv~,
+~filtered.tsv~, ~open-layer.tsv~, ~recipe.tsv~, ~open-easyconfigs.tsv~,
+and ~bump.tsv~. An ~open-layer~ match is the easystack line the pull
+request adds, not a dependency that line would build.
+
+~eb_stack_gap~ writes the same files. ~open_layer~ and
+~open_easyconfigs~ are arrays of the same pull-request JSON
+~pr-overlap --pr~ reads.

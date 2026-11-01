@@ -1,0 +1,17 @@
+[
+  {
+    "number": 25001,
+    "head_sha": "0000000000000000000000000000000000002501",
+    "title": "QuantumESPRESSO",
+    "easyconfigs": [
+      {
+        "path": "easybuild/easyconfigs/q/QuantumESPRESSO/QuantumESPRESSO-7.4-foss-2026.1.eb",
+        "head": "name = 'QuantumESPRESSO'\nversion = '7.4'\n"
+      },
+      {
+        "path": "easybuild/easyconfigs/o/OldTool/OldTool-1.0-foss-2025b.eb",
+        "head": "name = 'OldTool'\nversion = '1.0'\n"
+      }
+    ]
+  }
+]

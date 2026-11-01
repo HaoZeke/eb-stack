@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "toolchain": {"name": "foss", "version": "2026.1"},
+  "generation_label": "foss-2026.1",
+  "packages": [
+    {
+      "name": "GROMACS",
+      "version": "2025.2",
+      "toolchain": {"name": "foss", "version": "2026.1"},
+      "easyconfig_path": "GROMACS-2025.2-foss-2026.1.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo",
+    "engine_version": "test",
+    "timestamp": "2026-11-01T00:00:00Z",
+    "criteria": []
+  }
+}

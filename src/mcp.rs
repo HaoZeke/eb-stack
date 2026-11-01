@@ -380,7 +380,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_gap",
-            "Classify every package in site module listings against a stack's installed modules, as `stack gap` does: in-stack, recipe, no-recipe or excluded. Writes gap.tsv, roots.txt and bump-sources.txt under out_dir.",
+            "Classify every package in site module listings against a stack's installed modules, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). Writes gap.tsv, one TSV per route, roots.txt and bump-sources.txt under out_dir.",
             &[
                 ("site", "array"),
                 ("installed", "string"),
@@ -388,7 +388,23 @@ fn tool_catalog() -> Vec<Value> {
                 ("generation", "string"),
                 ("out_dir", "string"),
             ],
-            &[("exclude_file", "string"), ("filter_deps", "string")],
+            &[
+                ("exclude_file", "string"),
+                ("filter_deps", "string"),
+                ("open_layer", "array"),
+                ("open_easyconfigs", "array"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_provided",
+            "Fail when a build list names software a baseline already provides, as `stack provided` does. The comparison is the package name, ignoring version and toolchain. allow keeps a second version. A hit or a line that names no package is a tool error.",
+            &[("build_list", "array_min1")],
+            &[
+                ("installed", "array"),
+                ("baseline_lock", "string"),
+                ("allow", "array"),
+                ("json", "boolean"),
+            ],
         ),
         tool_with_optional(
             "eb_stack_batch",
@@ -777,6 +793,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_from_commit" => stack_from_commit_tool(arguments),
         "eb_package_latest" => package_latest_tool(arguments),
         "eb_stack_gap" => stack_gap_tool(arguments),
+        "eb_stack_provided" => stack_provided_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_stack_files" => stack_files_tool(arguments),
@@ -2987,6 +3004,8 @@ fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
         generation: required_string(arguments, "generation")?,
         exclude_file: optional_path(arguments, "exclude_file"),
         filter_deps: filter_deps_argument(arguments),
+        open_layer: optional_paths(arguments, "open_layer")?,
+        open_easyconfigs: optional_paths(arguments, "open_easyconfigs")?,
         out_dir: required_path(arguments, "out_dir")?,
     })
     .map_err(workflow_error)?;
@@ -2994,6 +3013,27 @@ fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
         "text": run.summary(),
         "out_dir": run.out_dir,
         "rows": run.rows.len(),
+    }))
+}
+
+fn stack_provided_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::provided::run_provided(&crate::provided::ProvidedRequest {
+        build_lists: path_array(arguments, "build_list")?,
+        installed: optional_paths(arguments, "installed")?,
+        baseline_lock: optional_path(arguments, "baseline_lock"),
+        allow: string_array(arguments, "allow")?,
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    if let Some(message) = report.failure() {
+        return Err(format!("{}\n{message}", report.stdout));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "hits": report.hits.len(),
+        "unparsed": report.unparsed.len(),
+        "allowed": report.allowed,
+        "provided": report.provided,
     }))
 }
 

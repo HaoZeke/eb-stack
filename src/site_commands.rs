@@ -1086,6 +1086,10 @@ pub struct StackGapRequest {
     pub exclude_file: Option<PathBuf>,
     /// Names filtered to the compatibility layer, as EESSI-extend sets them.
     pub filter_deps: Vec<String>,
+    /// Open software-layer pull requests, `pr-overlap --pr` JSON. Repeatable.
+    pub open_layer: Vec<PathBuf>,
+    /// Open easybuild-easyconfigs pull requests, `pr-overlap --pr` JSON. Repeatable.
+    pub open_easyconfigs: Vec<PathBuf>,
     /// Output directory.
     pub out_dir: PathBuf,
 }
@@ -1103,10 +1107,13 @@ impl StackGapRun {
     pub fn summary(&self) -> String {
         let count = |route: &str| self.rows.iter().filter(|r| r.route == route).count();
         format!(
-            "site={} in-stack={} recipe={} no-recipe={} excluded={} out={}",
+            "site={} in-stack={} filtered={} open-layer={} recipe={} open-easyconfigs={} no-recipe={} excluded={} out={}",
             self.rows.len(),
             count("in-stack"),
+            count("filtered"),
+            count("open-layer"),
             count("recipe"),
+            count("open-easyconfigs"),
             count("no-recipe"),
             count("excluded"),
             self.out_dir.display()
@@ -1115,9 +1122,10 @@ impl StackGapRun {
 }
 
 /// Compare a site's packages with a stack and name the recipe that closes
-/// each gap. Writes `gap.tsv`, `roots.txt` (the recipes on the generation,
-/// the input of `stack batch --roots-file`), and `bump-sources.txt` (the
-/// newest recipe on any toolchain for each name without one).
+/// each gap. Writes `gap.tsv`, one TSV per route, `roots.txt` (the recipes
+/// on the generation, the input of `stack batch --roots-file`), and
+/// `bump-sources.txt` (the newest recipe on any toolchain for each name
+/// without one).
 pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut site = BTreeSet::new();
@@ -1130,11 +1138,11 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
         &std::fs::read_to_string(&args.installed)
             .with_context(|| format!("--installed {}: not readable", args.installed.display()))?,
     );
+    let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter = FilterDeps::parse(&filter_specs)
+        .map_err(|error| usage(format!("--filter-deps: {error}")))?;
+    let filtered: BTreeSet<String> = filter.names().map(|name| name.to_lowercase()).collect();
     let mut excluded = BTreeMap::new();
-    for name in dep_filter::specs_from_cli_or_env(&args.filter_deps) {
-        let name = name.split(':').next().unwrap_or(&name).to_string();
-        excluded.insert(name, "filtered to the compatibility layer".to_string());
-    }
     if let Some(path) = &args.exclude_file {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("--exclude-file {}: not readable", path.display()))?;
@@ -1159,7 +1167,7 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
         name: "foss".into(),
         version: args.generation.clone(),
     };
-    let members = crate::hierarchy::known_hierarchy(&parent)
+    let mut members = crate::hierarchy::known_hierarchy(&parent)
         .map(|h| h.member_labels())
         .ok_or_else(|| {
             usage(format!(
@@ -1167,14 +1175,60 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
                 args.generation
             ))
         })?;
-    let rows = crate::gap::gap(&site, &stack, &parsed.candidates, &members, &excluded);
+    if let Ok(table) = crate::generation_lint::GenerationTable::bundled() {
+        for extra in table.members(&args.generation) {
+            if !members.iter().any(|label| label == &extra) {
+                members.push(extra);
+            }
+        }
+    }
+    let mut layer_prs = Vec::new();
+    for path in &args.open_layer {
+        layer_prs.extend(crate::pr_overlap::read_pr_inputs(path, "--open-layer")?);
+    }
+    let mut easy_prs = Vec::new();
+    for path in &args.open_easyconfigs {
+        easy_prs.extend(crate::pr_overlap::read_pr_inputs(
+            path,
+            "--open-easyconfigs",
+        )?);
+    }
+    let open_layer = crate::gap::carries_from_layer(&layer_prs);
+    let open_easyconfigs =
+        crate::gap::carries_from_easyconfigs(&easy_prs, &args.generation, &members);
+    let rows = crate::gap::gap(&crate::gap::GapInput {
+        site: &site,
+        stack: &stack,
+        candidates: &parsed.candidates,
+        generation: &args.generation,
+        members: &members,
+        excluded: &excluded,
+        filtered: &filtered,
+        open_layer: &open_layer,
+        open_easyconfigs: &open_easyconfigs,
+    });
     std::fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("create {}", args.out_dir.display()))?;
     crate::write_text(
         &args.out_dir.join("gap.tsv"),
         &crate::gap::render_tsv(&rows),
     )?;
-    let roots: Vec<&str> = rows.iter().filter_map(|r| r.recipe.as_deref()).collect();
+    for (route, filename) in crate::gap::ROUTE_FILES {
+        let subset: Vec<_> = rows
+            .iter()
+            .filter(|row| row.route == *route)
+            .cloned()
+            .collect();
+        crate::write_text(
+            &args.out_dir.join(filename),
+            &crate::gap::render_tsv(&subset),
+        )?;
+    }
+    let roots: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.route == "recipe")
+        .filter_map(|row| row.recipe.as_deref())
+        .collect();
     crate::write_text(
         &args.out_dir.join("roots.txt"),
         &format!("{}\n", roots.join("\n")),

@@ -1,0 +1,7 @@
+# commented lines are not built
+# FFTW-3.3.10-gompi-2026.1.eb
+GROMACS-2026.0-foss-2026.1.eb
+FFTW-3.3.10-gompi-2026.1.eb --hooks=/sw/hooks/site.py
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb
+VASP-6.5.1-foss-2026.1.eb
+not-a-version.eb

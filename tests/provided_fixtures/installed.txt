@@ -1,0 +1,2 @@
+FFTW/3.3.10-gompi-2026.1
+Python/3.12.3-GCCcore-15.2.0

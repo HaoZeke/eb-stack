@@ -1055,11 +1055,14 @@ enum StackCommand {
     /// stack's `--installed` list has it, matched without regard to case),
     /// `recipe` (an easyconfig on the generation's toolchains or the system
     /// toolchain exists; the newest is named), `no-recipe` (the newest
-    /// easyconfig on any toolchain is named as the bump source), or
-    /// `excluded`. Writes `gap.tsv`, `roots.txt` for `stack batch
+    /// easyconfig on any toolchain is named as the bump source),
+    /// `filtered` (`--filter-deps`), `open-layer` (an open software-layer
+    /// pull request adds it), `open-easyconfigs` (an open easyconfigs pull
+    /// request adds a recipe at this generation), or `excluded`. Writes
+    /// `gap.tsv`, one TSV per route, `roots.txt` for `stack batch
     /// --roots-file`, and `bump-sources.txt`.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack gap --site snellius-2025.txt --site snellius-2024.txt --installed eessi-2026.06-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --exclude-file site-only.tsv --out-dir gap"
+        after_long_help = "Examples:\n  eb-stack stack gap --site snellius-2025.txt --site snellius-2024.txt --installed eessi-2026.06-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --exclude-file site-only.tsv --filter-deps zlib,binutils --open-layer open-layer.json --open-easyconfigs open-easyconfigs.json --out-dir gap"
     )]
     Gap {
         /// Site module listing, `Name/Version` per line or a bare name. Repeatable.
@@ -1081,9 +1084,46 @@ enum StackCommand {
         /// Names filtered to the compatibility layer. Absent, `EASYBUILD_FILTER_DEPS` is read.
         #[arg(long, value_delimiter = ',')]
         filter_deps: Vec<String>,
+        /// Open software-layer pull requests, `pr-overlap --pr` JSON.
+        /// A name one of them adds is `open-layer`. Repeatable.
+        #[arg(long = "open-layer")]
+        open_layer: Vec<PathBuf>,
+        /// Open easybuild-easyconfigs pull requests, `pr-overlap --pr` JSON.
+        /// A name one of them adds at `--generation` is `open-easyconfigs`
+        /// when the trees have no recipe for it there. Repeatable.
+        #[arg(long = "open-easyconfigs")]
+        open_easyconfigs: Vec<PathBuf>,
         /// Output directory.
         #[arg(long)]
         out_dir: PathBuf,
+    },
+    /// Fail when a build list names software a baseline already provides.
+    ///
+    /// The comparison is the package name, ignoring version and toolchain,
+    /// so a line cannot drift back into a module EESSI installs. `--allow`
+    /// keeps a second version the site was asked for. Comment lines are
+    /// not checked. Exits 1 when any line hits or names no package.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack provided --build-list site.list --installed eessi-2026.06.txt --baseline-lock eessi.lock.json --allow App"
+    )]
+    Provided {
+        /// Build list, one easyconfig per line, with optional `eb` flags.
+        /// A path-style list is read the same way. Repeatable.
+        #[arg(long = "build-list", required = true)]
+        build_lists: Vec<PathBuf>,
+        /// Installed modules, `Name/Version` or a bare name per line. Repeatable.
+        #[arg(long = "installed")]
+        installed: Vec<PathBuf>,
+        /// Stack lock. Every package name in it counts as provided.
+        #[arg(long)]
+        baseline_lock: Option<PathBuf>,
+        /// Package name that may stay on the list even when the baseline
+        /// provides it. Repeatable. Matched without regard to case.
+        #[arg(long = "allow")]
+        allow: Vec<String>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Plan software-layer pull requests whose builds do not overlap.
     ///
@@ -2706,6 +2746,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
             generation,
             exclude_file,
             filter_deps,
+            open_layer,
+            open_easyconfigs,
             out_dir,
         } => {
             let run = eb_stack::site_commands::run_stack_gap(
@@ -2716,10 +2758,32 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     generation,
                     exclude_file,
                     filter_deps,
+                    open_layer,
+                    open_easyconfigs,
                     out_dir,
                 },
             )?;
             println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Provided {
+            build_lists,
+            installed,
+            baseline_lock,
+            allow,
+            json,
+        } => {
+            let report = eb_stack::provided::run_provided(&eb_stack::provided::ProvidedRequest {
+                build_lists,
+                installed,
+                baseline_lock,
+                allow,
+                json,
+            })?;
+            print!("{}", report.stdout);
+            if let Some(message) = report.failure() {
+                bail!(message);
+            }
             Ok(())
         }
         StackCommand::Batch(args) => {

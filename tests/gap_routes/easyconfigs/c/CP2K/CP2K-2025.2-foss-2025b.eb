@@ -1,0 +1,5 @@
+name = 'CP2K'
+version = '2025.2'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://www.cp2k.org/'
+description = "CP2K fixture for stack gap routing."
