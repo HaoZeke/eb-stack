@@ -19,11 +19,12 @@ counts line tells those two apart.
 Save this fixture as ~/tmp/20261011-eb-5.4.0-UCX.yml~. The file name
 contains ~eb-5.4.0~, so omit ~--easybuild-version~. The pin is the
 commit that merged a fix to the Unified Communication X library, easybuild-easyconfigs pull request 24388.
-~$EB_EASYCONFIGS~ is a clone of easybuild-easyconfigs that has the tag
-~easybuild-easyconfigs-v5.4.0~. A blobless clone (~git clone~ with
-~--filter=blob:none~) is enough once it contains the pin commit and
-that tag. ~scripts/fetch-upstream-trees.sh~ clones v5.4.1, and that
-clone still has the v5.4.0 tag.
+~$EB_EASYCONFIGS~ is the ~easybuild/easyconfigs~ directory inside a clone
+of easybuild-easyconfigs that has the tag ~easybuild-easyconfigs-v5.4.0~.
+~scripts/fetch-upstream-trees.sh~ writes that directory into ~env.sh~.
+The clone root is ~EB_EASYCONFIGS_DEVELOP~. A blobless clone (~git clone~
+with ~--filter=blob:none~) is enough once it contains the pin commit and
+that tag. The script clones v5.4.1, and that clone still has the v5.4.0 tag.
 
 #+begin_src yaml
 easyconfigs:
@@ -65,7 +66,7 @@ Compare the two files with:
 
 #+begin_src bash
 git -C "$EB_EASYCONFIGS" diff --unified=0 d438adc699f5ff35d866d9045f0aae663a0913cb easybuild-easyconfigs-v5.4.0 \
-  -- easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
+  -- u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
 #+end_src
 
 That command printed:

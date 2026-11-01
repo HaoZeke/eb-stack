@@ -231,6 +231,95 @@ fn unpublished_endpoints_are_excluded_from_external_link_checks() {
 }
 
 #[test]
+fn easyconfigs_env_is_the_robot_directory_and_the_ucx_diff_uses_it() {
+    let script = std::fs::read_to_string(repo().join("scripts/fetch-upstream-trees.sh"))
+        .expect("read fetch script");
+    let export = script
+        .lines()
+        .find(|line| line.starts_with("export EB_EASYCONFIGS="))
+        .expect("EB_EASYCONFIGS export");
+    assert!(
+        export.ends_with("/easybuild/easyconfigs\""),
+        "EB_EASYCONFIGS is the robot directory, not the clone root: {export}"
+    );
+    assert!(script.contains("export EB_EASYCONFIGS_DEVELOP="));
+
+    let howto = std::fs::read_to_string(repo().join("docs/orgmode/howto/from-commit-released.org"))
+        .expect("read from-commit howto");
+    let command = howto
+        .find("git -C \"$EB_EASYCONFIGS\" diff")
+        .map(|at| &howto[at..])
+        .expect("documented UCX diff");
+    let pathspec = command
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("-- "))
+        .expect("diff pathspec")
+        .trim();
+    assert!(
+        !pathspec.starts_with("easybuild/easyconfigs/"),
+        "pathspec {pathspec} is relative to the clone root"
+    );
+
+    let keep = tempfile::tempdir().expect("tempdir");
+    let clone = keep.path().join("easybuild-easyconfigs");
+    std::fs::create_dir_all(clone.join("easybuild/easyconfigs")).expect("mkdir");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&clone)
+            .arg("-c")
+            .arg("commit.gpgsign=false")
+            .arg("-c")
+            .arg("user.name=Rohit Goswami")
+            .arg("-c")
+            .arg("user.email=rgoswami@ieee.org")
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("utf8")
+    };
+    git(&["init", "-b", "main"]);
+    let file = clone.join("easybuild/easyconfigs").join(pathspec);
+    std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&file, "old\n").expect("write");
+    git(&["add", "."]);
+    git(&["commit", "-m", "pin"]);
+    let pin = git(&["rev-parse", "HEAD"]);
+    std::fs::write(&file, "new\n").expect("write");
+    git(&["add", "."]);
+    git(&["commit", "-m", "release"]);
+    git(&["tag", "easybuild-easyconfigs-v5.4.0"]);
+    let robot = clone.join("easybuild/easyconfigs");
+    let diff = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&robot)
+        .args([
+            "diff",
+            "--unified=0",
+            pin.trim(),
+            "easybuild-easyconfigs-v5.4.0",
+            "--",
+            pathspec,
+        ])
+        .output()
+        .expect("git diff");
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    assert!(
+        !diff.stdout.is_empty(),
+        "git -C \"$EB_EASYCONFIGS\" diff -- {pathspec} printed nothing"
+    );
+}
+
+#[test]
 fn fetch_script_exports_one_name_per_pinned_tree() {
     let text = std::fs::read_to_string(repo().join("scripts/fetch-upstream-trees.sh"))
         .expect("read fetch script");
