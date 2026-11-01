@@ -82,6 +82,15 @@ index 6c73e9f0df..cff427c9dc 100644
 +     'c67b2070a65e8217b7c6f9d9a6a13ff11141bacfed395d551376432428348a9c'},
 #+end_example
 
+~scripts/fetch-upstream-trees.sh~ sets ~EB_EASYCONFIGS~ to the
+~easybuild/easyconfigs~ directory inside the clone, not the clone root.
+~stack from-commit~ accepts that path: it walks up to the git directory.
+~git -C~ treats the pathspec as relative to the directory you pass, so
+the ~git diff~ above prints nothing when ~EB_EASYCONFIGS~ is the
+~env.sh~ value. From that directory, diff
+~u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb~. Or point ~git -C~ at
+~git rev-parse --show-toplevel~.
+
 Removing the pin switches the build to the release file. Here the
 release file has the pinned fix plus a later glibc 2.43 patch, so
 removing the pin is the normal choice. Keep the pin only if the

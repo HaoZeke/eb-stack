@@ -27,22 +27,36 @@ This file is the manual in one document. The short index is llms.txt.
 
 # Install
 
-  No public release is published. Build from source with Rust 1.88 or newer:
+  Rust 1.88 or newer. `rustc` 1.83 stops while reading the crate index:
+  the Cargo feature `edition2024` is not stabilized. With rustup:
+
+```bash
+rustup toolchain install stable
+rustup default stable
+rustc --version
+```
+
+  crates.io and the GitHub release are both 0.3.0. That binary solves a
+  stack with `--policy`, not `--stack-policy`, and it serves `mcp`. It
+  does not provide `stack gap`, `stack oom`, `stack from-commit`,
+  `rebuild-set`, `pr-overlap`, or `component-reach`. `eb-stack --version`
+  prints `0.3.0` for the release and for this checkout. The commands in
+  this manual are the checkout:
 
 ```bash
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
-cargo test --locked
 cargo build --locked --release
-# binary: target/release/eb-stack
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
-  Verify:
-
-```bash
-eb-stack --version
-```
+  `~/.local/bin` is not on `PATH` until you add it. `eb-stack --version`
+  then prints `eb-stack 0.3.0`. `cargo binstall` is a separate program;
+  a stock `cargo` reports `no such command: binstall`. The shell
+  installer from the GitHub release installs the 0.3.0 binary. The
+  contributor test suite is `cargo test --locked`, on the
+  [contributing](https://eb-stack.rgoswami.me/contributing.html.md) page. It is not required before
+  the first solve.
 
 # Inspect from a fresh clone
 
@@ -77,6 +91,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
   - How-to guides: [site Python extras](https://eb-stack.rgoswami.me/howto/pypi-extend.html.md),
     [site R extras](https://eb-stack.rgoswami.me/howto/cran-extend.html.md),
     [solve a stack lock](https://eb-stack.rgoswami.me/howto/solve-lock.html.md),
+    [classify a site module list](https://eb-stack.rgoswami.me/howto/stack-gap.html.md),
     [repair a failed campaign](https://eb-stack.rgoswami.me/howto/repair-campaign.html.md),
     [emit a build list and stack diff](https://eb-stack.rgoswami.me/howto/emit-reports.html.md),
     [bump a recipe](https://eb-stack.rgoswami.me/howto/bump-recipe.html.md),
@@ -1804,6 +1819,65 @@ See [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 See [the policy reference](https://eb-stack.rgoswami.me/../reference/policy.html.md) and
 [the format reference](https://eb-stack.rgoswami.me/../reference/formats.html.md).
 
+# Classify a site module list
+
+`stack gap` compares the module names a site provides with the names a
+stack has installed, and names the easyconfig that would close each
+gap. This is separate from `stack solve`. The files below are in this
+checkout, so the command runs before a site listing or an EESSI prefix
+exists. `--help` names `snellius-2025.txt` and `eessi-2026.06-zen4.txt`.
+Those paths are not in the checkout; a missing `--site` file exits 1
+and names the path.
+
+# Run it
+
+A site file is `Name/Version` or a bare name, one per line. Blank lines
+and `#` comments are skipped. The same shape is an installed list. The
+name is the text before the first `/`, so `zlib/1.3.1-GCCcore-15.2.0`
+is the package `zlib`. Matching ignores ASCII letter case.
+
+```bash
+eb-stack stack gap \
+  --site tests/rebuild_set_fixtures/installed.txt \
+  --installed tests/pr_overlap_layer/installed.txt \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --generation 2026.1 \
+  --out-dir /tmp/gap-first
+```
+
+The installed file in that command is a comment, so nothing counts as
+already provided. The command prints:
+
+```
+site=10 in-stack=0 recipe=9 no-recipe=1 excluded=0 out=/tmp/gap-first
+```
+
+`--out-dir` receives three files. `gap.tsv` is one row per site name:
+
+```
+name	route	recipe	newest_elsewhere	reason
+zlib	recipe	zlib-1.3.1-GCCcore-15.2.0.eb	-	-
+NewLib	no-recipe	-	-	-
+```
+
+`recipe` means the newest easyconfig on the generation's toolchains, or
+on the system toolchain, is named. `GCCcore-15.2.0` belongs to
+`2026.1`. `no-recipe` means no easyconfig of that name is on this
+generation. `NewLib` is that row here: the release tree has no
+easyconfig of that name, so `newest_elsewhere` is `-`. A name that
+exists only on another generation would name that newest file instead.
+`in-stack` means the installed list has the name. `excluded` comes from
+`--exclude-file`, one `name<TAB>reason` line, or from `--filter-deps`.
+
+`roots.txt` lists the `recipe` filenames, one per line, for
+`stack batch --roots-file`. `bump-sources.txt` lists each
+`newest_elsewhere` filename, for `package bump --latest`.
+
+The rebuild closure of an in-place patch is
+[what an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/rebuild-set.html.md).
+The fixture command on that page is runnable in this checkout. It
+prints `changed=2 rows=8 must-rebuild=2 review=2 no-rebuild=4 missing=1 easystacks=2 skipped_easyconfigs=0`.
+
 # Emit a build list and stack diff
 
 Goal: alongside the lock, get an install-ordered build list for a
@@ -1933,6 +2007,81 @@ A tree baseline and an easystack baseline are both labelled with the
 toolchain (`foss-2025a`, `foss-2025b`). Paste the file
 body directly into a pull request description; every line names a real
 version and a real easyconfig path.
+
+# Plan a site layer on EESSI 2026.06
+
+The fixture above is one root and one small easystack. A site layer on
+European Environment for Scientific Software Installations (EESSI)
+2026.06 uses the same flags against the trees
+`scripts/fetch-upstream-trees.sh` checks out. Source the `env.sh` it
+writes. `--toolchain foss/2026.1` is the generation named by
+`eessi-2026.06-eb-5.4.0-2026.1.yml`. Pass `--baseline-commits-from` the
+clone root (`git rev-parse --show-toplevel` from `$EB_EASYCONFIGS`).
+`env.sh` sets `EB_EASYCONFIGS` to the `easybuild/easyconfigs` directory,
+and that value is not the git root.
+
+There is no `GROMACS-*-foss-2026.1.eb` in the pinned develop tree. The
+newest foss GROMACS file there is `GROMACS-2026.2-foss-2025b.eb`. This
+exits 1, and the error contains `no candidates for root package GROMACS`:
+
+```bash
+eb-stack stack solve \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --toolchain foss/2026.1 \
+  --root GROMACS \
+  --baseline-easystack "$EB_EESSI_SOFTWARE_LAYER/easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml" \
+  --baseline-commits-from "$(git -C "$EB_EASYCONFIGS" rev-parse --show-toplevel)" \
+  --build-list-excludes-baseline \
+  --lock-out /tmp/site-gromacs.lock.json \
+  --build-list-out /tmp/site-gromacs.list \
+  --stack-diff-out /tmp/site-gromacs.diff.md
+```
+
+On failure the same message appends dependencies the filtered universe
+does not provide (for example `impi` and `imkl-FFTW`). That list is the
+whole searched tree, not the root's own dependencies.
+
+A root that does exist, and that this easystack does not install, is
+PuLP. The same command with `--root PuLP` and ~--lock-out
+/tmp/site-pulp.lock.json~ prints:
+
+```
+lock=/tmp/site-pulp.lock.json packages=59
+```
+
+`--build-list-excludes-baseline` leaves one line, ending in
+`PuLP-3.3.2-foss-2026.1.eb`. The diff summary is unchanged 58, added 1,
+removed 272. `removed` is the rest of the baseline this one-root solve
+does not select. It is not a list of modules to uninstall. `arpack-ng`
+is already in that baseline closure, so the same command writes an
+empty build list and `added: 0`.
+
+`stack oom --arch x86_64/amd/zen4` on that easystack, with
+`--easyconfigs "$EB_EASYCONFIGS"`, prints ~oom`0 fits`0 builds=339
+nodes`2~. ~fits`0~ means no build had a row in the memory table. The
+warning example is the fixture in
+[warn before a job runs out of memory](https://eb-stack.rgoswami.me/oom-profile.html.md).
+
+The other checks for this layer, without a mounted prefix:
+
+- `stack from-commit` on the 2026.06 easystack, with `--easyconfigs-repo`
+  set to the clone root. The file name selects EasyBuild 5.4.0. On this
+  pin the count line is `pins=20 released=0 newer=20 unknown=0` and the
+  process exits 0. See
+  [find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/from-commit-released.html.md).
+- `rebuild-set --findings` on the recorded findings file. See
+  [what an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/rebuild-set.html.md).
+- `component-reach --cve`. The manual does not name an id. A record whose
+  only range is a git range (`CVE-2025-66471`, urllib3, generation
+  `2026.1`, this pin) prints `carriers=0` and `review=1`, and the
+  markdown says `GIT range not parsed`. See
+  [which modules carry a component](https://eb-stack.rgoswami.me/component-reach.html.md).
+- `pr-overlap` on `tests/pr_overlap_layer`. The mounted-stack block needs
+  the EESSI init script under `/cvmfs/software.eessi.io`. See
+  [find shared builds across open pull requests](https://eb-stack.rgoswami.me/pr-overlap.html.md).
+- `eb-stack mcp --help` exits 0. One JSON-RPC `initialize` on stdin
+  returns server name `eb-stack`. See
+  [the Model Context Protocol server](https://eb-stack.rgoswami.me/../reference/mcp.html.md).
 
 # Next steps
 
@@ -3309,6 +3458,15 @@ index 6c73e9f0df..cff427c9dc 100644
 +    {'UCX-1.18.0_fix-glibc-2.43-compile-failure.patch':
 +     'c67b2070a65e8217b7c6f9d9a6a13ff11141bacfed395d551376432428348a9c'},
 ```
+
+`scripts/fetch-upstream-trees.sh` sets `EB_EASYCONFIGS` to the
+`easybuild/easyconfigs` directory inside the clone, not the clone root.
+`stack from-commit` accepts that path: it walks up to the git directory.
+`git -C` treats the pathspec as relative to the directory you pass, so
+the `git diff` above prints nothing when `EB_EASYCONFIGS` is the
+`env.sh` value. From that directory, diff
+`u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb`. Or point `git -C` at
+`git rev-parse --show-toplevel`.
 
 Removing the pin switches the build to the release file. Here the
 release file has the pinned fix plus a later glibc 2.43 patch, so

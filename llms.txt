@@ -19,6 +19,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Spack on EESSI with EESSI installs as externals](https://eb-stack.rgoswami.me/howto/spack-externals-eessi.html.md): Concretize a Spack package on top of installs that already have an easyconfig beside them.
 - [Repair a failed campaign](https://eb-stack.rgoswami.me/howto/repair-campaign.html.md): Use this procedure when eb-stack campaign run records a failed attempt.
 - [Solve a consistent stack lock](https://eb-stack.rgoswami.me/howto/solve-lock.html.md): Use stack solve for a multi-root EasyBuild generation lock.
+- [Classify a site module list](https://eb-stack.rgoswami.me/howto/stack-gap.html.md): stack gap compares the module names a site provides with the names a stack has installed, and names the easyconfig that would close each gap.
 - [Emit a build list and stack diff](https://eb-stack.rgoswami.me/howto/emit-reports.html.md): Goal: alongside the lock, get an install-ordered build list for a build pipeline and a markdown diff you can paste straight into a pull request.
 - [Bump an existing EasyBuild recipe](https://eb-stack.rgoswami.me/howto/bump-recipe.html.md): A bump is a canonical EasyBuild-origin package bundle.
 - [Declare root priority for multi-root optimization](https://eb-stack.rgoswami.me/howto/root-priority.html.md): Goal: when a policy has more than one root and they disagree on a shared dependency's version, control which root wins the newest-version tie-break instead of leaving it to incidental list order.

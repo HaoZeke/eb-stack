@@ -1,0 +1,59 @@
+#+TITLE: Classify a site module list
+#+OPTIONS: toc:t num:nil author:nil
+
+~stack gap~ compares the module names a site provides with the names a
+stack has installed, and names the easyconfig that would close each
+gap. This is separate from ~stack solve~. The files below are in this
+checkout, so the command runs before a site listing or an EESSI prefix
+exists. ~--help~ names ~snellius-2025.txt~ and ~eessi-2026.06-zen4.txt~.
+Those paths are not in the checkout; a missing ~--site~ file exits 1
+and names the path.
+
+* Run it
+
+A site file is ~Name/Version~ or a bare name, one per line. Blank lines
+and ~#~ comments are skipped. The same shape is an installed list. The
+name is the text before the first ~/~, so ~zlib/1.3.1-GCCcore-15.2.0~
+is the package ~zlib~. Matching ignores ASCII letter case.
+
+#+begin_src bash
+eb-stack stack gap \
+  --site tests/rebuild_set_fixtures/installed.txt \
+  --installed tests/pr_overlap_layer/installed.txt \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --generation 2026.1 \
+  --out-dir /tmp/gap-first
+#+end_src
+
+The installed file in that command is a comment, so nothing counts as
+already provided. The command prints:
+
+#+begin_example
+site=10 in-stack=0 recipe=9 no-recipe=1 excluded=0 out=/tmp/gap-first
+#+end_example
+
+~--out-dir~ receives three files. ~gap.tsv~ is one row per site name:
+
+#+begin_example
+name	route	recipe	newest_elsewhere	reason
+zlib	recipe	zlib-1.3.1-GCCcore-15.2.0.eb	-	-
+NewLib	no-recipe	-	-	-
+#+end_example
+
+~recipe~ means the newest easyconfig on the generation's toolchains, or
+on the system toolchain, is named. ~GCCcore-15.2.0~ belongs to
+~2026.1~. ~no-recipe~ means no easyconfig of that name is on this
+generation. ~NewLib~ is that row here: the release tree has no
+easyconfig of that name, so ~newest_elsewhere~ is ~-~. A name that
+exists only on another generation would name that newest file instead.
+~in-stack~ means the installed list has the name. ~excluded~ comes from
+~--exclude-file~, one ~name<TAB>reason~ line, or from ~--filter-deps~.
+
+~roots.txt~ lists the ~recipe~ filenames, one per line, for
+~stack batch --roots-file~. ~bump-sources.txt~ lists each
+~newest_elsewhere~ filename, for ~package bump --latest~.
+
+The rebuild closure of an in-place patch is
+[[file:rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
+The fixture command on that page is runnable in this checkout. It
+prints ~changed=2 rows=8 must-rebuild=2 review=2 no-rebuild=4 missing=1 easystacks=2 skipped_easyconfigs=0~.

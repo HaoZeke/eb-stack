@@ -63,35 +63,37 @@ Report these claims independently:
 ## Install
 
 The crate is `eb_stack` on crates.io; the installed binary is `eb-stack`.
-Rust 1.88 or newer is required when building from source.
+Rust 1.88 or newer is required when building from source. `rustc` 1.83
+stops while reading the crate index: the Cargo feature `edition2024` is
+not stabilized. `rustup toolchain install stable` and `rustup default
+stable` provide a new enough compiler.
 
-Pre-built binary (fastest):
+The crates.io package and the GitHub release are both 0.3.0. That
+binary's `stack solve` flag is `--policy`. It does not include `stack
+gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
+`component-reach`. `eb-stack --version` prints `0.3.0` for that binary
+and for a checkout of this tree. The commands below use
+`--stack-policy` and those reports, so they need the checkout.
 
-```sh
-cargo binstall eb_stack
-```
+`cargo binstall` is not part of a Rust install. `cargo binstall
+eb_stack` fails with `no such command: binstall` until that program is
+installed on its own, and it installs the 0.3.0 release. The shell
+installer and `cargo install eb_stack --locked` install that same
+release.
 
-Shell installer (Linux/macOS):
-
-```sh
-curl -LsSf https://github.com/HaoZeke/eb-stack/releases/latest/download/eb_stack-installer.sh | sh
-```
-
-From crates.io:
-
-```sh
-cargo install eb_stack --locked
-```
-
-From source:
+From this checkout:
 
 ```sh
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
-cargo test --locked
 cargo build --locked --release
+mkdir -p ~/.local/bin
 install -m755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
+
+Add `~/.local/bin` to `PATH`. `eb-stack --version` then prints
+`eb-stack 0.3.0`. The test suite is `cargo test --locked`, in
+[Tests](#tests). It is not required before the first solve.
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.
 

@@ -56,6 +56,8 @@
 
    *What does a version bump cost next to an in-place patch?* → :doc:`howto/rebuild-set`
 
+   *What a site module list lacks?* → :doc:`howto/stack-gap`
+
    *Which modules carry a component?* → :doc:`howto/component-reach`
 
    *Find from-commit pins an EasyBuild release already contains?* → :doc:`howto/from-commit-released`
@@ -142,6 +144,7 @@
    howto/spack-externals-eessi
    howto/repair-campaign
    howto/solve-lock
+   howto/stack-gap
    howto/emit-reports
    howto/bump-recipe
    howto/root-priority
@@ -225,22 +228,36 @@
 
 * Install
 
-  No public release is published. Build from source with Rust 1.88 or newer:
+  Rust 1.88 or newer. ~rustc~ 1.83 stops while reading the crate index:
+  the Cargo feature ~edition2024~ is not stabilized. With rustup:
+
+#+begin_src bash
+rustup toolchain install stable
+rustup default stable
+rustc --version
+#+end_src
+
+  crates.io and the GitHub release are both 0.3.0. That binary solves a
+  stack with ~--policy~, not ~--stack-policy~, and it serves ~mcp~. It
+  does not provide ~stack gap~, ~stack oom~, ~stack from-commit~,
+  ~rebuild-set~, ~pr-overlap~, or ~component-reach~. ~eb-stack --version~
+  prints ~0.3.0~ for the release and for this checkout. The commands in
+  this manual are the checkout:
 
 #+begin_src bash
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
-cargo test --locked
 cargo build --locked --release
-# binary: target/release/eb-stack
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 #+end_src
 
-  Verify:
-
-#+begin_src bash
-eb-stack --version
-#+end_src
+  =~/.local/bin= is not on ~PATH~ until you add it. ~eb-stack --version~
+  then prints ~eb-stack 0.3.0~. ~cargo binstall~ is a separate program;
+  a stock ~cargo~ reports ~no such command: binstall~. The shell
+  installer from the GitHub release installs the 0.3.0 binary. The
+  contributor test suite is ~cargo test --locked~, on the
+  [[file:contributing.org][contributing]] page. It is not required before
+  the first solve.
 
 * Inspect from a fresh clone
 
@@ -275,6 +292,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
   - How-to guides: [[file:howto/pypi-extend.org][site Python extras]],
     [[file:howto/cran-extend.org][site R extras]],
     [[file:howto/solve-lock.org][solve a stack lock]],
+    [[file:howto/stack-gap.org][classify a site module list]],
     [[file:howto/repair-campaign.org][repair a failed campaign]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
