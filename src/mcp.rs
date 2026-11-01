@@ -338,6 +338,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("jenkins_gpu_systems", "array"),
                 ("jenkins_roots_only", "boolean"),
                 ("stack_diff_out", "string"),
+                ("dot_out", "string"),
             ],
         ),
         tool_with_optional(
@@ -2812,6 +2813,9 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
             },
         )
         .map_err(|error| error.to_string())?;
+        if let Some(path) = optional_path(arguments, "dot_out") {
+            crate::sbom::write_solved_dependency_graph(&lock, &lock_out, &path)?;
+        }
         Ok(json!({
             "lock": lock_out,
             "packages": lock.packages.len(),

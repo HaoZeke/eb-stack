@@ -412,7 +412,8 @@ eb-stack stack solve \
   [--build-list-out /tmp/build.list] [--build-list-excludes-baseline] \
   [--jenkins-build-list-out /tmp/next.list [--jenkins-flags-from /tmp/previous.list]... \
    [--jenkins-gpu-systems gpu-a,gpu-b] [--jenkins-roots-only]] \
-  [--stack-diff-out /tmp/stack.diff.md]
+  [--stack-diff-out /tmp/stack.diff.md] \
+  [--dot-out /tmp/stack.dot]
 
 eb-stack stack sbom --lock /tmp/stack.lock.json [--out /tmp/stack.cdx.json]
 
@@ -535,6 +536,13 @@ writes that same document, checksums included. The MCP tool
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON ~Policy~ schema. The policy file is
 ~--stack-policy~, the same flag ~package plan~ and ~package bump~ take.
+
+~--dot-out~ writes the solved dependency DAG. A node is ~name/version~ plus
+the toolchain, and the versionsuffix when the recipe has one. An edge points
+from a package to a dependency it selected and is labelled with the
+requirement; a builddependency is dashed. A ~.svg~ or ~.png~ path is rendered
+with the Graphviz ~dot~ program. Any other suffix, including ~.dot~, is the
+DOT source. The MCP field ~dot_out~ writes the same file.
 
 The baseline is either a previous generation (~--baseline-easyconfigs~, by
 default the first ~--easyconfigs~ tree) or what a set of easystacks installs

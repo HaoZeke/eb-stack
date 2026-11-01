@@ -651,6 +651,198 @@ pub fn closure_edges_for_lock(lock: &StackLock, lock_file: &Path) -> HashMap<Str
     edges
 }
 
+/// Graphviz DOT for the dependency DAG of a solved lock.
+///
+/// A node is `name/version` plus the toolchain, and the versionsuffix when
+/// the selected recipe has one. An edge points from a package to a
+/// dependency it selected. The label is the requirement as the solver read
+/// it, plus a versionsuffix or an explicit toolchain when the tuple carries
+/// one. A builddependency that is not also a runtime dependency is dashed.
+///
+/// Edges come from the easyconfigs the lock names, the same walk as
+/// [`closure_edges_for_lock`]. A dependency the lock did not select is left
+/// out. Node order is the lock's package order made deterministic by name,
+/// version, versionsuffix, and toolchain.
+pub fn solved_dependency_dot(lock: &StackLock, lock_file: &Path) -> String {
+    let lock_dir = lock_directory(lock_file);
+    let mut nodes: Vec<&crate::domain::LockPackage> = lock.packages.iter().collect();
+    nodes.sort_by(|a, b| {
+        (
+            &a.name,
+            &a.version,
+            a.versionsuffix.as_deref().unwrap_or(""),
+            toolchain_text(&a.toolchain),
+        )
+            .cmp(&(
+                &b.name,
+                &b.version,
+                b.versionsuffix.as_deref().unwrap_or(""),
+                toolchain_text(&b.toolchain),
+            ))
+    });
+    let mut id_of: HashMap<String, String> = HashMap::new();
+    for (index, package) in nodes.iter().enumerate() {
+        id_of.insert(package_identity(package), format!("n{index}"));
+    }
+
+    let mut edges: BTreeMap<(String, String), (String, bool)> = BTreeMap::new();
+    for package in &lock.packages {
+        let Some(resolved) = (!package.easyconfig_path.is_empty())
+            .then(|| {
+                crate::eb_parse::resolve_easyconfig_file(&resolve_lock_easyconfig(
+                    lock_dir,
+                    &package.easyconfig_path,
+                ))
+                .ok()
+            })
+            .flatten()
+        else {
+            continue;
+        };
+        let candidate = resolved.to_candidate();
+        let from = package_identity(package);
+        for (dep, runtime) in candidate
+            .dependencies
+            .iter()
+            .map(|dep| (dep, true))
+            .chain(candidate.builddependencies.iter().map(|dep| (dep, false)))
+        {
+            let Some(target) = resolve_locked_dep(lock, package, dep) else {
+                continue;
+            };
+            let key = (from.clone(), package_identity(target));
+            let label = dependency_edge_label(dep);
+            if let Some(drawn) = edges.get_mut(&key) {
+                if runtime {
+                    *drawn = (label, true);
+                }
+            } else {
+                edges.insert(key, (label, runtime));
+            }
+        }
+    }
+
+    let mut out = String::from("digraph solved {\n");
+    out.push_str("    rankdir=TB;\n");
+    out.push_str("    graph [fontname=\"Helvetica\"];\n");
+    out.push_str("    node [shape=box, fontname=\"Helvetica\", fontsize=11];\n");
+    out.push_str("    edge [fontname=\"Helvetica\", fontsize=9];\n");
+    for package in &nodes {
+        let id = &id_of[&package_identity(package)];
+        let version = format!(
+            "{}{}",
+            package.version,
+            package.versionsuffix.as_deref().unwrap_or("")
+        );
+        // Graphviz `\n`, written as two characters so a node stays one source line.
+        let label = format!(
+            "{}\\n{}",
+            dot_escape(&format!("{}/{}", package.name, version)),
+            dot_escape(&toolchain_text(&package.toolchain))
+        );
+        out.push_str(&format!("    {id} [label=\"{label}\"];\n"));
+    }
+    for ((from, to), (label, runtime)) in &edges {
+        let Some(from_id) = id_of.get(from) else {
+            continue;
+        };
+        let Some(to_id) = id_of.get(to) else {
+            continue;
+        };
+        let style = if *runtime { "" } else { ", style=dashed" };
+        out.push_str(&format!(
+            "    {from_id} -> {to_id} [label=\"{}\", color=\"#004D40\"{style}];\n",
+            dot_escape(label)
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// Write the solved dependency DAG.
+///
+/// `.svg` and `.png` are rendered with the Graphviz `dot` program. Any other
+/// suffix, including `.dot`, is the DOT source.
+pub fn write_solved_dependency_graph(
+    lock: &StackLock,
+    lock_file: &Path,
+    out: &Path,
+) -> Result<(), String> {
+    let dot = solved_dependency_dot(lock, lock_file);
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("create {}: {error}", parent.display()))?;
+        }
+    }
+    let kind = out
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if kind == "svg" || kind == "png" {
+        let mut child = std::process::Command::new("dot")
+            .arg(format!("-T{kind}"))
+            .arg("-o")
+            .arg(out)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                format!(
+                    "rendering {} needs the graphviz dot program: {error}",
+                    out.display()
+                )
+            })?;
+        let stdin = child.stdin.as_mut().ok_or("dot stdin")?;
+        std::io::Write::write_all(stdin, dot.as_bytes())
+            .map_err(|error| format!("write dot source: {error}"))?;
+        // Drop stdin before waiting so dot sees EOF.
+        child.stdin.take();
+        let status = child
+            .wait()
+            .map_err(|error| format!("wait for dot: {error}"))?;
+        if !status.success() {
+            return Err(format!("dot exited {status}"));
+        }
+        return Ok(());
+    }
+    std::fs::write(out, dot).map_err(|error| format!("write {}: {error}", out.display()))?;
+    Ok(())
+}
+
+fn toolchain_text(toolchain: &crate::domain::Toolchain) -> String {
+    if crate::hierarchy::is_system_toolchain(toolchain) {
+        "system".to_string()
+    } else {
+        format!("{}-{}", toolchain.name, toolchain.version)
+    }
+}
+
+fn dependency_edge_label(dep: &crate::domain::DepReq) -> String {
+    let mut label = dep.version_req.clone();
+    if let Some(suffix) = dep.versionsuffix.as_deref() {
+        if !suffix.is_empty() {
+            label.push_str(" suffix ");
+            label.push_str(suffix);
+        }
+    }
+    if let Some(toolchain) = &dep.toolchain {
+        label.push_str(" toolchain ");
+        if crate::hierarchy::is_system_toolchain(toolchain) {
+            label.push_str("system");
+        } else {
+            label.push_str(&toolchain.name);
+            label.push('/');
+            label.push_str(&toolchain.version);
+        }
+    }
+    label
+}
+
+fn dot_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// How many recipes a lock SBOM could read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SbomReadStats {

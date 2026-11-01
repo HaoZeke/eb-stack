@@ -196,7 +196,8 @@ pub use sbom::{
     artifact_facts_for_lock, build_dep_map_from_universe, dep_map_from_universe, dep_maps_for_lock,
     host_build_environment, lock_to_bom, lock_to_bom_with_facts, lock_to_cyclonedx,
     lock_to_cyclonedx_from_recipes, lock_to_cyclonedx_with_deps, lock_to_cyclonedx_with_facts,
-    lock_to_cyclonedx_with_runtime_and_build, ArtifactFacts, SbomFacts, SbomReadStats,
+    lock_to_cyclonedx_with_runtime_and_build, solved_dependency_dot, write_solved_dependency_graph,
+    ArtifactFacts, SbomFacts, SbomReadStats,
 };
 pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 
