@@ -281,6 +281,23 @@ fn example_path_token(token: &str) -> bool {
 }
 
 #[test]
+fn package_plan_index_help_names_a_requirements_list() {
+    let help = help_text(&["package".into(), "plan".into()]);
+    assert!(
+        help.contains("Package:"),
+        "package plan --help should name the CRAN field:\n{help}"
+    );
+    assert!(
+        help.contains("name==version"),
+        "package plan --help should name the requirements-list form:\n{help}"
+    );
+    assert!(
+        help.contains("no `Package:` field"),
+        "package plan --help should say when the file is a name==version list:\n{help}"
+    );
+}
+
+#[test]
 fn stack_gap_help_example_paths_exist() {
     let text = help_text(&["stack".into(), "gap".into()]);
     let examples = text
