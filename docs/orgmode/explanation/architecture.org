@@ -63,6 +63,14 @@ digraph S {
 }
 #+end_src
 
+The stack node draws the original five subcommands. ~stack~ also has
+~from-commit~, ~arch~, ~files~, ~generation~, ~cuda-cc~, ~known-failures~,
+~oom~, ~bot-classify~, and ~batch~. Four reports sit beside the namespaces:
+~easyblock-reach~, ~pr-overlap~, ~rebuild-set~, and ~component-reach~.
+~package~ also has ~latest~. The full map is
+[[file:../reference/cli.org][the command-line reference]]. Shared names are in
+[[file:../reference/glossary.org][the glossary]].
+
 * Syntax adapters
 
 The conda adapter expands a restricted template subset, parses classic and v1

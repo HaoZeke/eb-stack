@@ -3,7 +3,9 @@
 
 This tutorial plans conda-forge eOn, explains the artifacts, and routes the
 result into a build campaign. The QMCPACK path differs only in parser and
-package configuration.
+package configuration. Closure, generation, baseline, and reachability
+are in [[file:reference/glossary.org][the glossary]]. The same steps, without these
+fixed paths, are [[file:howto/new-package.org][author a new package]].
 
 * Prepare the runnable local target
 

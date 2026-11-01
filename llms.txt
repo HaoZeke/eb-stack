@@ -6,7 +6,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 
 ## Getting started
 
-- [eb-stack](https://eb-stack.rgoswami.me/index.html.md): eb-stack parses conda-forge, Spack, and EasyBuild recipes into one canonical package plan.
+- [eb-stack](https://eb-stack.rgoswami.me/index.html.md): eb-stack parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, Raku, and EasyBuild recipes into one canonical package plan.
 - [Tutorial: foreign recipe to verified EasyBuild package](https://eb-stack.rgoswami.me/tutorial.html.md): This tutorial plans conda-forge eOn, explains the artifacts, and routes the result into a build campaign.
 
 ## How-to guides
@@ -41,6 +41,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 
 ## Reference
 
+- [Glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md): Names shared by the tutorial, the how-to guides, and the reference.
 - [Command-line reference](https://eb-stack.rgoswami.me/reference/cli.html.md): eb-stack has six namespaced command groups (package, recipe, stack, target, campaign, repro), four reports (easyblock-reach, pr-overlap, rebuild-set, component-reach), and a Model Context Protocol (MCP) server.
 - [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md): eb-stack mcp serves the version-one commands on stdin and stdout.
 - [Package bundle reference](https://eb-stack.rgoswami.me/reference/package-bundles.html.md): package inspect, package plan, and package bump write a version-one package bundle.
@@ -52,7 +53,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 
 ## Explanation
 
-- [From recipe to verified package](https://eb-stack.rgoswami.me/explanation/lifecycle.html.md): The lifecycle has three claims. Treating them as one is the main source of incorrect status reports.
+- [From recipe to verified package](https://eb-stack.rgoswami.me/explanation/lifecycle.html.md): The lifecycle has three claims. Treating them as one is the main source of incorrect status reports. The campaign JSON field for the third claim is binary_verified; prose calls it binary-verified. Those names, and
 - [Architecture](https://eb-stack.rgoswami.me/explanation/architecture.html.md): eb-stack separates package intent, dependency selection, recipe emission, and empirical build evidence.
 - [The optimization model](https://eb-stack.rgoswami.me/explanation/optimization-model.html.md): eb-stack uses resolvo, a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) solver, as its feasibility core.
 - [The parser approach](https://eb-stack.rgoswami.me/explanation/parser-approach.html.md): An EasyBuild easyconfig (*.eb) is, syntactically, a Python source file.

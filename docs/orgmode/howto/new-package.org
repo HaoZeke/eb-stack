@@ -4,7 +4,9 @@
 This workflow turns a foreign package recipe into a canonical manifest,
 planned Software Bill of Materials (SBOM), Resolvo profile locks, conventional EasyBuild recipes, and a
 persisted build-evaluation campaign. It is the workflow used for conda-forge
-eOn and Spack QMCPACK fixtures.
+eOn and Spack QMCPACK fixtures. The path with fixed directories is the
+[[file:../tutorial.org][tutorial]]. Names are in
+[[file:../reference/glossary.org][the glossary]].
 
 * Inputs
 

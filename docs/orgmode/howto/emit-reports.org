@@ -3,7 +3,9 @@
 
 Goal: alongside the lock, get an install-ordered build list for a
 build pipeline and a markdown diff you can paste straight into a pull
-request. The commands below write those files under ~/tmp~.
+request. The commands below write those files under ~/tmp~. Baseline,
+closure, generation, and reachability are in
+[[file:../reference/glossary.org][the glossary]].
 
 * Add the two flags to solve
 

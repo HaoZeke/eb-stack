@@ -126,4 +126,7 @@ eb-stack campaign run \
 ~package bump~ can establish *resolves*. Only the campaign's EasyBuild run can
 establish *builds*, and only declared verification commands can establish
 *binary-verified*. Follow ~skills/annual-bump/SKILL.md~ for batch operation and
-repair handling.
+repair handling. One generation of recipes is
+[[file:run-annual-bump.org][the annual bump]]. The same GROMACS source bumped
+to ~foss/2025b~, with the SBOM recorded there, is in
+[[file:../explanation/sbom-blast-radius.org][dependency closure]].

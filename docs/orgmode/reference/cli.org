@@ -5,7 +5,9 @@
 ~stack~, ~target~, ~campaign~, ~repro~), four reports (~easyblock-reach~,
 ~pr-overlap~, ~rebuild-set~, ~component-reach~), and a Model Context Protocol (MCP) server.
 ~--version~ prints the crate version. All paths written by package commands
-are deterministic bundle artifacts.
+are deterministic bundle artifacts. Closure, generation, baseline,
+reachability, toolchain family, and the claim ladder are defined in
+[[file:glossary.org][the glossary]].
 
 * Exit status
 

@@ -129,4 +129,8 @@ An annual bump is not complete while an affected campaign remains failed or a
 required verification command is absent. The human operator owns branch/PR
 publication; the campaign supplies the recipe set and evidence.
 
-The executable procedure is ~skills/annual-bump/SKILL.md~.
+The executable procedure is ~skills/annual-bump/SKILL.md~. Flags for one
+recipe are in [[file:bump-recipe.org][bump an existing recipe]]. The recorded
+closure of this GROMACS source on ~foss/2025b~ is in
+[[file:../explanation/sbom-blast-radius.org][dependency closure]]. Names are
+in [[file:../reference/glossary.org][the glossary]].

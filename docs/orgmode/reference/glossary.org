@@ -1,0 +1,113 @@
+#+TITLE: Glossary
+#+OPTIONS: toc:t num:nil author:nil
+
+Names shared by the tutorial, the how-to guides, and the reference.
+Flags and exit status stay in the [[file:cli.org][command-line reference]].
+
+* Terms
+
+- closure :: Every module reached by walking dependencies from a starting
+  recipe. For an in-place patch, the closure is every installed module that
+  depends on the patched module inside one toolchain generation.
+  ~closure.plan.json~ is the planned closure ~package plan~ writes when
+  ~--easyconfigs~ is passed. See
+  [[file:../explanation/sbom-blast-radius.org][dependency closure]] and
+  [[file:../explanation/rebuild-set.org][the rebuild closure]].
+
+- generation :: A toolchain generation, such as ~2025b~ or ~2026.1~. An
+  EESSI version carries a fixed set: 2023.06 carries 2022b, 2023a, and
+  2023b; 2025.06 carries 2024a, 2025a, and 2025b; 2026.06 carries 2026.1.
+  Pass a toolchain as ~name/version~ (~foss/2026.1~). A module filename
+  uses a hyphen (~foss-2026.1~). See
+  [[file:../howto/generation-lint.org][generation lint]].
+
+- baseline :: The previous selection a stack diff or ~require_upgrade~
+  compares against. Pass a previous easyconfig tree
+  (~--baseline-easyconfigs~, and ~--baseline-toolchain-version~ when that
+  tree holds several generations) or the easystacks already installed
+  (~--baseline-easystack~). There is no ~--baseline~ flag. Omit
+  ~--baseline-easyconfigs~ and the first ~--easyconfigs~ tree is the
+  baseline. See [[file:../howto/emit-reports.org][emit a build list and stack diff]].
+
+- toolchain family :: The toolchain name without its version (~foss~,
+  ~GCCcore~, ~gfbf~). A bump retargets an explicit dependency's family
+  onto the new generation. ~--baseline-also-toolchain~ keeps another
+  family's hierarchy in the baseline. This manual does not use the phrase
+  "family lock": a lock is one solved selection, and a family is only the
+  toolchain name. On an architecture, family is the text before the first
+  slash (~x86_64~, ~aarch64~). See
+  [[file:../howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
+
+- lock :: The Resolvo result for one selection. A package bundle has
+  ~locks/<profile>.lock.json~ per profile. ~stack solve~ writes
+  ~stack.lock.json~ for a whole stack. A ~preferred~ pin may fall back
+  inside the solver. A ~locked~ pin may not.
+
+- reachability :: Four checks, not one word. Host reachability is whether
+  a target's SSH, rsync, or staging path answers; a failure is a
+  ~transport~ finding. ~component-reach~ lists modules in one generation
+  that carry a named component. ~easyblock-reach~ lists easyconfigs that
+  use a changed class. ~stack arch --probe-sources~ reports ~unreachable~
+  when no probed architecture family can fetch a source, and
+  ~arch-missing~ when another family can.
+
+- Resolvo :: The conflict-driven clause learning (CDCL) Boolean
+  satisfiability (SAT) solver
+  ([[https://github.com/mamba-org/resolvo][resolvo]]) that picks one jointly
+  feasible set of versions. Prose capitalizes Resolvo. The crate and some
+  code identifiers stay ~resolvo~.
+
+- claim ladder :: Three claims, reported separately. ~resolves~ means
+  ~package plan~ or ~package bump~ wrote a Resolvo lock and a recipe for
+  every requested profile. ~package inspect~ does not establish it. The
+  [[file:../explanation/lifecycle.org][lifecycle]] page also requires the
+  manifest and the planned SBOM before it calls a package resolved; the
+  campaign JSON records ~resolves~ from the lock and the recipe.
+  ~builds~ means ~campaign run~ completed every emitted recipe through
+  EasyBuild on the configured target. ~binary-verified~ means at least one
+  verification command is declared and every declared command succeeds.
+  The JSON field is ~binary_verified~. No declared command leaves that
+  field false after a successful build. A planned SBOM is not a build claim.
+
+- robot tree :: An EasyBuild easyconfigs directory, passed as
+  ~--easyconfigs~. EasyBuild's ~eb --robot~ uses that tree to resolve
+  dependencies during a build. ~package inspect~ does not need one.
+
+- easystack :: The YAML file ~eb --easystack~ reads. An entry names one
+  easyconfig to build.
+
+- product profile :: One independently installable variant. The default
+  profile has no ~versionsuffix~ and its recipe has no suffix. Each
+  profile emits one ~.eb~ file. Message Passing Interface (MPI) and OpenMP
+  toolchain options alone do not add a suffix.
+
+- stack policy :: Pins, exclusions, roots, and root priority applied
+  inside Resolvo. Package planning reads TOML. ~stack solve~ reads the
+  JSON object in [[file:policy.org][the policy reference]]. Package-config
+  TOML is a different file: aliases, build parameters, and profiles.
+
+- SBOM :: A planned CycloneDX software bill of materials. The recipes
+  supply it before anything is installed. It is not a scan of installed
+  files. A package writes ~package.sbom.cdx.json~. A stack writes the
+  document with ~--sbom-out~ or ~stack sbom --out~.
+
+- EESSI :: The European Environment for Scientific Software Installations.
+  Pages here use EESSI 2023.06, 2025.06, and 2026.06, and EasyBuild 5.2.1,
+  5.4.0, or 5.4.1, each tied to the fixture that page records. Those
+  version strings are not substitutes for one another.
+
+- Hermes :: The campaign role that classifies findings, applies repairs,
+  and retries through the requested claim. Not a program that must be
+  installed beside ~eb-stack~.
+
+- OMP :: On a campaign, an optional worker that claims one finding and
+  records the repair. This is not the OpenMP runtime. OpenMP, written in
+  full, is a toolchain feature on a recipe.
+
+- finding :: One typed campaign failure: class, disposition, the command
+  that failed, and the evidence. See
+  [[file:campaigns.org][campaign state and typed findings]].
+
+- from-commit :: An easystack pin that selects an easyconfig from one
+  easybuild-easyconfigs commit. ~stack from-commit~ reports whether an
+  EasyBuild release already contains that commit and that file.

@@ -13,7 +13,7 @@
          <p class="eb-hero-sub">package plan · Resolvo · EasyBuild campaign</p>
        </div>
      </div>
-     <p class="eb-hero-tagline">Parse conda-forge, Spack, and EasyBuild into one canonical manifest and planned SBOM; solve product profiles with Resolvo; emit conventional recipes; build-evaluate them on a declarative target.</p>
+     <p class="eb-hero-tagline">Parse conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild into one canonical manifest and planned SBOM; solve product profiles with Resolvo; emit conventional recipes; build-evaluate them on a declarative target.</p>
      <div class="eb-hero-pills">
        <span>package plan</span>
        <span>package bump</span>
@@ -29,6 +29,12 @@
 ============
 
 :Author: `Rohit Goswami <https://rgoswami.me>`_
+
+A plan is not a build. ``package plan`` and ``package bump`` can establish only *resolves* (a Resolvo lock and an emitted recipe). Only ``campaign run`` establishes *builds* and *binary-verified*.
+
+Start with the :doc:`tutorial`. With no EasyBuild install, run the inspect snippet under *Inspect from a fresh clone*. Closure, generation, baseline, and reachability are in the :doc:`reference/glossary`.
+
+Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``. The published 0.3.0 binary (crates.io and the GitHub release) uses ``--policy`` and does not include those commands.
 
 .. important::
 
@@ -106,7 +112,7 @@
       :link: howto/solve-lock
       :link-type: doc
 
-      Co-select a generation with resolvo; emit lock and build list.
+      Co-select a generation with Resolvo; emit lock and build list.
 
    .. grid-item-card:: Reproduction fidelity
       :link: explanation/fidelity
@@ -168,6 +174,7 @@
    :maxdepth: 2
    :caption: Reference
 
+   reference/glossary
    reference/cli
    reference/mcp
    reference/package-bundles
@@ -209,13 +216,18 @@
 #+end_export
 
 
-  ~eb-stack~ parses conda-forge, Spack, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
+  ~eb-stack~ parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN),
+  Cargo, LuaRocks, Raku, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
   canonical package plan. It emits a planned CycloneDX Software Bill of Materials (SBOM), materializes
   independently installable profiles, applies distribution/site preferences
   inside [[https://github.com/mamba-org/resolvo][Resolvo]], writes one lock and conventional ~.eb~ file per profile,
   and drives the resulting bundle through a persisted target-routed build
   campaign. Existing-recipe bumps use the same manifest, SBOM, solver, and
   campaign artifacts as new packages.
+
+  Closure, generation, baseline, toolchain family, reachability, and the
+  claim ladder (~resolves~, ~builds~, ~binary-verified~) are defined in the
+  [[file:reference/glossary.org][glossary]]. The campaign JSON spells the third claim ~binary_verified~.
 
 * What it is not
 
@@ -241,8 +253,8 @@ rustc --version
   stack with ~--policy~, not ~--stack-policy~, and it serves ~mcp~. It
   does not provide ~stack gap~, ~stack oom~, ~stack from-commit~,
   ~rebuild-set~, ~pr-overlap~, or ~component-reach~. ~eb-stack --version~
-  prints ~0.3.0~ for the release and for this checkout. The commands in
-  this manual are the checkout:
+  prints ~0.3.0~ for the release and for a build of main. Build from
+  main for the commands in this manual:
 
 #+begin_src bash
 git clone https://github.com/HaoZeke/eb-stack.git
@@ -283,6 +295,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
 
 * Documentation map
 
+  - [[file:reference/glossary.org][Glossary]]: closure, generation, baseline, reachability, and the claim ladder.
   - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]]: start here.
   - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]]:
     operator guide for a whole rebuild (what it closes, the residual, the
@@ -312,7 +325,9 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/arch-known-failures.org][warn about known per-architecture failures]].
     [[file:howto/oom-profile.org][warn before a bot job runs out of memory]].
     [[file:howto/bot-classify.org][read an EESSI bot FAILURE]].
-  - Reference: [[file:reference/cli.org][CLI]],
+  - Reference: [[file:reference/glossary.org][glossary]],
+    [[file:reference/cli.org][CLI]],
+    [[file:reference/rust-api.org][Rust API]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],
     [[file:reference/targets.org][build targets]],

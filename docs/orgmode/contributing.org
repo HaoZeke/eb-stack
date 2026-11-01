@@ -29,7 +29,8 @@ pixi run -e docs docbld
 * Documentation
 
 Primary docs live in orgmode under ~docs/orgmode/~ (Diataxis). Edit there,
-then build. The Sphinx site includes an in-tree Rust API (~crates/eb_stack/~)
+then build. Shared names (closure, generation, baseline, the claim ladder)
+are in [[file:reference/glossary.org][the glossary]]. The Sphinx site includes an in-tree Rust API (~crates/eb_stack/~)
 via ~sphinx-rustdocgen~ + ~sphinxcontrib_rust~ (same path as rsx-rs).
 
 #+begin_src bash

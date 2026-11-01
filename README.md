@@ -9,6 +9,12 @@
 
 `eb-stack` parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, Raku, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX Software Bill of Materials (SBOM), solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
 
+A plan is not a build. `package plan` and `package bump` can establish only **resolves**. `campaign run` owns **builds** and **binary-verified**.
+
+The published 0.3.0 binary (crates.io and the GitHub release) lacks `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, and `component-reach`. Its `stack solve` flag is `--policy`. Build from main for those commands.
+
+The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation, baseline, and reachability. The longer path is the [tutorial](docs/orgmode/tutorial.org).
+
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
 [![crates.io](https://img.shields.io/crates/v/eb_stack.svg)](https://crates.io/crates/eb_stack)
@@ -72,8 +78,8 @@ The crates.io package and the GitHub release are both 0.3.0. That
 binary's `stack solve` flag is `--policy`. It does not include `stack
 gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
 `component-reach`. `eb-stack --version` prints `0.3.0` for that binary
-and for a checkout of this tree. The commands below use
-`--stack-policy` and those reports, so they need the checkout.
+and for a build of main. The commands below use `--stack-policy` and
+those reports. Build from main for them.
 
 `cargo binstall` is not part of a Rust install. `cargo binstall
 eb_stack` fails with `no such command: binstall` until that program is
@@ -87,8 +93,7 @@ From this checkout:
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
 cargo build --locked --release
-mkdir -p ~/.local/bin
-install -m755 target/release/eb-stack ~/.local/bin/eb-stack
+install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
 Add `~/.local/bin` to `PATH`. `eb-stack --version` then prints

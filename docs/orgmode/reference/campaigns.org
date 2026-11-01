@@ -91,8 +91,9 @@ The three booleans are independent claims:
 
 1. ~resolves~: every requested profile has a Resolvo lock and emitted recipe;
 2. ~builds~: every emitted recipe succeeds through EasyBuild on this target;
-3. ~binary_verified~: at least one verification command is declared and every
-   declared command succeeds.
+3. ~binary_verified~ (prose: *binary-verified*): at least one verification
+   command is declared and every declared command succeeds. See
+   [[file:glossary.org][the glossary]].
 
 A completed campaign with no verification commands has ~builds: true~ and
 ~binary_verified: false~. A planned Software Bill of Materials (SBOM) never implies either build claim.
@@ -123,7 +124,7 @@ classification so the finding reflects the actual compiler or runtime error.
 
 | Class | Default disposition | Start at |
 |-
-| ~transport~ | target-repair | SSH, rsync, host reachability, or staging path |
+| ~transport~ | target-repair | SSH, rsync, [[file:glossary.org][host reachability]], or staging path |
 | ~executor~ | target-repair | Slurm command, partition, account, or allocation syntax |
 | ~runtime~ | target-repair | Host/container executable, image, mounts, ABI, or environment |
 | ~interrupted~ | retryable | Abandoned running state after the exclusive controller lock becomes available |

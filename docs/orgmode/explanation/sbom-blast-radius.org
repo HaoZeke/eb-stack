@@ -339,8 +339,11 @@ recorded as package edges.
 An author gets the same kind of document for one retargeted recipe. The
 source is ~GROMACS-2024.4-foss-2023b.eb~ from develop
 ~981d2123dddccca9ce0b15f9eb2643e872332f5e~, bumped onto foss-2025b. The
-easyconfigs tree is that recipe, the six dependencies the 2025b solve
-selects, and the four patch files the recipe names.
+[[file:../howto/bump-recipe.org][bump how-to]] and the
+[[file:../howto/run-annual-bump.org][annual bump]] retarget this same source
+onto ~foss/2024a~. This section uses ~foss/2025b~ so the recorded SBOM slice
+matches. The easyconfigs tree is that recipe, the six dependencies the 2025b
+solve selects, and the four patch files the recipe names.
 
 #+begin_src bash
 eb-stack package bump \

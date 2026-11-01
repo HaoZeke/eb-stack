@@ -2,7 +2,10 @@
 #+OPTIONS: toc:t num:nil
 
 The lifecycle has three claims. Treating them as one is the main source of
-incorrect status reports.
+incorrect status reports. The campaign JSON field for the third claim is
+~binary_verified~; prose calls it *binary-verified*. Those names, and
+closure, generation, baseline, and reachability, are in
+[[file:../reference/glossary.org][the glossary]].
 
 #+begin_src dot :file ../images/claim-ladder.svg :exports results
 digraph C {
