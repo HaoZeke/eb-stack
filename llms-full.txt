@@ -6544,8 +6544,8 @@ linker flags into EasyBuild recipes.
 | `command` | EasyBuild executable, usually `eb` |
 | `robot_paths` | Ordered upstream and overlay easyconfig roots |
 | `work_root` | Durable campaign and build root |
-| `tmp_root` | `EASYBUILD_TMPDIR` for this target |
-| `environment` | Environment passed to EasyBuild and verification commands |
+| `tmp_root` | `EASYBUILD_TMPDIR` for builds, verification commands, and the doctor EasyBuild probe |
+| `environment` | Environment passed to EasyBuild, verification commands, and the doctor EasyBuild probe |
 
 The routed build command adds `--robot=<colon-separated paths>` and
 `--buildpath=<work_root>/build`. Later robot roots override earlier recipes

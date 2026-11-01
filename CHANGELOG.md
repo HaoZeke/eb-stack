@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Verification commands and the doctor `eb --version` probe set
+  `EASYBUILD_TMPDIR` and the target's EasyBuild environment, the same workload
+  prefix a build uses. Compiler-wrapper scrubbing is unchanged.
 - A CUDA + usempi package listed in overlay policy (`gromacs`) gets
   `mpi_numprocs` pinned on bump (default 2) instead of inheriting `$parallel`
   as NUMPROC, and `pretestopts` that count visible GPUs and disable direct GPU

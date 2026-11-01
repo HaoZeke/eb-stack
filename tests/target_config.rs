@@ -1,7 +1,8 @@
 use eb_stack::target::{
-    doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer, TargetRuntime,
-    TARGET_CONFIG_SCHEMA_VERSION,
+    doctor_target, resolve_target_layers, BuildTarget, EasyBuildWorkload, TargetConfigLayer,
+    TargetExecutor, TargetRuntime, TargetTransport, TARGET_CONFIG_SCHEMA_VERSION,
 };
+use std::collections::BTreeMap;
 use std::process::Command;
 
 #[test]
@@ -181,6 +182,111 @@ tmp_root = "/tmp"
     let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).expect("doctor JSON");
     assert_eq!(report["target"], "local-doctor");
     assert_eq!(report["ok"], true);
+}
+
+#[test]
+fn verification_command_sets_tmpdir_and_workload_environment() {
+    let mut environment = BTreeMap::new();
+    environment.insert("MUST".into(), "1".into());
+    environment.insert(
+        "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES".into(),
+        "1".into(),
+    );
+    let target = BuildTarget {
+        name: "local".into(),
+        transport: TargetTransport::Local,
+        executor: TargetExecutor::Direct,
+        runtime: TargetRuntime::Host,
+        easybuild: EasyBuildWorkload {
+            command: "eb".into(),
+            robot_paths: Vec::new(),
+            work_root: "/work".into(),
+            tmp_root: "/work/tmp".into(),
+            environment,
+        },
+    };
+    let plan = target.verification_command("module", &["load".into(), "App/1.0".into()]);
+    assert_eq!(plan.program, "env");
+    assert!(
+        plan.args
+            .iter()
+            .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp"),
+        "{:?}",
+        plan.args
+    );
+    assert!(
+        plan.args.iter().any(|token| token == "MUST=1"),
+        "{:?}",
+        plan.args
+    );
+    assert!(
+        plan.args
+            .iter()
+            .any(|token| { token == "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES=1" }),
+        "{:?}",
+        plan.args
+    );
+    let module = plan
+        .args
+        .iter()
+        .position(|token| token == "module")
+        .expect("module");
+    assert!(
+        plan.args[..module]
+            .iter()
+            .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp"),
+        "assignments must precede the program: {:?}",
+        plan.args
+    );
+    assert_eq!(plan.args.get(module + 1).map(String::as_str), Some("load"));
+}
+
+#[test]
+fn doctor_easybuild_probe_sets_tmpdir_and_workload_environment() {
+    let mut environment = BTreeMap::new();
+    environment.insert("MUST".into(), "1".into());
+    environment.insert(
+        "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES".into(),
+        "1".into(),
+    );
+    let target = BuildTarget {
+        name: "local".into(),
+        transport: TargetTransport::Local,
+        executor: TargetExecutor::Direct,
+        runtime: TargetRuntime::Host,
+        easybuild: EasyBuildWorkload {
+            command: "true".into(),
+            robot_paths: Vec::new(),
+            work_root: "/work".into(),
+            tmp_root: "/work/tmp".into(),
+            environment,
+        },
+    };
+    let report = doctor_target(&target).expect("doctor");
+    let easybuild = report
+        .checks
+        .iter()
+        .find(|check| check.layer == "easybuild")
+        .expect("easybuild check");
+    assert!(easybuild.success, "{easybuild:?}");
+    let tokens = std::iter::once(easybuild.command.program.as_str())
+        .chain(easybuild.command.args.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(tokens.first().copied(), Some("env"), "{tokens:?}");
+    let eb = tokens
+        .iter()
+        .position(|token| *token == "true")
+        .expect("eb program");
+    assert!(
+        tokens[..eb].contains(&"EASYBUILD_TMPDIR=/work/tmp"),
+        "assignments must precede eb: {tokens:?}"
+    );
+    assert!(tokens[..eb].contains(&"MUST=1"), "{tokens:?}");
+    assert!(
+        tokens[..eb].contains(&"EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES=1"),
+        "{tokens:?}"
+    );
+    assert_eq!(tokens.get(eb + 1).copied(), Some("--version"));
 }
 
 #[test]

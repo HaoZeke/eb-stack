@@ -428,15 +428,7 @@ impl BuildTarget {
         easyblocks: &[String],
     ) -> CommandPlan {
         let scrub_wrappers = self.should_scrub_compiler_wrappers();
-        let mut tokens = vec!["env".to_string()];
-        if scrub_wrappers {
-            for name in self.compiler_wrapper_env_unsets() {
-                tokens.push("-u".into());
-                tokens.push(name);
-            }
-        }
-        tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
-        tokens.extend(self.easybuild_env_assignments(scrub_wrappers));
+        let mut tokens = self.easybuild_workload_prefix(scrub_wrappers);
         tokens.push(self.easybuild.command.clone());
         let mut robot_paths = self.easybuild.robot_paths.clone();
         for path in additional_robot_paths {
@@ -461,9 +453,21 @@ impl BuildTarget {
     }
 
     /// The command that runs a verification program on the target.
+    ///
+    /// Uses the same workload prefix as a build: `EASYBUILD_TMPDIR` and the
+    /// target environment. Wrapper variables are scrubbed only when `program`
+    /// is EasyBuild itself.
     pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
         let scrub_wrappers =
             self.should_scrub_compiler_wrappers() && self.is_easybuild_program(program);
+        let mut tokens = self.easybuild_workload_prefix(scrub_wrappers);
+        tokens.push(program.to_string());
+        tokens.extend(args.iter().cloned());
+        self.route_tokens(self.runtime_tokens(tokens), true)
+    }
+
+    /// `env` prefix shared by builds, verification, and the doctor EasyBuild probe.
+    fn easybuild_workload_prefix(&self, scrub_wrappers: bool) -> Vec<String> {
         let mut tokens = vec!["env".to_string()];
         if scrub_wrappers {
             for name in self.compiler_wrapper_env_unsets() {
@@ -471,10 +475,9 @@ impl BuildTarget {
                 tokens.push(name);
             }
         }
+        tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
         tokens.extend(self.easybuild_env_assignments(scrub_wrappers));
-        tokens.push(program.to_string());
-        tokens.extend(args.iter().cloned());
-        self.route_tokens(self.runtime_tokens(tokens), true)
+        tokens
     }
 
     /// Check that EASYBUILD_TMPDIR exists, is writable, and has free space/inodes.
@@ -742,10 +745,11 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
         TargetRuntime::Eessi { command, .. } => vec![command.clone(), "--help".into()],
     };
     let runtime = target.route_tokens(runtime_program, true);
-    let easybuild = target.route_tokens(
-        target.runtime_tokens(vec![target.easybuild.command.clone(), "--version".into()]),
-        true,
-    );
+    let mut easybuild_probe =
+        target.easybuild_workload_prefix(target.should_scrub_compiler_wrappers());
+    easybuild_probe.push(target.easybuild.command.clone());
+    easybuild_probe.push("--version".into());
+    let easybuild = target.route_tokens(target.runtime_tokens(easybuild_probe), true);
     let checks = [
         ("transport", transport),
         ("executor", executor),
