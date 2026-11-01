@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A CUDA + usempi package listed in overlay policy (`gromacs`) gets
+  `mpi_numprocs` pinned on bump (default 2) instead of inheriting `$parallel`
+  as NUMPROC, and `pretestopts` that count visible GPUs and disable direct GPU
+  communication only on the library-MPI iteration. `recipe lint` warns
+  `EB_MAINT_MPI_TEST_RANKS` when the rank pin is missing.
 - `examples/eessi-pr-overlap/fetch-prs.sh` rewrites `raw/` and `prs/` from
   scratch on every run, so a pull request that closed or stopped touching
   easystacks does not persist from a stale run; it fetches every pull request

@@ -9,7 +9,7 @@ Mechanical enforcement lives in `eb-stack recipe check` / `recipe lint`.
 Hard errors are the two #26435 classes (`EB_MAINT_CROSS_GEN`,
 `EB_MAINT_SHELL_MONSTER`, `EB_MAINT_PATCHELF_RPATH`); warnings are the
 #26480 review classes (`EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`,
-`EB_MAINT_DEP_TOOLCHAIN_PIN`). `recipe lint` also reports what upstream CI,
+`EB_MAINT_DEP_TOOLCHAIN_PIN`, `EB_MAINT_MPI_TEST_RANKS`). `recipe lint` also reports what upstream CI,
 the easyconfigs test suite and reviewers check (E999, F541, W605, W291, E501,
 E2xx, `EB_*`; see `fixtures/LINT_FIXTURES.md`), each finding an error or a
 warning, plus a `clean` flag that is false while any error or any `EB_FMT_*`
@@ -36,7 +36,9 @@ agent contract around those gates plus contribution practice.
    `BUILD_TESTS=ON`) *and* run them (`runtest`). Prefer a minor upstream
    release over an EB patch that fakes green (#26480: "We typically do prefer
    to run unit tests (if they exist) to validate the sanity of the
-   installation").
+   installation"). A CUDA + usempi recipe whose easyblock defaults
+   MPI test ranks to `$parallel` needs `mpi_numprocs` pinned
+   (`EB_MAINT_MPI_TEST_RANKS`); do not skip the suite.
 7. **When native fails but GENERIC passes on bit-exact numeric/image tests, suspect FMA contraction first.**
    Set `toolchainopts = {'extra_cflags': '-ffp-contract=off'}` (libgd/libgd#278),
    with merged EasyBuild precedent in MuJoCo easyconfigs.

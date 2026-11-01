@@ -106,6 +106,24 @@ struct OverlayPolicy {
     build_requires: BuildRequires,
     #[serde(default)]
     python_provides: PythonProvides,
+    #[serde(default)]
+    mpi_test_ranks: MpiTestRanks,
+    #[serde(default)]
+    gpu_mpi_test_env: GpuMpiTestEnv,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct MpiTestRanks {
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    ranks: u32,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct GpuMpiTestEnv {
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -202,6 +220,80 @@ pub fn overlay_package_identity(name: &str) -> String {
         .get(&identity)
         .cloned()
         .unwrap_or(identity)
+}
+
+/// MPI test rank count the overlay policy pins for this package, when the
+/// easyblock would otherwise take `$parallel`.
+pub(crate) fn mpi_test_rank_pin(package: &str) -> Option<u32> {
+    let identity = crate::package_sources::package_identity(package);
+    let policy = overlay_policy();
+    let listed = policy
+        .mpi_test_ranks
+        .names
+        .iter()
+        .any(|name| crate::package_sources::package_identity(name) == identity);
+    if !listed || policy.mpi_test_ranks.ranks == 0 {
+        return None;
+    }
+    Some(policy.mpi_test_ranks.ranks)
+}
+
+/// Whether this recipe text is a CUDA + usempi build that still leaves MPI
+/// test ranks to the easyblock default.
+pub(crate) fn missing_mpi_test_rank_pin(package: &str, text: &str) -> bool {
+    mpi_test_rank_pin(package).is_some()
+        && recipe_has_usempi(text)
+        && recipe_has_cuda(text)
+        && !recipe_has_mpi_numprocs(text)
+}
+
+/// Whether this CUDA + usempi recipe still lacks the library-MPI GPU test env.
+pub(crate) fn missing_gpu_mpi_test_env(package: &str, text: &str) -> bool {
+    wants_gpu_mpi_test_env(package)
+        && recipe_has_usempi(text)
+        && recipe_has_cuda(text)
+        && !text.contains("GMX_DISABLE_DIRECT_GPU_COMM")
+}
+
+/// Whether overlay policy lists this package for the library-MPI GPU test env.
+pub(crate) fn wants_gpu_mpi_test_env(package: &str) -> bool {
+    let identity = crate::package_sources::package_identity(package);
+    overlay_policy()
+        .gpu_mpi_test_env
+        .names
+        .iter()
+        .any(|name| crate::package_sources::package_identity(name) == identity)
+}
+
+/// pretestopts value: count visible devices; disable direct GPU comm only
+/// when CMakeCache has GMX_MPI=ON.
+pub(crate) fn gpu_mpi_test_pretestopts() -> &'static str {
+    concat!(
+        "(\n",
+        "    \"export CTEST_OUTPUT_ON_FAILURE=1 && \"\n",
+        "    \"ngpu=$(nvidia-smi -L 2>/dev/null | wc -l) && \"\n",
+        "    \"if [ \\\"$ngpu\\\" -gt 0 ]; then \"\n",
+        "    \"export GMX_TEST_REQUIRED_NUMBER_OF_DEVICES=$ngpu; fi && \"\n",
+        "    \"if grep -q '^GMX_MPI:BOOL=ON$' CMakeCache.txt; \"\n",
+        "    \"then export GMX_DISABLE_DIRECT_GPU_COMM=1; fi && \"\n",
+        ")"
+    )
+}
+
+fn recipe_has_usempi(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("usempi") && lower.contains("true")
+}
+
+fn recipe_has_cuda(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("cuda")
+}
+
+fn recipe_has_mpi_numprocs(text: &str) -> bool {
+    text.lines().any(|line| {
+        let code = line.split('#').next().unwrap_or("");
+        code.trim_start().starts_with("mpi_numprocs")
+    })
 }
 
 /// The module name an alias maps a foreign name to, or the name unchanged.
