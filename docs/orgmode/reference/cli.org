@@ -1294,6 +1294,7 @@ eb-stack rebuild-set \
   [--generated-at RFC3339] \
   [--prefix "$EESSI_SOFTWARE_PATH"] \
   [--check-static] \
+  [--reachability reach.txt] \
   [--out-dir /tmp/rebuild-set]
 #+end_src
 
@@ -1319,9 +1320,22 @@ header, columns ~severity~, ~vuln_id~, ~package~, and ~used_in~ required,
 ~version~, ~fixed_in~, and ~fix_state~ read when present. ~used_in~ lists
 modules separated by ~;~. Every installed module it names is added to
 ~--changed~ as ~Name-VersionFull.eb~, and ~findings.json~, ~findings.md~,
-and ~findings.csv~ are written beside the rebuild set. A module that is not
-installed is listed and has no closure. An export that names no installed
-module is status 2.
+~findings.csv~, and ~backport.md~ are written beside the rebuild set. A
+module that is not installed is listed and has no closure. An export that
+names no installed module is status 2.
+
+~--reachability~ requires ~--findings~. The file is one ~name class~ per
+line, ~#~ comments skipped. The class is ~cross-user~, ~network-facing~,
+~local-only~, or ~not-reachable~. A name replaces the built-in class or
+adds one. The built-in names are Jupyter server (~jupyter_server~ and
+~jupyter-server~), JupyterLab (~jupyterlab~ and ~jupyter-lab~), ~notebook~,
+cURL, urllib3, aiohttp, tornado, cryptography, and git. Matching folds
+ASCII case and treats ~-~ as ~_~. The whole name has to match, so ~curl~
+does not match ~libcurl~ and ~jupyterlab~ does not match
+~jupyterlab-server~. A name in neither list is ~unclassified~. ~backport.md~
+lists a module only when its class is ~cross-user~ or ~network-facing~.
+The count line includes ~backport=N~. A class the file does not name is
+status 2.
 
 Each module with a finding gets two costs. ~in_place~ is the module, the
 bundles that ship it, and its review dependents: what a backported patch

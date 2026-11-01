@@ -177,6 +177,8 @@ pub struct RebuildSetRequest {
     pub easystacks: Vec<PathBuf>,
     /// Scanner findings export. Each installed module it names is patched.
     pub findings: Option<PathBuf>,
+    /// Site reachability file. Requires [`Self::findings`].
+    pub reachability: Option<PathBuf>,
     /// Easyconfig trees, later ones taking precedence.
     pub easyconfigs: Vec<PathBuf>,
     /// Commit=directory trees for from-commit pins.
@@ -223,6 +225,8 @@ pub struct RebuildSetRun {
     pub skipped_easyconfigs: usize,
     /// Installed modules with a finding, when `--findings` was given.
     pub findings_modules: Option<usize>,
+    /// Modules on the backport list, when `--findings` was given.
+    pub backport_modules: Option<usize>,
     /// Directory the report was written to.
     pub out_dir: PathBuf,
 }
@@ -232,7 +236,10 @@ impl RebuildSetRun {
     pub fn summary(&self) -> String {
         let findings = self
             .findings_modules
-            .map(|count| format!(" findings_modules={count}"))
+            .map(|count| {
+                let backport = self.backport_modules.unwrap_or(0);
+                format!(" findings_modules={count} backport={backport}")
+            })
             .unwrap_or_default();
         format!(
             "changed={} rows={} must-rebuild={} review={} no-rebuild={} missing={} easystacks={} skipped_easyconfigs={}{findings} out={}",
@@ -683,6 +690,9 @@ fn run_pr_overlap_inner(
 /// Write the rebuild-set report.
 pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
+    if args.reachability.is_some() && args.findings.is_none() {
+        return Err(usage("--reachability requires --findings"));
+    }
     let findings = match &args.findings {
         Some(path) => Some(
             crate::findings::parse_findings_csv(
@@ -692,6 +702,16 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
             .map_err(|error| usage(format!("--findings {}: {error}", path.display())))?,
         ),
         None => None,
+    };
+    let reach = match &args.reachability {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("--reachability {}: not readable", path.display()))?;
+            crate::findings::ReachTable::builtin()
+                .overlay(&text, path.display().to_string())
+                .map_err(|error| usage(format!("--reachability {}: {error}", path.display())))?
+        }
+        None => crate::findings::ReachTable::builtin(),
     };
     let mut changed = if args.changed.is_empty() {
         Vec::new()
@@ -763,7 +783,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     }
     let findings_modules = match &findings {
         Some(findings) => {
-            let summary = crate::findings::summarize(findings, &installed, &document);
+            let summary = crate::findings::summarize(findings, &installed, &document, &reach);
             write_json_pretty(&args.out_dir.join("findings.json"), &summary)?;
             std::fs::write(
                 args.out_dir.join("findings.md"),
@@ -773,7 +793,11 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
                 args.out_dir.join("findings.csv"),
                 crate::findings::render_csv(&summary),
             )?;
-            Some(summary.modules)
+            std::fs::write(
+                args.out_dir.join("backport.md"),
+                crate::findings::render_backport(&summary, &reach),
+            )?;
+            Some((summary.modules, summary.backport_modules))
         }
         None => None,
     };
@@ -786,7 +810,8 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         missing: document.missing.len(),
         easystacks: stacks.len(),
         skipped_easyconfigs,
-        findings_modules,
+        findings_modules: findings_modules.as_ref().map(|(modules, _)| *modules),
+        backport_modules: findings_modules.map(|(_, backport)| backport),
         out_dir: args.out_dir.clone(),
     })
 }

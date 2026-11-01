@@ -98,19 +98,57 @@ eb-stack rebuild-set \
 The command prints:
 
 #+begin_example
-changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 out=/tmp/findings-out
+changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 backport=0 out=/tmp/findings-out
 #+end_example
 
 ~findings.md~ ranks each module by weighted score per in-place rebuild:
 
 #+begin_example
-| Rank | Module | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | `zlib/1.3.1-GCCcore-15.2.0` | Critical | 1 | 0 | 0 | 1 | 1/2 | 11 | 4 | 8 | 2.75 |
-| 2 | `libpng/1.6.50-GCCcore-15.2.0` | High | 0 | 1 | 0 | 0 | 1/1 | 5 | 2 | 3 | 2.50 |
+| Rank | Module | Reach | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `zlib/1.3.1-GCCcore-15.2.0` | unclassified | Critical | 1 | 0 | 0 | 1 | 1/2 | 11 | 4 | 8 | 2.75 |
+| 2 | `libpng/1.6.50-GCCcore-15.2.0` | unclassified | High | 0 | 1 | 0 | 0 | 1/1 | 5 | 2 | 3 | 2.50 |
 #+end_example
 
 A backported zlib patch rebuilds 4 modules; a zlib version bump rebuilds 8.
+The Reach column is ~unclassified~: the built-in names do not include zlib
+or libpng, and this command was run without ~--reachability~.
+
+* The backport list
+
+~backport.md~ is written next to ~findings.md~. A module is on the list
+when its reach class is ~cross-user~ or ~network-facing~. The built-in
+names are Jupyter server, JupyterLab, notebook, cURL, urllib3, aiohttp,
+tornado, cryptography, and git. ~--reachability~ is a file of ~name class~
+lines that replaces one of those names or adds one. ~local-only~ and
+~not-reachable~ are recorded and left off the list. A name in neither
+place stays ~unclassified~, which is not a judgment about the finding.
+
+A Python interpreter whose ~fixed_in~ stays on the same minor is named
+under Python patch releases. Keeping the module path costs the in-place
+column. Renaming the easyconfig to that patch version costs the bump
+column. The note does not by itself put Python on the backport list.
+
+#+begin_src bash
+eb-stack rebuild-set \
+  --findings findings.csv \
+  --reachability reach.txt \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/findings-out
+#+end_src
+
+~reach.txt~ for that fixture:
+
+#+begin_example
+zlib network-facing
+libpng local-only
+#+end_example
+
+The count line then includes ~backport=1~. zlib is on the list (in place
+4, bump 8). libpng is recorded as ~local-only~ and is not.
 
 * Read the three files
 

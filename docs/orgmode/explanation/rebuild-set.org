@@ -103,6 +103,23 @@ dependent's module file and run path, so the cost is the module and every
 installed dependent, runtime and builddependency alike. The ratio between
 the two is the case for backports over bumps, per module.
 
+The same run writes ~backport.md~. A module is listed there when the
+scanner package or the module name is ~cross-user~ or ~network-facing~.
+The built-in names are the ones named for those two classes: Jupyter
+server, JupyterLab, and notebook on a shared node; cURL, urllib3,
+aiohttp, tornado, cryptography, and git for the network. ~--reachability~
+replaces or adds a name. ~local-only~ and ~not-reachable~ are accepted
+from that file and left off the list. Anything else stays
+~unclassified~. The strongest class wins when a module matches more than
+one name.
+
+A Python interpreter is a special case of the two costs. When every
+named fix stays on the installed minor, the ABI is stable within that
+minor, so applying the patch release under the same module path costs
+~in_place~. Renaming the easyconfig to the new patch version costs
+~bump~, the whole Python closure. The annotation does not classify the
+interpreter.
+
 A site that installs from build lists has no easystack. Without
 ~--easystack~, the installed list is the stack: each module is read as the
 easyconfig its name gives, and a module that no easyconfig matches is

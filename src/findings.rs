@@ -16,6 +16,12 @@
 //!   version is a new module path, and EasyBuild writes dependency versions
 //!   into each dependent's module file and run path, so this is what a version
 //!   bump forces.
+//!
+//! [`summarize`] also records a reach class for each module.
+//! [`justifies_backport`] is true only for `cross-user` and `network-facing`.
+//! The built-in names are the packages named for those two classes. Every
+//! other name stays `unclassified` until a site file passed to
+//! [`ReachTable::overlay`] says otherwise. [`render_backport`] is that list.
 
 use crate::rebuild_set::{
     RebuildDocument, StackEasystack, CLASS_MUST_REBUILD, CLASS_NO_REBUILD, CLASS_REVIEW,
@@ -25,7 +31,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// Schema of [`FindingsDocument`]. Bumped when a field changes meaning.
-pub const FINDINGS_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 adds `reach`, `backport`, `python_patch_in_place`, and
+/// `fixed_in` on each ranked module, plus `backport_modules` and
+/// `reachability_file` on the document.
+pub const FINDINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Severities in descending order, as scanners spell them.
 pub const SEVERITIES: [&str; 5] = ["Critical", "High", "Medium", "Low", "Negligible"];
@@ -48,6 +58,235 @@ pub fn severity_rank(severity: &str) -> Option<usize> {
     SEVERITIES
         .iter()
         .position(|known| known.eq_ignore_ascii_case(severity.trim()))
+}
+
+/// A service another user on the same node can reach.
+pub const REACH_CROSS_USER: &str = "cross-user";
+/// A component that accepts network input.
+pub const REACH_NETWORK: &str = "network-facing";
+/// A hostile file in the job of the user who runs it.
+///
+/// The built-in table assigns this to nobody. A site file does.
+pub const REACH_LOCAL: &str = "local-only";
+/// Not reachable on Linux x86_64.
+///
+/// The built-in table assigns this to nobody. A site file does.
+pub const REACH_NOT_REACHABLE: &str = "not-reachable";
+/// No built-in name and no site file names this package or module.
+pub const REACH_UNCLASSIFIED: &str = "unclassified";
+
+/// Built-in package names, already normalized with [`reach_key`].
+///
+/// Jupyter server, JupyterLab, and notebook are cross-user on a shared node.
+/// cURL, urllib3, aiohttp, tornado, cryptography, and git are network-facing.
+const BUILTIN_REACH: &[(&str, &str)] = &[
+    ("aiohttp", REACH_NETWORK),
+    ("cryptography", REACH_NETWORK),
+    ("curl", REACH_NETWORK),
+    ("git", REACH_NETWORK),
+    ("jupyter_lab", REACH_CROSS_USER),
+    ("jupyter_server", REACH_CROSS_USER),
+    ("jupyterlab", REACH_CROSS_USER),
+    ("notebook", REACH_CROSS_USER),
+    ("tornado", REACH_NETWORK),
+    ("urllib3", REACH_NETWORK),
+];
+
+/// Lower is a stronger class. Cross-user wins over network-facing.
+fn reach_rank(class: &str) -> u8 {
+    match class {
+        REACH_CROSS_USER => 0,
+        REACH_NETWORK => 1,
+        REACH_LOCAL => 2,
+        REACH_NOT_REACHABLE => 3,
+        _ => 4,
+    }
+}
+
+/// `true` for the two classes that justify a backport.
+pub fn justifies_backport(class: &str) -> bool {
+    class == REACH_CROSS_USER || class == REACH_NETWORK
+}
+
+/// Normalize a package or module name for the reach table.
+///
+/// ASCII case is folded and `-` becomes `_`, so `cURL` and `jupyter-server`
+/// match the built-in keys. The whole name has to match: `curl` does not
+/// match `libcurl`, and `jupyterlab` does not match `jupyterlab_server`.
+pub fn reach_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+/// Why a reachability file could not be read.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ReachabilityError {
+    /// One line is not `name class`.
+    #[error("line {line}: {message}")]
+    Line {
+        /// Line number, counting from 1.
+        line: usize,
+        /// What is wrong with the line.
+        message: String,
+    },
+}
+
+/// Package and module names mapped to a reach class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReachTable {
+    names: BTreeMap<String, String>,
+    site: BTreeMap<String, String>,
+    /// Path of the site file. `None` when only the built-in names are used.
+    pub source: Option<String>,
+}
+
+impl ReachTable {
+    /// The built-in names and no site file.
+    pub fn builtin() -> Self {
+        let mut names = BTreeMap::new();
+        for (name, class) in BUILTIN_REACH {
+            names.insert((*name).to_string(), (*class).to_string());
+        }
+        Self {
+            names,
+            site: BTreeMap::new(),
+            source: None,
+        }
+    }
+
+    /// Built-in names, with `text` replacing or adding names.
+    ///
+    /// `source` is the path recorded on the findings document. A blank line
+    /// or a line whose first non-whitespace character is `#` is skipped.
+    /// Each other line is a name and one class, separated by whitespace.
+    /// A name may appear once. The class is `cross-user`, `network-facing`,
+    /// `local-only`, or `not-reachable`.
+    pub fn overlay(
+        &self,
+        text: &str,
+        source: impl Into<String>,
+    ) -> Result<Self, ReachabilityError> {
+        let site = parse_reachability(text)?;
+        let mut names = self.names.clone();
+        for (name, class) in &site {
+            names.insert(name.clone(), class.clone());
+        }
+        Ok(Self {
+            names,
+            site,
+            source: Some(source.into()),
+        })
+    }
+
+    /// Names the site file set, in order.
+    pub fn site_names(&self) -> Vec<(&str, &str)> {
+        self.site
+            .iter()
+            .map(|(name, class)| (name.as_str(), class.as_str()))
+            .collect()
+    }
+
+    /// Built-in names and the class the table uses for each, in name order.
+    pub fn builtin_applied(&self) -> Vec<(&'static str, &str)> {
+        let mut rows: Vec<(&str, &str)> = BUILTIN_REACH
+            .iter()
+            .map(|(name, builtin)| {
+                let class = self
+                    .names
+                    .get(*name)
+                    .map(String::as_str)
+                    .unwrap_or(*builtin);
+                (*name, class)
+            })
+            .collect();
+        rows.sort_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
+        rows
+    }
+
+    /// The class of `module` given the scanner packages found in it.
+    ///
+    /// The module's software name (the text before `/`) and each package are
+    /// looked up. The strongest class wins. No hit is [`REACH_UNCLASSIFIED`].
+    pub fn class_of(&self, module: &str, packages: &[&str]) -> String {
+        let mut best: Option<&str> = None;
+        let mut consider = |name: &str| {
+            let key = reach_key(name);
+            if key.is_empty() {
+                return;
+            }
+            let Some(class) = self.names.get(&key) else {
+                return;
+            };
+            let class = class.as_str();
+            best = Some(match best {
+                Some(current) if reach_rank(current) <= reach_rank(class) => current,
+                _ => class,
+            });
+        };
+        if let Some(name) = module.split('/').next() {
+            consider(name);
+        }
+        for package in packages {
+            consider(package);
+        }
+        best.unwrap_or(REACH_UNCLASSIFIED).to_string()
+    }
+}
+
+fn parse_reachability(text: &str) -> Result<BTreeMap<String, String>, ReachabilityError> {
+    let mut site = BTreeMap::new();
+    for (index, raw) in text.lines().enumerate() {
+        let line_no = index + 1;
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let Some(class) = parts.next() else {
+            return Err(ReachabilityError::Line {
+                line: line_no,
+                message: format!("expected a name and a class, found `{line}`"),
+            });
+        };
+        if parts.next().is_some() {
+            return Err(ReachabilityError::Line {
+                line: line_no,
+                message: format!("expected a name and a class, found `{line}`"),
+            });
+        }
+        let class = canonical_class(class).ok_or_else(|| ReachabilityError::Line {
+            line: line_no,
+            message: format!(
+                "unknown class `{class}` (cross-user, network-facing, local-only, not-reachable)"
+            ),
+        })?;
+        let key = reach_key(name);
+        if key.is_empty() {
+            return Err(ReachabilityError::Line {
+                line: line_no,
+                message: "the name is empty".to_string(),
+            });
+        }
+        if site.insert(key, class.to_string()).is_some() {
+            return Err(ReachabilityError::Line {
+                line: line_no,
+                message: format!("`{name}` is already listed"),
+            });
+        }
+    }
+    Ok(site)
+}
+
+fn canonical_class(class: &str) -> Option<&'static str> {
+    match class.trim().to_ascii_lowercase().as_str() {
+        REACH_CROSS_USER => Some(REACH_CROSS_USER),
+        REACH_NETWORK => Some(REACH_NETWORK),
+        REACH_LOCAL => Some(REACH_LOCAL),
+        REACH_NOT_REACHABLE => Some(REACH_NOT_REACHABLE),
+        _ => None,
+    }
 }
 
 /// Why a findings export could not be read.
@@ -315,6 +554,18 @@ pub struct ModuleFindings {
     pub closure: Option<ModuleClosure>,
     /// `score / in_place`, rounded to two decimals. Zero without a closure.
     pub value_per_rebuild: f64,
+    /// `cross-user`, `network-facing`, `local-only`, `not-reachable`, or
+    /// `unclassified`.
+    pub reach: String,
+    /// [`justifies_backport`] of [`Self::reach`].
+    pub backport: bool,
+    /// The module is the Python interpreter, and every named fix stays on
+    /// the installed minor. Applying that patch release under the same
+    /// module path costs [`ModuleClosure::in_place`]. Renaming the
+    /// easyconfig to the new patch version costs [`ModuleClosure::bump`].
+    pub python_patch_in_place: bool,
+    /// Fix versions the export names for this module, sorted and unique.
+    pub fixed_in: Vec<String>,
 }
 
 /// Cost of fixing every module with a finding at this severity or above.
@@ -355,6 +606,11 @@ pub struct FindingsDocument {
     pub totals: Vec<SeverityTotal>,
     /// Modules ranked by `value_per_rebuild`, then score, then name.
     pub ranked: Vec<ModuleFindings>,
+    /// Ranked modules whose reach class justifies a backport.
+    pub backport_modules: usize,
+    /// Site reachability file. Omitted when the built-in names were used alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability_file: Option<String>,
     /// Modules named in the export that are not installed, sorted.
     pub not_installed: Vec<String>,
     /// Installed modules with findings whose easyconfig is not in the graph.
@@ -378,10 +634,14 @@ pub fn changed_easyconfigs(findings: &[Finding], installed: &BTreeSet<String>) -
 
 /// Group `findings` by installed module and attach the closure `document`
 /// computed for those modules' easyconfigs.
+///
+/// `reach` classifies each module. A site file is an overlay on the built-in
+/// names; [`ReachTable::builtin`] leaves every other module unclassified.
 pub fn summarize(
     findings: &[Finding],
     installed: &BTreeSet<String>,
     document: &RebuildDocument,
+    reach: &ReachTable,
 ) -> FindingsDocument {
     let closures = closures_by_changed(document);
     let missing: BTreeSet<&str> = document.missing.iter().map(String::as_str).collect();
@@ -445,6 +705,12 @@ pub fn summarize(
             .as_ref()
             .map(|closure| round2(score as f64 / closure.in_place.max(1) as f64))
             .unwrap_or(0.0);
+        let package_names: Vec<String> = packages
+            .get(module)
+            .map(|set| set.iter().map(|name| name.to_string()).collect())
+            .unwrap_or_default();
+        let package_refs: Vec<&str> = package_names.iter().map(String::as_str).collect();
+        let reach_class = reach.class_of(module, &package_refs);
         ranked.push(ModuleFindings {
             module: module.to_string(),
             easyconfig,
@@ -454,13 +720,14 @@ pub fn summarize(
             fixed,
             not_fixed,
             unknown_fix,
-            packages: packages
-                .get(module)
-                .map(|set| set.iter().map(|name| name.to_string()).collect())
-                .unwrap_or_default(),
+            packages: package_names,
             score,
             closure,
             value_per_rebuild,
+            backport: justifies_backport(&reach_class),
+            reach: reach_class,
+            python_patch_in_place: python_patch_in_place(module, findings),
+            fixed_in: fixed_versions(module, findings),
         });
     }
     ranked.sort_by(|left, right| {
@@ -477,6 +744,7 @@ pub fn summarize(
         .map(|(level, severity)| severity_total(level, severity, &per_module, &ranked))
         .collect();
 
+    let backport_modules = ranked.iter().filter(|row| row.backport).count();
     FindingsDocument {
         schema_version: FINDINGS_SCHEMA_VERSION,
         generated_at: document.generated_at.clone(),
@@ -486,9 +754,77 @@ pub fn summarize(
         modules: per_module.len(),
         totals,
         ranked,
+        backport_modules,
+        reachability_file: reach.source.clone(),
         not_installed: not_installed.into_iter().collect(),
         not_in_graph,
     }
+}
+
+/// Major and minor of `version`, dropping a toolchain suffix.
+///
+/// `3.11.5-GCCcore-15.2.0` is `(3, 11)`. A version with fewer than two
+/// numeric components has no minor to compare.
+fn version_minor(version: &str) -> Option<(u64, u64)> {
+    let mut nums = Vec::new();
+    for part in crate::version::parse_version_parts(version) {
+        if let crate::version::Part::Num(value) = part {
+            nums.push(value);
+            if nums.len() == 2 {
+                return Some((nums[0], nums[1]));
+            }
+        }
+    }
+    None
+}
+
+/// Python interpreters take a patch release in place when the fix stays on
+/// the same minor. A different minor, a missing fix version, or any other
+/// module is false.
+fn python_patch_in_place(module: &str, findings: &[Finding]) -> bool {
+    let Some(software) = module.split('/').next() else {
+        return false;
+    };
+    if reach_key(software) != "python" {
+        return false;
+    }
+    let module_version = module.split_once('/').map(|(_, rest)| rest).unwrap_or("");
+    let mut saw = false;
+    for finding in findings {
+        if !finding.modules.iter().any(|item| item == module) {
+            continue;
+        }
+        let fixed = finding.fixed_in.trim();
+        if fixed.is_empty() {
+            continue;
+        }
+        let installed = if finding.version.trim().is_empty() {
+            module_version
+        } else {
+            finding.version.trim()
+        };
+        let (Some(have), Some(want)) = (version_minor(installed), version_minor(fixed)) else {
+            return false;
+        };
+        if have != want {
+            return false;
+        }
+        saw = true;
+    }
+    saw
+}
+
+fn fixed_versions(module: &str, findings: &[Finding]) -> Vec<String> {
+    let mut versions = BTreeSet::new();
+    for finding in findings {
+        if finding.modules.iter().any(|item| item == module) {
+            let fixed = finding.fixed_in.trim();
+            if !fixed.is_empty() {
+                versions.insert(fixed.to_string());
+            }
+        }
+    }
+    versions.into_iter().collect()
 }
 
 fn severity_total(
@@ -611,7 +947,7 @@ pub fn render_markdown(document: &FindingsDocument) -> String {
          dependents: what a backported patch that keeps the version rebuilds. Bump is the \
          module and every installed dependent in its toolchain generation: what a new \
          version rebuilds. Score weighs Critical 10, High 5, Medium 2, Low 1. Value is \
-         score per in-place rebuild.\n\n",
+         score per in-place rebuild. Reach and the backport list are in `backport.md`.\n\n",
     );
     out.push_str("| Severity | Ids | Modules | Highest here | Modules at or above | In place at or above | Bump at or above |\n");
     out.push_str("|---|---|---|---|---|---|---|\n");
@@ -628,19 +964,16 @@ pub fn render_markdown(document: &FindingsDocument) -> String {
         ));
     }
     out.push_str(
-        "\n| Rank | Module | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |\n",
+        "\n| Rank | Module | Reach | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |\n",
     );
-    out.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     for (rank, row) in document.ranked.iter().enumerate() {
-        let (in_place, bump) = row
-            .closure
-            .as_ref()
-            .map(|closure| (closure.in_place.to_string(), closure.bump.to_string()))
-            .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+        let (in_place, bump) = cost_pair(row);
         out.push_str(&format!(
-            "| {} | `{}` | {} | {} | {} | {} | {} | {}/{} | {} | {} | {} | {:.2} |\n",
+            "| {} | `{}` | {} | {} | {} | {} | {} | {} | {}/{} | {} | {} | {} | {:.2} |\n",
             rank + 1,
             row.module,
+            row.reach,
             row.highest,
             row.counts.critical,
             row.counts.high,
@@ -672,7 +1005,7 @@ pub fn render_markdown(document: &FindingsDocument) -> String {
 /// One line per ranked module, comma-separated with a header.
 pub fn render_csv(document: &FindingsDocument) -> String {
     let mut out = String::from(
-        "rank,module,easyconfig,highest,critical,high,medium,low,negligible,findings,fixed,not_fixed,unknown_fix,score,must_rebuild,review,runtime,in_place,bump,value_per_rebuild,packages,dependents\n",
+        "rank,module,easyconfig,highest,critical,high,medium,low,negligible,findings,fixed,not_fixed,unknown_fix,score,must_rebuild,review,runtime,in_place,bump,value_per_rebuild,packages,dependents,reach,backport,python_patch_in_place,fixed_in\n",
     );
     for (rank, row) in document.ranked.iter().enumerate() {
         let closure = row.closure.clone().unwrap_or_default();
@@ -706,10 +1039,161 @@ pub fn render_csv(document: &FindingsDocument) -> String {
             format!("{:.2}", row.value_per_rebuild),
             row.packages.join(";"),
             closure.dependents.join(";"),
+            row.reach.clone(),
+            row.backport.to_string(),
+            row.python_patch_in_place.to_string(),
+            row.fixed_in.join(";"),
         ];
         let line: Vec<String> = fields.iter().map(|field| csv_field(field)).collect();
         out.push_str(&line.join(","));
         out.push('\n');
+    }
+    out
+}
+
+fn cost_pair(row: &ModuleFindings) -> (String, String) {
+    row.closure
+        .as_ref()
+        .map(|closure| (closure.in_place.to_string(), closure.bump.to_string()))
+        .unwrap_or_else(|| ("-".to_string(), "-".to_string()))
+}
+
+/// The backport list: modules whose reach class justifies a backport, the
+/// modules a site file recorded and left off that list, and the modules
+/// still unclassified.
+pub fn render_backport(document: &FindingsDocument, reach: &ReachTable) -> String {
+    let mut out = String::new();
+    out.push_str("# Backport list\n\n");
+    out.push_str(&format!(
+        "Computed {} against the modules installed for `{}`.\n\n",
+        document.generated_at, document.installed_source
+    ));
+    out.push_str(
+        "A module is on this list when its reach class is `cross-user` or \
+         `network-facing`. Those two classes justify a backport. `local-only` \
+         and `not-reachable` are recorded below and left off the list. A module \
+         the built-in names and the site file do not mention is `unclassified`. \
+         That is not a judgment about the finding.\n\n",
+    );
+    out.push_str(
+        "In place is the patched module, the bundles that ship it, and the \
+         review dependents. Bump is the module and every installed dependent \
+         in its toolchain generation. `rebuilds/*-cve-patches.yml` still lists \
+         every must-rebuild module from the export.\n\n",
+    );
+    match &document.reachability_file {
+        Some(path) => {
+            out.push_str(&format!(
+                "Classes come from the built-in names, with `{path}` replacing or adding names.\n\n"
+            ));
+        }
+        None => {
+            out.push_str(
+                "Classes come from the built-in names. `--reachability` adds a name or replaces one.\n\n",
+            );
+        }
+    }
+    out.push_str("| Name | Class |\n|---|---|\n");
+    for (name, class) in reach.builtin_applied() {
+        out.push_str(&format!("| `{name}` | {class} |\n"));
+    }
+    let site = reach.site_names();
+    if !site.is_empty() {
+        out.push_str("\nSite file:\n\n| Name | Class |\n|---|---|\n");
+        for (name, class) in site {
+            out.push_str(&format!("| `{name}` | {class} |\n"));
+        }
+    }
+    out.push_str("\n## Backport\n\n");
+    let chosen: Vec<&ModuleFindings> = document.ranked.iter().filter(|row| row.backport).collect();
+    if chosen.is_empty() {
+        out.push_str("No module in this export is `cross-user` or `network-facing`.\n");
+    } else {
+        out.push_str("| Module | Reach | Highest | In place | Bump | Packages |\n");
+        out.push_str("|---|---|---|---|---|---|\n");
+        for row in chosen {
+            let (in_place, bump) = cost_pair(row);
+            out.push_str(&format!(
+                "| `{}` | {} | {} | {} | {} | {} |\n",
+                row.module,
+                row.reach,
+                row.highest,
+                in_place,
+                bump,
+                row.packages.join(", ")
+            ));
+        }
+    }
+    out.push_str("\n## Recorded, not a backport\n\n");
+    let recorded: Vec<&ModuleFindings> = document
+        .ranked
+        .iter()
+        .filter(|row| row.reach == REACH_LOCAL || row.reach == REACH_NOT_REACHABLE)
+        .collect();
+    if recorded.is_empty() {
+        out.push_str("No module is `local-only` or `not-reachable`.\n");
+    } else {
+        out.push_str("| Module | Reach | Highest | In place | Bump | Packages |\n");
+        out.push_str("|---|---|---|---|---|---|\n");
+        for row in recorded {
+            let (in_place, bump) = cost_pair(row);
+            out.push_str(&format!(
+                "| `{}` | {} | {} | {} | {} | {} |\n",
+                row.module,
+                row.reach,
+                row.highest,
+                in_place,
+                bump,
+                row.packages.join(", ")
+            ));
+        }
+    }
+    out.push_str("\n## Unclassified\n\n");
+    let open: Vec<&ModuleFindings> = document
+        .ranked
+        .iter()
+        .filter(|row| row.reach == REACH_UNCLASSIFIED)
+        .collect();
+    if open.is_empty() {
+        out.push_str("Every module with a finding has a reach class.\n");
+    } else {
+        out.push_str(
+            "These modules are not on the backport list. Add a line to the \
+             `--reachability` file to classify one.\n\n",
+        );
+        for row in open {
+            let (in_place, bump) = cost_pair(row);
+            out.push_str(&format!(
+                "- `{}` ({}, in place {in_place}, bump {bump})\n",
+                row.module, row.highest
+            ));
+        }
+    }
+    out.push_str("\n## Python patch releases\n\n");
+    let interpreters: Vec<&ModuleFindings> = document
+        .ranked
+        .iter()
+        .filter(|row| row.python_patch_in_place)
+        .collect();
+    if interpreters.is_empty() {
+        out.push_str(
+            "No Python interpreter in this export has a fix that stays on the installed minor.\n",
+        );
+    } else {
+        out.push_str(
+            "The ABI is stable within a minor, so the patch release can be applied \
+             under the same module path. That costs the in-place column. Renaming \
+             the easyconfig to the new patch version costs the bump column. This \
+             note does not by itself put the module on the backport list.\n\n",
+        );
+        for row in interpreters {
+            let (in_place, bump) = cost_pair(row);
+            out.push_str(&format!(
+                "- `{}` fixed in {} (in place {in_place}, bump {bump})\n",
+                row.module,
+                row.fixed_in.join(", ")
+            ));
+        }
     }
     out
 }
@@ -865,6 +1349,7 @@ Medium,\"GHSA-a,b\",\"py \"\"x\"\"\",2.0,2.1,not-fixed,PyApp/1.0-GCCcore-15.2.0\
             &findings,
             &installed,
             &document(rows, vec!["PyApp-1.0-GCCcore-15.2.0.eb".to_string()]),
+            &ReachTable::builtin(),
         );
         assert_eq!(summary.rows, 4);
         assert_eq!(summary.ids, 3);
@@ -888,6 +1373,12 @@ Medium,\"GHSA-a,b\",\"py \"\"x\"\"\",2.0,2.1,not-fixed,PyApp/1.0-GCCcore-15.2.0\
         );
         assert_eq!((closure.in_place, closure.bump), (2, 3));
         assert_eq!(first.value_per_rebuild, 7.5);
+        assert_eq!(first.reach, REACH_UNCLASSIFIED);
+        assert!(!first.backport);
+        assert!(!first.python_patch_in_place);
+        assert_eq!(first.fixed_in, ["1.3.2"]);
+        assert_eq!(summary.backport_modules, 0);
+        assert!(summary.reachability_file.is_none());
 
         let pyapp = &summary.ranked[1];
         assert!(pyapp.closure.is_none());
@@ -914,7 +1405,127 @@ Medium,\"GHSA-a,b\",\"py \"\"x\"\"\",2.0,2.1,not-fixed,PyApp/1.0-GCCcore-15.2.0\
             "1,zlib/1.3.1-GCCcore-15.2.0,zlib-1.3.1-GCCcore-15.2.0.eb,Critical,1,1,0,0,0,2,1,0,1,15,1,1,1,2,3,7.50,zlib,"
         ));
         let markdown = render_markdown(&summary);
-        assert!(markdown.contains("| 1 | `zlib/1.3.1-GCCcore-15.2.0` | Critical |"));
+        assert!(markdown.contains("| 1 | `zlib/1.3.1-GCCcore-15.2.0` | unclassified | Critical |"));
         assert!(markdown.contains("- `Gone/1.0`"));
+        let backport = render_backport(&summary, &ReachTable::builtin());
+        assert!(backport.contains("## Unclassified"));
+        assert!(backport.contains("`zlib/1.3.1-GCCcore-15.2.0`"));
+        assert!(backport.contains("No module in this export is `cross-user` or `network-facing`."));
+    }
+
+    #[test]
+    fn reach_classes_match_whole_names_and_a_site_file_replaces_one() {
+        let table = ReachTable::builtin();
+        assert_eq!(
+            table.class_of("cURL/8.17.0-GCCcore-15.2.0", &["libcurl"]),
+            REACH_NETWORK
+        );
+        assert_eq!(table.class_of("libcurl/8.17.0", &[]), REACH_UNCLASSIFIED);
+        assert_eq!(
+            table.class_of("jupyter-server/2.19.0", &[]),
+            REACH_CROSS_USER
+        );
+        assert_eq!(
+            table.class_of("jupyterlab-server/2.28.0", &[]),
+            REACH_UNCLASSIFIED
+        );
+        assert_eq!(
+            table.class_of("git/2.52.0-GCCcore-15.2.0", &[]),
+            REACH_NETWORK
+        );
+        assert_eq!(
+            table.class_of("SciPy-bundle/2026.05", &["urllib3"]),
+            REACH_NETWORK
+        );
+        assert_eq!(
+            table.class_of("Bundle/1", &["curl", "notebook"]),
+            REACH_CROSS_USER
+        );
+
+        let over = table
+            .overlay(
+                "# site\n\nCURL local-only\njupyterlab-server cross-user\n",
+                "site.txt",
+            )
+            .expect("overlay");
+        assert_eq!(over.class_of("cURL/8.17.0", &["curl"]), REACH_LOCAL);
+        assert_eq!(
+            over.class_of("jupyterlab-server/2.28.0", &[]),
+            REACH_CROSS_USER
+        );
+        assert_eq!(
+            over.class_of("Bundle/1", &["curl", "git"]),
+            REACH_NETWORK,
+            "git stays network-facing when curl is reclassified"
+        );
+        assert_eq!(
+            table.overlay("curl nope\n", "site.txt").unwrap_err(),
+            ReachabilityError::Line {
+                line: 1,
+                message:
+                    "unknown class `nope` (cross-user, network-facing, local-only, not-reachable)"
+                        .to_string(),
+            }
+        );
+        assert_eq!(
+            table
+                .overlay("curl network-facing\ncurl local-only\n", "site.txt")
+                .unwrap_err(),
+            ReachabilityError::Line {
+                line: 2,
+                message: "`curl` is already listed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_python_patch_release_on_the_same_minor_stays_in_place() {
+        let csv = "severity,vuln_id,package,version,fixed_in,fix_state,used_in\n\
+High,CVE-9,Python,3.11.5,3.11.7,fixed,Python/3.11.5-GCCcore-15.2.0\n\
+High,CVE-8,Python,3.11.5,3.12.0,fixed,Python/3.12.0-GCCcore-15.2.0\n\
+Low,CVE-7,Python,3.10.1,,not-fixed,Python/3.10.1-GCCcore-15.2.0\n";
+        let findings = parse_findings_csv(csv).expect("parse");
+        let installed: BTreeSet<String> = [
+            "Python/3.11.5-GCCcore-15.2.0",
+            "Python/3.12.0-GCCcore-15.2.0",
+            "Python/3.10.1-GCCcore-15.2.0",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let same = "Python-3.11.5-GCCcore-15.2.0.eb";
+        let summary = summarize(
+            &findings,
+            &installed,
+            &document(
+                vec![row(
+                    same,
+                    "Python/3.11.5-GCCcore-15.2.0",
+                    "changed",
+                    CLASS_MUST_REBUILD,
+                )],
+                vec![
+                    "Python-3.12.0-GCCcore-15.2.0.eb".to_string(),
+                    "Python-3.10.1-GCCcore-15.2.0.eb".to_string(),
+                ],
+            ),
+            &ReachTable::builtin(),
+        );
+        let by_module = |name: &str| {
+            summary
+                .ranked
+                .iter()
+                .find(|row| row.module == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        let patch = by_module("Python/3.11.5-GCCcore-15.2.0");
+        assert!(patch.python_patch_in_place);
+        assert_eq!(patch.fixed_in, ["3.11.7"]);
+        assert_eq!(patch.reach, REACH_UNCLASSIFIED);
+        assert!(!by_module("Python/3.12.0-GCCcore-15.2.0").python_patch_in_place);
+        assert!(!by_module("Python/3.10.1-GCCcore-15.2.0").python_patch_in_place);
+        let backport = render_backport(&summary, &ReachTable::builtin());
+        assert!(backport.contains("`Python/3.11.5-GCCcore-15.2.0` fixed in 3.11.7"));
+        assert!(backport.contains("No module in this export is `cross-user` or `network-facing`."));
     }
 }

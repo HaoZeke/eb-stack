@@ -639,7 +639,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_rebuild_set",
-            "Classify the installed reverse dependents of easyconfigs patched in place.",
+            "Classify the installed reverse dependents of easyconfigs patched in place. With findings, also write a backport list. reachability is a site file of name-to-class lines and requires findings.",
             &[
                 ("changed", "array"),
                 ("easystack", "array"),
@@ -649,6 +649,7 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("commit_tree", "array"),
                 ("findings", "string"),
+                ("reachability", "string"),
                 ("installed_label", "string"),
                 ("filter_deps", "array"),
                 ("installed_modulerc", "array"),
@@ -3503,6 +3504,7 @@ fn rebuild_set_tool(arguments: &Value) -> Result<Value, String> {
         changed: string_array(arguments, "changed")?,
         easystacks: path_array(arguments, "easystack")?,
         findings: optional_path(arguments, "findings"),
+        reachability: optional_path(arguments, "reachability"),
         easyconfigs: path_array(arguments, "easyconfigs")?,
         commit_trees: string_array(arguments, "commit_tree")?,
         installed: required_path(arguments, "installed")?,

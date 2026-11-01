@@ -449,6 +449,18 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `rebuild-set --findings` writes `backport.md` beside the ranked cost
+  tables. A module is on that list when its scanner package or module name
+  is `cross-user` or `network-facing`. The built-in names are Jupyter
+  server, JupyterLab, notebook, cURL, urllib3, aiohttp, tornado,
+  cryptography, and git. `--reachability` (`reachability` on
+  `eb_rebuild_set`) is a `name class` file that replaces one of those
+  names or adds one; `local-only` and `not-reachable` are recorded and
+  left off the list. Any other name stays `unclassified`. A Python
+  interpreter whose fix stays on the same minor is annotated: keeping the
+  module path costs the in-place column, and renaming the easyconfig to
+  that patch version costs the bump column. The count line includes
+  `backport=N`. Findings schema version is 2.
 - `stack solve --dot-out` and the MCP field `dot_out` write the solved
   dependency DAG. A node is `name/version` plus the toolchain, and the
   versionsuffix when the recipe has one. An edge points from a package to a

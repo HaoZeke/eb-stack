@@ -513,12 +513,15 @@ fn a_findings_export_is_ranked_by_score_per_in_place_rebuild() {
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
     let run = invoke(&borrowed, &out);
     assert!(
-        run.stdout.contains("changed=2") && run.stdout.contains("findings_modules=2"),
+        run.stdout.contains("changed=2")
+            && run.stdout.contains("findings_modules=2")
+            && run.stdout.contains("backport=0"),
         "{}",
         run.stdout
     );
     let names: Vec<&str> = run.files.iter().map(|(name, _)| name.as_str()).collect();
     for expected in [
+        "backport.md",
         "findings.csv",
         "findings.json",
         "findings.md",
@@ -529,7 +532,7 @@ fn a_findings_export_is_ranked_by_score_per_in_place_rebuild() {
 
     let value: serde_json::Value =
         serde_json::from_str(file_body(&run, "findings.json")).expect("findings json");
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["rows"], 3);
     assert_eq!(value["ids"], 3);
     assert_eq!(value["modules"], 2);
@@ -546,6 +549,12 @@ fn a_findings_export_is_ranked_by_score_per_in_place_rebuild() {
     assert_eq!(ranked[0]["closure"]["in_place"], 4);
     assert_eq!(ranked[0]["closure"]["bump"], 8);
     assert_eq!(ranked[0]["value_per_rebuild"], 2.75);
+    assert_eq!(ranked[0]["reach"], "unclassified");
+    assert_eq!(ranked[0]["backport"], false);
+    assert_eq!(ranked[0]["python_patch_in_place"], false);
+    assert_eq!(ranked[0]["fixed_in"], serde_json::json!(["1.3.2"]));
+    assert_eq!(value["backport_modules"], 0);
+    assert!(value.get("reachability_file").is_none());
     assert_eq!(ranked[1]["module"], "libpng/1.6.50-GCCcore-15.2.0");
     assert_eq!(ranked[1]["closure"]["in_place"], 2);
     assert_eq!(ranked[1]["closure"]["bump"], 3);
@@ -568,6 +577,77 @@ fn a_findings_export_is_ranked_by_score_per_in_place_rebuild() {
         "1,zlib/1.3.1-GCCcore-15.2.0,zlib-1.3.1-GCCcore-15.2.0.eb,Critical,1,0,0,1,0,2,1,0,1,11,2,2,4,4,8,2.75,"
     ));
     assert!(file_body(&run, "findings.md").contains("| Critical | 1 | 1 | 1 | 1 | 4 | 8 |"));
+    let backport = file_body(&run, "backport.md");
+    assert!(backport.contains("## Unclassified"));
+    assert!(backport.contains("`zlib/1.3.1-GCCcore-15.2.0`"));
+    assert!(backport.contains("No module in this export is `cross-user` or `network-facing`."));
+}
+
+#[test]
+fn a_reachability_file_puts_only_named_classes_on_the_backport_list() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let reach = temp.path().join("reach.txt");
+    std::fs::write(&reach, "zlib network-facing\nlibpng local-only\n").expect("write");
+    let out = temp.path().join("out");
+    let args = [
+        "--easyconfigs".to_string(),
+        fixtures().join("release").display().to_string(),
+        "--installed".into(),
+        fixtures().join("installed.txt").display().to_string(),
+        "--installed-label".into(),
+        "x86_64/amd/zen4".into(),
+        "--generated-at".into(),
+        "2026-10-22T12:00:00Z".into(),
+        "--findings".into(),
+        fixtures().join("findings.csv").display().to_string(),
+        "--reachability".into(),
+        reach.display().to_string(),
+    ];
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let run = invoke(&borrowed, &out);
+    assert!(run.stdout.contains("backport=1"), "{}", run.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(file_body(&run, "findings.json")).expect("findings json");
+    assert_eq!(value["reachability_file"], reach.display().to_string());
+    let ranked = value["ranked"].as_array().expect("ranked");
+    assert_eq!(ranked[0]["module"], "zlib/1.3.1-GCCcore-15.2.0");
+    assert_eq!(ranked[0]["reach"], "network-facing");
+    assert_eq!(ranked[0]["backport"], true);
+    assert_eq!(ranked[0]["closure"]["in_place"], 4);
+    assert_eq!(ranked[0]["closure"]["bump"], 8);
+    assert_eq!(ranked[1]["reach"], "local-only");
+    assert_eq!(ranked[1]["backport"], false);
+    let backport = file_body(&run, "backport.md");
+    let list = backport
+        .split("## Recorded, not a backport")
+        .next()
+        .expect("sections");
+    assert!(list.contains("`zlib/1.3.1-GCCcore-15.2.0`"));
+    assert!(!list.contains("`libpng/1.6.50-GCCcore-15.2.0`"));
+    assert!(backport.contains("| `libpng/1.6.50-GCCcore-15.2.0` | local-only |"));
+}
+
+#[test]
+fn a_reachability_file_with_an_unknown_class_is_a_usage_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let reach = temp.path().join("reach.txt");
+    std::fs::write(&reach, "zlib remote\n").expect("write");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["rebuild-set", "--easyconfigs"])
+        .arg(fixtures().join("release"))
+        .arg("--installed")
+        .arg(fixtures().join("installed.txt"))
+        .arg("--findings")
+        .arg(fixtures().join("findings.csv"))
+        .arg("--reachability")
+        .arg(&reach)
+        .arg("--out-dir")
+        .arg(temp.path().join("out"))
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown class `remote`"), "{stderr}");
 }
 
 #[test]

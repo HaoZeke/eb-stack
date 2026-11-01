@@ -562,7 +562,7 @@ Written when ~--findings~ is passed.
 
 | Field | Meaning |
 |-
-| ~schema_version~ | ~1~ |
+| ~schema_version~ | ~2~ |
 | ~generated_at~ | Same as ~rebuild-set.json~ |
 | ~installed_source~ | Same as ~rebuild-set.json~ |
 | ~rows~ | Rows in the export |
@@ -570,21 +570,41 @@ Written when ~--findings~ is passed.
 | ~modules~ | Installed modules with a finding |
 | ~totals~ | One entry per severity, Critical first: ~ids~ and ~modules~ at exactly that severity, ~modules_highest~ whose worst finding is that severity, ~modules_at_or_above~, and the unions ~in_place_at_or_above~ and ~bump_at_or_above~ |
 | ~ranked~ | One entry per installed module with a finding, by ~value_per_rebuild~, then ~score~, then name |
+| ~backport_modules~ | How many ranked modules have ~backport~ true |
+| ~reachability_file~ | Path of ~--reachability~. Omitted when the flag was not passed |
 | ~not_installed~ | Modules the export names that are not installed |
 | ~not_in_graph~ | Installed modules with a finding whose easyconfig is not on the robot path. They have no ~closure~ |
 
 A ranked entry has ~module~, ~easyconfig~, ~highest~, ~counts~ (unique ids
 per severity: ~critical~, ~high~, ~medium~, ~low~, ~negligible~, ~other~),
 ~findings~, ~fixed~, ~not_fixed~, ~unknown_fix~, ~packages~, ~score~,
-~value_per_rebuild~, and ~closure~. The closure has ~must_rebuild~ (the
-module and bundles that ship it), ~review~, ~runtime~, ~in_place~
-(~must_rebuild + review~), ~bump~ (the module plus every dependent),
-~dependents~, and ~in_place_dependents~. An id listed twice for one
-module counts once, at its worst severity.
+~value_per_rebuild~, ~reach~, ~backport~, ~python_patch_in_place~,
+~fixed_in~, and ~closure~. ~reach~ is ~cross-user~, ~network-facing~,
+~local-only~, ~not-reachable~, or ~unclassified~. ~backport~ is true only
+for the first two. ~python_patch_in_place~ is true when the module is the
+Python interpreter and every named fix stays on the installed minor.
+~fixed_in~ lists the fix versions the export names. The closure has
+~must_rebuild~ (the module and bundles that ship it), ~review~, ~runtime~,
+~in_place~ (~must_rebuild + review~), ~bump~ (the module plus every
+dependent), ~dependents~, and ~in_place_dependents~. An id listed twice
+for one module counts once, at its worst severity.
 
-~findings.md~ is the totals table and the ranked table. ~findings.csv~ is
-one line per ranked module with the same counts, ~packages~ and
-~dependents~ joined by ~;~.
+~findings.md~ is the totals table and the ranked table, with a Reach
+column. ~findings.csv~ is one line per ranked module with the same counts,
+~packages~ and ~dependents~ joined by ~;~, then ~reach~, ~backport~,
+~python_patch_in_place~, and ~fixed_in~.
+
+** ~backport.md~
+
+Written when ~--findings~ is passed. The backport section lists modules
+whose reach class is ~cross-user~ or ~network-facing~, with the in-place
+and bump costs. ~local-only~ and ~not-reachable~ are a separate table.
+~unclassified~ modules are listed and are not a judgment about the
+finding. A Python interpreter whose fix stays on the same minor is named
+under Python patch releases: the in-place column is the cost of keeping
+the module path, and the bump column is the cost of renaming the
+easyconfig to that patch version. The built-in name table is in the file.
+A site file's names are a second table.
 
 ** ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~
 

@@ -300,9 +300,19 @@ struct RebuildSetArgs {
     easystacks: Vec<PathBuf>,
     /// Vulnerability scanner export (CSV with `severity`, `vuln_id`,
     /// `package`, and `used_in`). Every installed module in `used_in` is
-    /// patched; writes `findings.json`, `findings.md`, and `findings.csv`.
+    /// patched; writes `findings.json`, `findings.md`, `findings.csv`,
+    /// and `backport.md`.
     #[arg(long)]
     findings: Option<PathBuf>,
+    /// Site reachability file. Requires `--findings`.
+    ///
+    /// One `name class` per line. A `#` line is a comment. The class is
+    /// `cross-user`, `network-facing`, `local-only`, or `not-reachable`.
+    /// A name replaces the built-in class or adds one. The built-in names
+    /// are Jupyter server, JupyterLab, notebook, cURL, urllib3, aiohttp,
+    /// tornado, cryptography, and git. Any other name stays unclassified.
+    #[arg(long, requires = "findings")]
+    reachability: Option<PathBuf>,
     /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
     /// later trees take precedence.
     #[arg(long, required = true)]
@@ -356,6 +366,9 @@ struct RebuildSetArgs {
     #[arg(long)]
     check_static: bool,
     /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
+    ///
+    /// With `--findings`, also `findings.json`, `findings.md`, `findings.csv`,
+    /// and `backport.md`.
     #[arg(long, default_value = "rebuild-set")]
     out_dir: PathBuf,
 }
@@ -1899,6 +1912,7 @@ fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
             changed: args.changed,
             easystacks: args.easystacks,
             findings: args.findings,
+            reachability: args.reachability,
             easyconfigs: args.easyconfigs,
             commit_trees: args.commit_trees,
             installed: args.installed,
