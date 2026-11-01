@@ -54,6 +54,8 @@
 
    *What an in-place patch forces EESSI to rebuild?* → :doc:`howto/rebuild-set`
 
+   *What does a version bump cost next to an in-place patch?* → :doc:`howto/rebuild-set`
+
    *Which modules carry a component?* → :doc:`howto/component-reach`
 
    *Find from-commit pins an EasyBuild release already contains?* → :doc:`howto/from-commit-released`

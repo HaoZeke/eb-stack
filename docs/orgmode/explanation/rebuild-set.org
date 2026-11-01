@@ -120,6 +120,22 @@ minor, so applying the patch release under the same module path costs
 ~bump~, the whole Python closure. The annotation does not classify the
 interpreter.
 
+~fix-cost.json~ is that same rebuild set, one advisory at a time. It does
+not walk the graph again. The bump cost is the union of the modules'
+reverse-dependency closures. The in-place cost is the patched module, a
+bundle whose ~exts_list~ or ~components~ names the package and version,
+and a dependent known to link it statically. Static linking is read from
+the rebuild rows first: a runtime edge is a shared library, no static
+archive under ~--prefix~ is not a static link, and ~--check-static~ is a
+symbol comparison. A remaining builddependency-only row is static when
+~configopts~ or ~buildopts~ request a static build and not a shared one,
+shared for the opposite, and unknown when the recipe says both or
+neither. Unknown modules are listed and left out of the in-place total.
+The recommended route follows ~justifies_backport~: only ~cross-user~ and
+~network-facing~ are backported, and the backport keeps the module path
+unless a Python fix leaves the minor version. The roll-up unions each
+strategy and divides by the installed list.
+
 A site that installs from build lists has no easystack. Without
 ~--easystack~, the installed list is the stack: each module is read as the
 easyconfig its name gives, and a module that no easyconfig matches is

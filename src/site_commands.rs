@@ -227,6 +227,10 @@ pub struct RebuildSetRun {
     pub findings_modules: Option<usize>,
     /// Modules on the backport list, when `--findings` was given.
     pub backport_modules: Option<usize>,
+    /// Findings in the fix-cost table, when `--findings` was given.
+    pub fix_routes: Option<usize>,
+    /// Bump, in-place, and recommended module counts, then the stack size.
+    pub fix_cost: Option<(usize, usize, usize, usize)>,
     /// Directory the report was written to.
     pub out_dir: PathBuf,
 }
@@ -238,7 +242,16 @@ impl RebuildSetRun {
             .findings_modules
             .map(|count| {
                 let backport = self.backport_modules.unwrap_or(0);
-                format!(" findings_modules={count} backport={backport}")
+                let routes = self
+                    .fix_cost
+                    .zip(self.fix_routes)
+                    .map(|((bump, in_place, recommended, stack), routes)| {
+                        format!(
+                            " fix_routes={routes} bump={bump}/{stack} in_place={in_place}/{stack} recommended={recommended}/{stack}"
+                        )
+                    })
+                    .unwrap_or_default();
+                format!(" findings_modules={count} backport={backport}{routes}")
             })
             .unwrap_or_default();
         format!(
@@ -745,6 +758,15 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     if easystacks.is_empty() {
         easystacks.push(crate::findings::installed_easystack(&installed));
     }
+    let evidence = if findings.is_some() {
+        let mut ordered: Vec<&crate::domain::Candidate> = robot.base.iter().collect();
+        for tree in robot.commits.values() {
+            ordered.extend(tree.iter());
+        }
+        crate::fix_cost::scan_candidates(ordered, &installed)
+    } else {
+        crate::fix_cost::EvidenceScan::default()
+    };
     let document = rebuild_set::rebuild_set(&rebuild_set::RebuildQuery {
         base: robot.base,
         commits: robot.commits,
@@ -797,7 +819,27 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
                 args.out_dir.join("backport.md"),
                 crate::findings::render_backport(&summary, &reach),
             )?;
-            Some((summary.modules, summary.backport_modules))
+            let fix = crate::fix_cost::report(findings, &installed, &document, &evidence, &reach);
+            write_json_pretty(&args.out_dir.join("fix-cost.json"), &fix)?;
+            std::fs::write(
+                args.out_dir.join("fix-cost.md"),
+                crate::fix_cost::render_markdown(&fix),
+            )?;
+            std::fs::write(
+                args.out_dir.join("fix-cost.tsv"),
+                crate::fix_cost::render_tsv(&fix),
+            )?;
+            Some((
+                summary.modules,
+                summary.backport_modules,
+                fix.findings,
+                (
+                    fix.rollup.bump_modules,
+                    fix.rollup.in_place_modules,
+                    fix.rollup.recommended_modules,
+                    fix.rollup.stack_modules,
+                ),
+            ))
         }
         None => None,
     };
@@ -810,8 +852,12 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         missing: document.missing.len(),
         easystacks: stacks.len(),
         skipped_easyconfigs,
-        findings_modules: findings_modules.as_ref().map(|(modules, _)| *modules),
-        backport_modules: findings_modules.map(|(_, backport)| backport),
+        findings_modules: findings_modules.as_ref().map(|(modules, _, _, _)| *modules),
+        backport_modules: findings_modules
+            .as_ref()
+            .map(|(_, backport, _, _)| *backport),
+        fix_routes: findings_modules.as_ref().map(|(_, _, routes, _)| *routes),
+        fix_cost: findings_modules.map(|(_, _, _, cost)| cost),
         out_dir: args.out_dir.clone(),
     })
 }

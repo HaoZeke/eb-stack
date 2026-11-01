@@ -1,0 +1,18 @@
+easyblock = 'Bundle'
+
+name = 'Kit'
+version = '1.0'
+
+homepage = 'https://example.invalid/Kit'
+description = "Fixture for fix cost."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.invalid/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+components = [
+    ('zlib', '1.2'),
+]
+
+moduleclass = 'lib'

@@ -947,7 +947,9 @@ pub fn render_markdown(document: &FindingsDocument) -> String {
          dependents: what a backported patch that keeps the version rebuilds. Bump is the \
          module and every installed dependent in its toolchain generation: what a new \
          version rebuilds. Score weighs Critical 10, High 5, Medium 2, Low 1. Value is \
-         score per in-place rebuild. Reach and the backport list are in `backport.md`.\n\n",
+         score per in-place rebuild. Reach and the backport list are in `backport.md`. \
+         `fix-cost.md` prices each advisory on its own: the bump closure, the \
+         in-place patch, and the fraction of the stack each strategy rebuilds.\n\n",
     );
     out.push_str("| Severity | Ids | Modules | Highest here | Modules at or above | In place at or above | Bump at or above |\n");
     out.push_str("|---|---|---|---|---|---|---|\n");

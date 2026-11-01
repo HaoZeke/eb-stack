@@ -171,6 +171,7 @@ jobs:
             --test easyblock_owed \
             --test extension_provides \
             --test fetch_prs_script \
+            --test fix_cost \
             --test from_commit \
             --test generation_lint \
             --test stack_gap \

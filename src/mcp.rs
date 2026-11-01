@@ -639,7 +639,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_rebuild_set",
-            "Classify the installed reverse dependents of easyconfigs patched in place. With findings, also write a backport list. reachability is a site file of name-to-class lines and requires findings.",
+            "Classify the installed reverse dependents of easyconfigs patched in place. With findings, also write a backport list and fix-cost.json, fix-cost.tsv, and fix-cost.md: per finding, the cost of a version bump and of an in-place patch, a recommended route, and the fraction of the stack each strategy rebuilds. reachability is a site file of name-to-class lines and requires findings.",
             &[
                 ("changed", "array"),
                 ("easystack", "array"),

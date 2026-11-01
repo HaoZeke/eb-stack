@@ -1,0 +1,16 @@
+easyblock = 'ConfigureMake'
+
+name = 'libpng'
+version = '1.6'
+
+homepage = 'https://example.invalid/libpng'
+description = "Fixture for fix cost."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.invalid/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+dependencies = [('zlib', '1.2')]
+
+moduleclass = 'lib'

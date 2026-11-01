@@ -606,6 +606,41 @@ the module path, and the bump column is the cost of renaming the
 easyconfig to that patch version. The built-in name table is in the file.
 A site file's names are a second table.
 
+** ~fix-cost.json~, ~fix-cost.tsv~, ~fix-cost.md~
+
+Written when ~--findings~ is passed. One row per advisory id, package, and
+version. The closure is the rebuild set above, and the reach class is the
+one in ~findings.json~. This file does not walk the graph again.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~generated_at~ | Same as ~rebuild-set.json~ |
+| ~installed_source~ | Same as ~rebuild-set.json~ |
+| ~stack_modules~ | Installed modules. The denominator of every fraction |
+| ~rows~ | Rows in the export |
+| ~findings~ | Rows in ~ranked~ |
+| ~ranked~ | One entry per finding, by route (~in-place~, ~bump~, ~defer~, ~unknown~), then severity, then the bump closure size, then id |
+| ~rollup~ | Union of each strategy: ~bump_modules~ and ~bump_fraction~, ~in_place_modules~ and ~in_place_fraction~, ~recommended_modules~ and ~recommended_fraction~, over ~stack_modules~, plus ~static_unknown_modules~ |
+| ~not_installed~ | Modules the export names that are not installed |
+| ~not_in_graph~ | Installed modules with a finding whose easyconfig is not on the robot path |
+| ~notes~ | An unreadable recipe, or a ~components~ entry whose version was not a literal |
+
+A ranked entry has ~vuln_id~, ~package~, ~version~, ~severity~, ~fixed_in~,
+~fix_state~, ~reach~, ~modules~, ~not_in_graph~, ~patch_files~
+(~<Name>-<version>_<ID>.patch~), ~bump~, ~in_place~, ~bundles~,
+~static_linkers~, ~not_static~, ~static_unknown~, ~recommended~, and
+~reason~. ~bump~ and ~in_place~ each have ~modules~, ~fraction~, and
+~names~. ~bump~ also has ~breaks_reproducibility~, true when the closure
+is known. ~recommended~ follows the backport classes: ~in-place~ for
+~cross-user~ and ~network-facing~, ~bump~ when a Python fix leaves the
+minor version, and ~defer~ for ~local-only~, ~not-reachable~, and
+~unclassified~.
+
+~fix-cost.tsv~ is the same rows, tab-separated, with a header. Lists are
+joined by ~;~. ~fix-cost.md~ is the roll-up, the ranked table, and a short
+block per finding.
+
 ** ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~
 
 Class ~must-rebuild~ only. Entries are sorted by filename. ~rebuild: true~

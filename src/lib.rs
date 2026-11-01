@@ -34,6 +34,7 @@ pub mod eb_template_constants;
 pub mod ecosystem;
 pub mod file_presence;
 pub mod findings;
+pub mod fix_cost;
 pub mod gap;
 pub mod generation_lint;
 pub use crate::ecosystem::parse_package_index;

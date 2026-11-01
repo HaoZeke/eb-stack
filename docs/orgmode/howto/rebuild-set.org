@@ -98,7 +98,7 @@ eb-stack rebuild-set \
 The command prints:
 
 #+begin_example
-changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 backport=0 out=/tmp/findings-out
+changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 backport=0 fix_routes=3 bump=8/10 in_place=3/10 recommended=0/10 out=/tmp/findings-out
 #+end_example
 
 ~findings.md~ ranks each module by weighted score per in-place rebuild:
@@ -149,6 +149,30 @@ libpng local-only
 
 The count line then includes ~backport=1~. zlib is on the list (in place
 4, bump 8). libpng is recorded as ~local-only~ and is not.
+
+* Bump against an in-place patch
+
+The same run writes ~fix-cost.json~, ~fix-cost.tsv~, and ~fix-cost.md~.
+That table is one row per advisory, not per module. It uses the reach
+class from ~backport.md~, including ~--reachability~.
+
+A version bump is the reverse-dependency closure, and it breaks
+reproducibility because the module path changes. An in-place patch keeps
+the name and version and adds ~<Name>-<version>_<ID>.patch~ to ~patches~.
+It rebuilds the patched module, a bundle that includes the package as an
+extension or a ~components~ entry, and a dependent known to link it
+statically. A runtime dependency is a shared library and is not rebuilt.
+A builddependency-only dependent stays out of the in-place count when
+neither the recipe nor the install says whether the link is static, and
+the row names it under unknown.
+
+The route is ~in-place~ for ~cross-user~ and ~network-facing~. It is
+~bump~ when the package is Python and the fixed release changes the minor
+or the major version. ~local-only~, ~not-reachable~, and ~unclassified~
+are ~defer~. A deferred finding rebuilds nothing in the recommended
+roll-up. The roll-up is the fraction of the installed stack each strategy
+rebuilds. The count line adds ~fix_routes=N~ and those fractions beside
+~backport=N~.
 
 * Read the three files
 

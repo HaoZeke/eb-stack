@@ -301,7 +301,8 @@ struct RebuildSetArgs {
     /// Vulnerability scanner export (CSV with `severity`, `vuln_id`,
     /// `package`, and `used_in`). Every installed module in `used_in` is
     /// patched; writes `findings.json`, `findings.md`, `findings.csv`,
-    /// and `backport.md`.
+    /// `backport.md`, and the per-finding route report `fix-cost.json`,
+    /// `fix-cost.tsv`, and `fix-cost.md`.
     #[arg(long)]
     findings: Option<PathBuf>,
     /// Site reachability file. Requires `--findings`.
@@ -368,7 +369,7 @@ struct RebuildSetArgs {
     /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
     ///
     /// With `--findings`, also `findings.json`, `findings.md`, `findings.csv`,
-    /// and `backport.md`.
+    /// `backport.md`, `fix-cost.json`, `fix-cost.tsv`, and `fix-cost.md`.
     #[arg(long, default_value = "rebuild-set")]
     out_dir: PathBuf,
 }

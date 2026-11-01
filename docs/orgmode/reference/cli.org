@@ -1337,6 +1337,21 @@ lists a module only when its class is ~cross-user~ or ~network-facing~.
 The count line includes ~backport=N~. A class the file does not name is
 status 2.
 
+The same run also writes ~fix-cost.json~, ~fix-cost.tsv~, and
+~fix-cost.md~, one row per advisory. The reach class is the one above.
+The bump column is the reverse-dependency closure and breaks
+reproducibility. The in-place column is the patched module, a bundle that
+includes it as an extension or a ~components~ entry, and a dependent
+known to link it statically. A builddependency-only dependent is known
+when ~configopts~ or ~buildopts~ request a static or a shared build, or
+when ~--prefix~ and ~--check-static~ already classified the row.
+Otherwise the link cannot be known, and the dependent is named and left
+out of the in-place count. The route is ~in-place~ for ~cross-user~ or
+~network-facing~, ~bump~ when a Python fix changes the minor or the major
+version, and ~defer~ otherwise. The roll-up is the fraction of the
+installed stack each strategy rebuilds. The count line adds
+~fix_routes=N~ and those fractions beside ~backport=N~.
+
 Each module with a finding gets two costs. ~in_place~ is the module, the
 bundles that ship it, and its review dependents: what a backported patch
 that keeps the version rebuilds. ~bump~ is the module and every installed

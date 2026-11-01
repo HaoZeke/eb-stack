@@ -1,0 +1,15 @@
+easyblock = 'ConfigureMake'
+
+name = 'zlib'
+version = '1.2'
+
+homepage = 'https://example.invalid/zlib'
+description = "Fixture for fix cost."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.invalid/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'lib'

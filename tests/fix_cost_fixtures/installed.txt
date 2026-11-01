@@ -1,0 +1,12 @@
+GCCcore/15.2.0
+zlib/1.2-GCCcore-15.2.0
+libpng/1.6-GCCcore-15.2.0
+AppStatic/1.0-GCCcore-15.2.0
+AppShared/1.0-GCCcore-15.2.0
+AppUnknown/1.0-GCCcore-15.2.0
+Kit/1.0-GCCcore-15.2.0
+Python/3.11.4-GCCcore-15.2.0
+cURL/8.7.1-GCCcore-15.2.0
+notebook/7.0-GCCcore-15.2.0
+LocalLib/1.0-GCCcore-15.2.0
+WinOnly/1.0-GCCcore-15.2.0

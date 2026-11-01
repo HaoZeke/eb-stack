@@ -1,0 +1,8 @@
+severity,vuln_id,package,version,fixed_in,fix_state,used_in
+Critical,ADV-1,zlib,1.2,1.2.1,fixed,zlib/1.2-GCCcore-15.2.0
+High,ADV-2,cURL,8.7.1,8.7.2,fixed,cURL/8.7.1-GCCcore-15.2.0
+Critical,ADV-3,notebook,7.0,7.0.1,fixed,notebook/7.0-GCCcore-15.2.0
+Medium,ADV-4,LocalLib,1.0,1.0.1,fixed,LocalLib/1.0-GCCcore-15.2.0
+High,ADV-5,Python,3.11.4,3.11.5,fixed,Python/3.11.4-GCCcore-15.2.0
+Low,ADV-6,Python,3.11.4,3.12.0,fixed,Python/3.11.4-GCCcore-15.2.0
+Low,ADV-7,WinOnly,1.0,1.0.1,fixed,WinOnly/1.0-GCCcore-15.2.0

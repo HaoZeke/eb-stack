@@ -461,6 +461,20 @@ All notable changes to this project are documented here.
   module path costs the in-place column, and renaming the easyconfig to
   that patch version costs the bump column. The count line includes
   `backport=N`. Findings schema version is 2.
+- `rebuild-set --findings` also writes `fix-cost.json`, `fix-cost.tsv`, and
+  `fix-cost.md`. Each advisory is one row. A version bump is the
+  reverse-dependency closure from the rebuild set, and it breaks
+  reproducibility because the module path changes. An in-place patch keeps
+  the name and version, adds `<Name>-<version>_<ID>.patch` to `patches`, and
+  rebuilds the patched module, a bundle that includes it as an extension or
+  a component, and a dependent known to link it statically. A
+  builddependency-only dependent stays out of that count when the recipe
+  and the install cannot say how it was linked. The recommended route uses
+  the same reach classes as `backport.md`: an in-place backport for
+  `cross-user` or `network-facing`, a bump when a Python fix leaves the
+  minor version, and defer otherwise. The roll-up is the fraction of the
+  installed stack each strategy rebuilds. The count line adds
+  `fix_routes=N` and those three fractions beside `backport=N`.
 - `stack solve --dot-out` and the MCP field `dot_out` write the solved
   dependency DAG. A node is `name/version` plus the toolchain, and the
   versionsuffix when the recipe has one. An edge points from a package to a
