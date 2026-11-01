@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, or names no package, and status 2 when neither ~--installed~ nor ~--baseline-lock~ is set.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -447,7 +447,10 @@ eb-stack stack gap \
 eb-stack stack provided \
   --build-list SITE.list [--build-list OTHER.list]... \
   (--installed INSTALLED.txt)... [--baseline-lock LOCK.json] \
-  [--allow NAME]... [--json]
+  [--family-lock LOCK.json]... \
+  [--allow NAME]... \
+  [--licensed NAME]... [--licensed-file NAMES.txt] \
+  [--format text|github|json] [--json] [--strict]
 
 eb-stack stack batch \
   (--root FILE.eb... | --roots-file ROOTS.txt) \
@@ -647,11 +650,21 @@ route (~site-only.tsv~ for ~excluded~, ~bump.tsv~ for ~no-recipe~, and
 easyconfig path per line; ~#~ comments are skipped) and fails when a
 line's package name is one ~--installed~ or ~--baseline-lock~ already
 provides. Version and toolchain are ignored, so a different build of
-the same software still fails. ~--allow NAME~ keeps a second version.
-A ~.eb~ line that names no package fails too. Stdout lists each hit as
-~provided <file> name=<Name> list=<path>~ and ends with
-~hits= unparsed= allowed= provided=~. ~--json~ prints those fields as
-JSON. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]
+the same software still fails. ~--allow NAME~ keeps a second version. It does not waive a wrong
+toolchain or a ~--hooks~ flag. A ~.eb~ line that names no package fails
+too. A line whose toolchain is not 2026.1 or GCCcore-15.2.0 below it
+(GCCcore-15.2.0, GCC-15.2.0, gfbf-2026.1, gompi-2026.1, foss-2026.1)
+fails, as does a line that sets ~--hooks~ or ~--hook~ (that replaces
+EESSI's hooks). ~--family-lock~ is a lock the foss baseline cannot see,
+such as lfoss. A name only that lock has is reported with the lock
+path, not left as site layer. ~--licensed~ and ~--licensed-file~ warn
+for group-restricted names; ~data/site-licensed.txt~ is that list for
+VASP, MATLAB, ANSYS, ORCA, and Gurobi. With neither flag there is no
+warning. ~--strict~ makes a remaining warning exit 1. Stdout lists each
+hit as ~provided <file> name=<Name> list=<path>~ and ends with
+~hits= unparsed= allowed= provided= toolchain= hooks= family= licensed=~.
+~--format~ is ~text~ by default, ~github~ for workflow commands, or
+~json~. ~--json~ is the same as ~--format json~. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]
 and [[file:../howto/module-gap.org][route the modules a stack does not have]].
 
 ~stack batch~ plans software-layer pull requests whose builds do not
@@ -1578,7 +1591,10 @@ requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~easyconfigs~, ~generation~, and ~out_dir~, and takes ~exclude_file~,
 ~filter_deps~, ~open_layer~, and ~open_easyconfigs~. ~eb_stack_provided~
 requires ~build_list~ and takes ~installed~, ~baseline_lock~, ~allow~,
-and ~json~. A hit is a tool error, and the text is the same report as
+~family_lock~, ~licensed~, ~licensed_file~, ~json~, ~format~, and
+~strict~. A hit, an unparsed line, a wrong toolchain, a ~--hooks~ flag,
+or a family-lock name is a tool error. A licensed warning is not,
+unless ~strict~ is true. The text is the same report as
 ~stack provided~. ~eb_stack_arch~ requires ~easystack~ and takes
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
 ~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the

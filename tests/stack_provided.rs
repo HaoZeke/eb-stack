@@ -77,7 +77,9 @@ fn a_site_only_list_exits_0() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stdout}{stderr}");
     assert!(
-        stdout.contains("hits=0 unparsed=0 allowed=0 provided=2\n"),
+        stdout.contains(
+            "hits=0 unparsed=0 allowed=0 provided=2 toolchain=0 hooks=0 family=0 licensed=0\n"
+        ),
         "{stdout}"
     );
 }
@@ -124,4 +126,83 @@ fn mcp_reports_the_same_hits() {
     assert!(text.contains("name=FFTW"), "{text}");
     assert!(text.contains("name=Python"), "{text}");
     assert!(!text.contains("name=GROMACS"), "{text}");
+    assert!(text.contains("sets=--hooks=/sw/hooks/site.py"), "{text}");
+    assert!(text.contains("uses=foss-2025b"), "{text}");
+}
+
+#[test]
+fn a_family_lock_names_the_lock_and_a_licensed_name_warns() {
+    let dir = tempfile::tempdir().expect("temp");
+    let list = dir.path().join("site.list");
+    std::fs::write(
+        &list,
+        "\
+SciPy-1.16.0-foss-2026.1.eb
+OpenBLAS-0.3.32-lfoss-2026.1.eb
+VASP-6.4.3-foss-2026.1.eb
+code-server-4.99.0-GCCcore-15.2.0.eb
+",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(root())
+        .args(["stack", "provided", "--build-list"])
+        .arg(&list)
+        .arg("--baseline-lock")
+        .arg(root().join("tests/provided_fixtures/baseline.lock.json"))
+        .arg("--family-lock")
+        .arg(root().join("tests/provided_fixtures/lfoss.lock.json"))
+        .arg("--licensed-file")
+        .arg(root().join("data/site-licensed.txt"))
+        .output()
+        .expect("stack provided");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("family SciPy-1.16.0-foss-2026.1.eb name=SciPy "),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("tests/provided_fixtures/lfoss.lock.json"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("use that lock instead of the site layer"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("lfoss is the LLVM family"), "{stdout}");
+    assert!(
+        stdout.contains("licensed VASP-6.4.3-foss-2026.1.eb name=VASP "),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("code-server"), "{stdout}");
+    assert!(stderr.contains("belong in a family lock"), "{stderr}");
+    assert!(!stderr.contains("group-restricted"), "{stderr}");
+
+    let strict = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(root())
+        .args(["stack", "provided", "--build-list"])
+        .arg(&list)
+        .arg("--baseline-lock")
+        .arg(root().join("tests/provided_fixtures/baseline.lock.json"))
+        .arg("--allow")
+        .arg("SciPy")
+        .arg("--allow")
+        .arg("OpenBLAS")
+        .arg("--licensed")
+        .arg("VASP")
+        .arg("--strict")
+        .arg("--format")
+        .arg("github")
+        .output()
+        .expect("strict");
+    let stdout = String::from_utf8(strict.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert_eq!(strict.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.contains("::warning "), "{stdout}");
+    assert!(stdout.contains("title=licensed::"), "{stdout}");
+    assert!(!stdout.contains("title=family::"), "{stdout}");
+    assert!(stdout.contains("title=toolchain::"), "{stdout}");
+    assert!(stderr.contains("group-restricted"), "{stderr}");
 }

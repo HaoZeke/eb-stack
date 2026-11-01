@@ -7,7 +7,10 @@ Scientific Software Installations (EESSI) does not install.
 solve. A later edit can put an EESSI module back on it, and the list
 becomes a full stack again. ~eb-stack stack provided~ reads the list
 and fails when a line's package name is one the baseline already
-provides. The version and the toolchain are ignored.
+provides. That comparison ignores the version and the toolchain. The
+same command also fails a toolchain other than 2026.1 or GCCcore-15.2.0
+below it, a per-line ~--hooks~ flag, and a name that only a
+~--family-lock~ covers.
 
 * Check the fixture list
 
@@ -30,21 +33,28 @@ provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures
 provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list
 provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list
 unparsed not-a-version.eb list=tests/provided_fixtures/site.list
-hits=3 unparsed=1 allowed=0 provided=3
+toolchain fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list line=5 uses=foss-2025b; a site-layer line on EESSI 2026.06 must use a 2026.1 toolchain or GCCcore-15.2.0 below it (GCCcore-15.2.0, GCC-15.2.0, gfbf-2026.1, gompi-2026.1, foss-2026.1)
+hooks FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4 sets=--hooks=/sw/hooks/site.py; which replaces EESSI's hooks
+hits=3 unparsed=1 allowed=0 provided=3 toolchain=1 hooks=1 family=0 licensed=0
 #+end_example
 
 The process exited 1. Standard error was:
 
 #+begin_example
-error: 3 build-list lines name software the baseline already provides; 1 build-list line names no package
+error: 3 build-list lines name software the baseline already provides; 1 build-list line names no package; 1 build-list line uses a toolchain other than 2026.1 or GCCcore-15.2.0; 1 build-list line sets --hooks
 #+end_example
 
 Read a hit left to right. ~GROMACS-2026.0-foss-2026.1.eb~ is the line.
 The baseline lock has GROMACS 2025.2, and the names match, so a newer
 build of the same software still fails. The Python line is a path;
-only the filename is read. ~# FFTW-3.3.10-gompi-2026.1.eb~ is a
-comment, so it is not a hit. ~not-a-version.eb~ names no package.
-~VASP-6.5.1-foss-2026.1.eb~ is absent from the report.
+only the filename is read. It is also ~toolchain~: foss-2025b is not
+2026.1 or GCCcore-15.2.0 below it. The allowed labels are
+GCCcore-15.2.0, GCC-15.2.0, gfbf-2026.1, gompi-2026.1, and foss-2026.1.
+The FFTW line is gompi-2026.1, which is allowed, and it sets
+~--hooks=~, which replaces EESSI's hooks. ~# FFTW-3.3.10-gompi-2026.1.eb~
+is a comment, so it is not a hit. ~not-a-version.eb~ names no package.
+~VASP-6.5.1-foss-2026.1.eb~ is absent from the report: it is not in the
+baseline, its toolchain is foss-2026.1, and no licensed list was passed.
 
 * Keep a second version
 
@@ -60,8 +70,10 @@ eb-stack stack provided \
 #+end_src
 
 GROMACS drops out of the hits. The counts line is
-~hits=2 unparsed=1 allowed=1 provided=3~. The process still exits 1,
-because FFTW, Python, and the unparsed line remain.
+~hits=2 unparsed=1 allowed=1 provided=3 toolchain=1 hooks=1 family=0 licensed=0~.
+The process still exits 1, because FFTW, Python, the unparsed line, the
+foss-2025b toolchain, and the ~--hooks~ flag remain. ~--allow~ does not
+waive those.
 
 * A list that passes
 
@@ -75,10 +87,39 @@ eb-stack stack provided \
 That command printed:
 
 #+begin_example
-hits=0 unparsed=0 allowed=0 provided=2
+hits=0 unparsed=0 allowed=0 provided=2 toolchain=0 hooks=0 family=0 licensed=0
 #+end_example
 
 The process exited 0. ~--installed~ and ~--baseline-lock~ are combined
-when both are set. Passing neither is status 2. ~--json~ prints the
-same fields as JSON. ~eb_stack_provided~ is the same check, and a hit
+when both are set. Passing neither is status 2. ~--json~ and
+~--format json~ print the same fields as JSON. ~--format github~ prints
+one ~::error~ or ~::warning~ workflow command per finding, with ~file~,
+~line~, and ~title~. ~eb_stack_provided~ is the same check. A hit, an
+unparsed line, a wrong toolchain, a hooks flag, or a family-lock name
 is a tool error.
+
+* A family lock, and a group-restricted name
+
+A foss baseline does not contain the LLVM family. Pass that family's
+lock as ~--family-lock~. A name only that lock has is not left as site
+layer: the line names the lock to use. ~--licensed-file
+data/site-licensed.txt~ warns for VASP, MATLAB, ANSYS, ORCA, and
+Gurobi. The warning does not fail the command unless ~--strict~ is set.
+
+#+begin_src bash
+eb-stack stack provided \
+  --build-list tests/provided_fixtures/site.list \
+  --baseline-lock tests/provided_fixtures/baseline.lock.json \
+  --family-lock tests/provided_fixtures/lfoss.lock.json \
+  --licensed-file data/site-licensed.txt \
+  --allow GROMACS --allow FFTW --allow Python
+#+end_src
+
+With those three names allowed, the provided hits are gone. VASP is a
+~licensed~ warning. The foss-2025b line and the ~--hooks~ line still
+fail, and the status is 1. A build-list name that is only in
+~tests/provided_fixtures/lfoss.lock.json~ (OpenBLAS and SciPy in that
+file) is a ~family~ line. It names
+~lock=tests/provided_fixtures/lfoss.lock.json label=lfoss-2026.1~ and
+says to use that lock instead of the site layer. ~--allow~ drops that
+line too. It does not drop a wrong toolchain or a hooks flag.

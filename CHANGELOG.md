@@ -9,7 +9,11 @@ All notable changes to this project are documented here.
 - `stack provided` fails when a build-list line names software an
   installed-module list or a baseline lock already provides. The match
   is the package name, so a different version or toolchain still fails.
-  `--allow` keeps a second version. `eb_stack_provided` is the same check.
+  `--allow` keeps a second version. The same command fails a toolchain
+  other than 2026.1 or GCCcore-15.2.0 below it, a per-line `--hooks`,
+  and a name that only `--family-lock` covers. `--licensed-file` warns
+  for group-restricted names. `--format github` and `--format json` are
+  the CI reports. `eb_stack_provided` is the same check.
 - `stack gap` routes a missing name through an open software-layer pull
   request (`--open-layer`) and an open easyconfigs pull request at the
   generation (`--open-easyconfigs`), and writes one TSV per route.

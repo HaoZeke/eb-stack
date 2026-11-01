@@ -397,13 +397,18 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_provided",
-            "Fail when a build list names software a baseline already provides, as `stack provided` does. The comparison is the package name, ignoring version and toolchain. allow keeps a second version. A hit or a line that names no package is a tool error.",
+            "Fail when a build list names software a baseline already provides, as `stack provided` does. The comparison is the package name, ignoring version and toolchain. allow keeps a second version. A line also fails when its toolchain is not the foss-2026.1 hierarchy or GCCcore-15.2.0 below it, when it sets --hooks or --hook, or when its name is only in family_lock (the message names that lock). licensed and licensed_file warn about group-restricted names. format is text, github, or json. A hit, an unparsed line, a toolchain, a hooks flag, or a family-lock name is a tool error. A licensed warning is not, unless strict is true.",
             &[("build_list", "array_min1")],
             &[
                 ("installed", "array"),
                 ("baseline_lock", "string"),
                 ("allow", "array"),
+                ("family_lock", "array"),
+                ("licensed", "array"),
+                ("licensed_file", "string"),
                 ("json", "boolean"),
+                ("format", "string"),
+                ("strict", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -3017,12 +3022,24 @@ fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
 }
 
 fn stack_provided_tool(arguments: &Value) -> Result<Value, String> {
+    let json = optional_bool(arguments, "json");
+    let format = match optional_string(arguments, "format") {
+        Some(value) if !json => {
+            crate::provided::ProvidedFormat::parse(&value).map_err(workflow_error)?
+        }
+        _ => crate::provided::ProvidedFormat::Text,
+    };
     let report = crate::provided::run_provided(&crate::provided::ProvidedRequest {
         build_lists: path_array(arguments, "build_list")?,
         installed: optional_paths(arguments, "installed")?,
         baseline_lock: optional_path(arguments, "baseline_lock"),
         allow: string_array(arguments, "allow")?,
-        json: optional_bool(arguments, "json"),
+        family_locks: optional_paths(arguments, "family_lock")?,
+        licensed: string_array(arguments, "licensed")?,
+        licensed_file: optional_path(arguments, "licensed_file"),
+        json,
+        format,
+        strict: optional_bool(arguments, "strict"),
     })
     .map_err(workflow_error)?;
     if let Some(message) = report.failure() {
@@ -3034,6 +3051,10 @@ fn stack_provided_tool(arguments: &Value) -> Result<Value, String> {
         "unparsed": report.unparsed.len(),
         "allowed": report.allowed,
         "provided": report.provided,
+        "toolchain": report.toolchain.len(),
+        "hooks": report.hooks.len(),
+        "family": report.family.len(),
+        "licensed": report.licensed.len(),
     }))
 }
 

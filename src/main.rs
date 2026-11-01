@@ -992,6 +992,26 @@ struct BatchArgs {
     out_dir: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ProvidedFormatArg {
+    /// The provided lines, then any further findings, then a count.
+    Text,
+    /// GitHub Actions workflow commands.
+    Github,
+    /// One JSON document.
+    Json,
+}
+
+impl ProvidedFormatArg {
+    fn to_lib(self) -> eb_stack::provided::ProvidedFormat {
+        match self {
+            Self::Text => eb_stack::provided::ProvidedFormat::Text,
+            Self::Github => eb_stack::provided::ProvidedFormat::Github,
+            Self::Json => eb_stack::provided::ProvidedFormat::Json,
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum StackCommand {
     /// Parse EasyBuild trees and solve a jointly consistent stack.
@@ -1101,8 +1121,12 @@ enum StackCommand {
     ///
     /// The comparison is the package name, ignoring version and toolchain,
     /// so a line cannot drift back into a module EESSI installs. `--allow`
-    /// keeps a second version the site was asked for. Comment lines are
-    /// not checked. Exits 1 when any line hits or names no package.
+    /// keeps a second version the site was asked for. A line also fails when
+    /// its toolchain is not 2026.1 or GCCcore-15.2.0 below it, when it sets
+    /// `--hooks` or `--hook`, or when its name is only in `--family-lock`.
+    /// `--licensed` and `--licensed-file` warn. Comment lines are not
+    /// checked. Exits 1 when any line hits, names no package, uses a wrong
+    /// toolchain, sets hooks, or belongs in a family lock.
     #[command(
         after_long_help = "Examples:\n  eb-stack stack provided --build-list site.list --installed eessi-2026.06.txt --baseline-lock eessi.lock.json --allow App"
     )]
@@ -1119,11 +1143,34 @@ enum StackCommand {
         baseline_lock: Option<PathBuf>,
         /// Package name that may stay on the list even when the baseline
         /// provides it. Repeatable. Matched without regard to case.
+        /// Does not waive a wrong toolchain or a `--hooks` flag.
         #[arg(long = "allow")]
         allow: Vec<String>,
-        /// Print the report as JSON.
+        /// Stack lock of a toolchain family the foss baseline cannot see,
+        /// such as lfoss. A name only this lock has is reported against
+        /// this lock, not left as site layer. Repeatable.
+        #[arg(long = "family-lock")]
+        family_lock: Vec<PathBuf>,
+        /// Extra group-restricted name. Repeatable. Combined with
+        /// `--licensed-file`. Absent, and with no `--licensed-file`, no
+        /// such warning is printed.
+        #[arg(long = "licensed")]
+        licensed: Vec<String>,
+        /// Group-restricted names, one per line. `#` starts a comment.
+        /// `data/site-licensed.txt` is the list for VASP, MATLAB, ANSYS,
+        /// ORCA, and Gurobi.
         #[arg(long)]
+        licensed_file: Option<PathBuf>,
+        /// Print the report as JSON. Same as `--format json`.
+        #[arg(long, conflicts_with = "format")]
         json: bool,
+        /// `text` (default), `github` for workflow commands, or `json`.
+        #[arg(long, value_enum, default_value = "text")]
+        format: ProvidedFormatArg,
+        /// Exit 1 when a group-restricted warning remains. Without it a
+        /// warning is printed and the command exits 0.
+        #[arg(long)]
+        strict: bool,
     },
     /// Plan software-layer pull requests whose builds do not overlap.
     ///
@@ -2771,14 +2818,24 @@ fn run_stack(command: StackCommand) -> Result<()> {
             installed,
             baseline_lock,
             allow,
+            family_lock,
+            licensed,
+            licensed_file,
             json,
+            format,
+            strict,
         } => {
             let report = eb_stack::provided::run_provided(&eb_stack::provided::ProvidedRequest {
                 build_lists,
                 installed,
                 baseline_lock,
                 allow,
+                family_locks: family_lock,
+                licensed,
+                licensed_file,
                 json,
+                format: format.to_lib(),
+                strict,
             })?;
             print!("{}", report.stdout);
             if let Some(message) = report.failure() {

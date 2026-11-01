@@ -1,0 +1,8 @@
+# Group-restricted names. A CVMFS repository is readable by every client
+# that mounts it, so these stay off the shared site layer until the site
+# decides otherwise. Pass this file as `stack provided --licensed-file`.
+VASP
+MATLAB
+ANSYS
+ORCA
+Gurobi

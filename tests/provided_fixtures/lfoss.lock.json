@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "toolchain": {"name": "lfoss", "version": "2026.1"},
+  "generation_label": "lfoss-2026.1",
+  "packages": [
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.32",
+      "toolchain": {"name": "lfoss", "version": "2026.1"},
+      "easyconfig_path": "OpenBLAS-0.3.32-lfoss-2026.1.eb"
+    },
+    {
+      "name": "SciPy",
+      "version": "1.16.0",
+      "toolchain": {"name": "lfoss", "version": "2026.1"},
+      "easyconfig_path": "SciPy-1.16.0-foss-2026.1.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo",
+    "engine_version": "test",
+    "timestamp": "2026-11-01T00:00:00Z",
+    "criteria": []
+  }
+}
