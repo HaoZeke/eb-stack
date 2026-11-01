@@ -24,7 +24,7 @@ eb-stack stack generation \
 
 #+begin_example
 #1472: pv-1.7.24-GCCcore-12.3.0.eb in eessi-2025.06-eb-5.2.1-2025b.yml is outside EESSI 2025.06: GCCcore-12.3.0 is generation 2023a, which EESSI 2023.06 carries; 2025.06 carries 2024a, 2025a, 2025b
-outside=1 mixed=0 versions=0
+outside=1 mixed=0 versions=0 filename=0
 #+end_example
 
 Read the line left to right. ~#1472~ is the pull request.
@@ -35,7 +35,7 @@ belongs in a 2023.06 easystack. The last line counts each kind of
 finding, and any finding exits 1. The fixture is the easystack change
 at the first commit of pull request 1472. At the commit that moved pv
 to ~eessi-2023.06-eb-5.4.0-2023a.yml~, the same command prints
-~outside=0 mixed=0 versions=0~ and exits 0.
+~outside=0 mixed=0 versions=0 filename=0~ and exits 0.
 
 The pull-request JSON is the shape ~pr-overlap --pr~ reads. Only the
 lines a pull request adds are checked. The rest of each changed file
@@ -53,7 +53,7 @@ eb-stack stack generation \
 
 #+begin_example
 #1834: the easystacks are for 2 EESSI versions: 2025.06 (eessi-2025.06-eb-5.4.1-2025b.yml), 2026.06 (eessi-2026.06-eb-5.4.1-2026.1.yml); the bot builds one EESSI version per pull request
-outside=0 mixed=1 versions=0
+outside=0 mixed=1 versions=0 filename=0
 #+end_example
 
 Each entry is in the right generation for its own version, so
@@ -70,7 +70,7 @@ eb-stack stack generation \
 
 #+begin_example
 #1497: GROMACS has 2 versions in generation 2025b: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2025b.eb); pass --allow-versions GROMACS@2025b to accept
-outside=0 mixed=0 versions=1
+outside=0 mixed=0 versions=1 filename=0
 #+end_example
 
 Pull request 1497 added GROMACS 2026.2 on foss-2025b to the easystack
@@ -89,7 +89,7 @@ eb-stack stack generation \
 #+end_src
 
 #+begin_example
-outside=0 mixed=0 versions=0
+outside=0 mixed=0 versions=0 filename=0
 #+end_example
 
 ~--allow-versions GROMACS~ allows every generation. Only a plan that
@@ -108,6 +108,31 @@ versions in one generation" block in its ~pr-body.md~ and a
 These are warnings, so the batch still exits 0. Pass the same
 ~--allow-versions NAME~ or ~--allow-versions NAME@GENERATION~ to
 ~stack batch~ to accept a second version there.
+
+* An entry in the wrong generation's file
+
+A ~2025b~ easystack name is ~eessi-2025.06-eb-5.4.1-2025b.yml~: the
+token after ~eb-<X.Y.Z>-~ is the generation the file is for. An entry
+on another generation its EESSI version still carries passes the first
+check, because the version does carry it, but it belongs in that
+generation's own file.
+
+#+begin_src bash
+eb-stack stack generation \
+  --easystack tests/generation_lint_fixtures/easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml
+#+end_src
+
+#+begin_example
+OpenFOAM-12-foss-2025a.eb in eessi-2025.06-eb-5.4.1-2025b.yml is generation 2025a, but the file name says 2025b; move it to the -2025a.yml easystack
+outside=0 mixed=0 versions=0 filename=1
+#+end_example
+
+The ~2025b~ file holds ~GROMACS-2025.4-foss-2025b.eb~, which fits, and
+~OpenFOAM-12-foss-2025a.eb~, which is 2025a. 2025.06 carries 2025a, so
+the entry is not ~outside~; it is in the wrong file, and the
+~filename~ finding says which file it belongs in. A non-generation
+group such as ~001-system~, ~010-CUDA~ or ~cc70-CUDA~ names no
+generation, so its entries are not checked this way.
 
 * Where the generations come from
 

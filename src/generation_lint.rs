@@ -236,6 +236,9 @@ pub enum FindingKind {
     Mixed,
     /// A second version of a name in one generation, not allowed.
     Versions,
+    /// An entry whose generation differs from the generation its file name
+    /// names, or a file naming a generation its EESSI version does not carry.
+    FileName,
 }
 
 /// One line of the report.
@@ -261,6 +264,27 @@ pub fn eessi_version_named(path: &str) -> Option<String> {
     let (version, _) = rest.split_once("-eb-")?;
     (!version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'))
         .then(|| version.to_string())
+}
+
+/// The toolchain generation an easystack file name names, as a known
+/// generation of the table.
+///
+/// After `eessi-<V>-eb-<X.Y.Z>-`, the token up to the next `-` or the
+/// `.yml` is the generation. A non-generation group such as `001-system`,
+/// `010-CUDA` or `cc70-CUDA`, and any token the table does not list as a
+/// generation of some EESSI version, reads as `None`. A suffix after the
+/// generation (`-2023a-CUDA.yml`) is dropped.
+pub fn filename_generation(table: &GenerationTable, path: &str) -> Option<String> {
+    let base = basename(path);
+    let stem = base
+        .strip_suffix(".yml")
+        .or_else(|| base.strip_suffix(".yaml"))
+        .unwrap_or(base);
+    let rest = stem.strip_prefix("eessi-")?;
+    let (_version, rest) = rest.split_once("-eb-")?;
+    let (_eb, rest) = rest.split_once('-')?;
+    let token = rest.split('-').next().unwrap_or(rest);
+    (!token.is_empty() && table.version_carrying(token).is_some()).then(|| token.to_string())
 }
 
 #[derive(Default)]
@@ -362,6 +386,42 @@ pub fn lint_plan(
                     basename(&file.path),
                     split.toolchain,
                     carried.join(", ")
+                ),
+            });
+        }
+    }
+
+    for (file, version) in plan.files.iter().zip(&file_versions) {
+        let carried = table.generations(version).unwrap_or_default();
+        let Some(file_generation) = filename_generation(table, &file.path) else {
+            continue;
+        };
+        if !carried.iter().any(|c| c == &file_generation) {
+            findings.push(Finding {
+                kind: FindingKind::FileName,
+                message: format!(
+                    "{prefix}{} names generation {file_generation}, which EESSI {version} does not carry; {version} carries {}",
+                    basename(&file.path),
+                    carried.join(", ")
+                ),
+            });
+            continue;
+        }
+        for entry in &file.added {
+            let Some(split) = filename_toolchain(entry) else {
+                continue;
+            };
+            let Some(generation) = table.generation_of(&split.toolchain) else {
+                continue;
+            };
+            if !carried.iter().any(|c| c == &generation) || generation == file_generation {
+                continue;
+            }
+            findings.push(Finding {
+                kind: FindingKind::FileName,
+                message: format!(
+                    "{prefix}{entry} in {} is generation {generation}, but the file name says {file_generation}; move it to the -{generation}.yml easystack",
+                    basename(&file.path)
                 ),
             });
         }
@@ -564,10 +624,11 @@ pub fn run_generation_lint(request: &GenerationLintRequest) -> Result<Generation
     }
     let count = |kind| findings.iter().filter(|f| f.kind == kind).count();
     stdout.push_str(&format!(
-        "outside={} mixed={} versions={}\n",
+        "outside={} mixed={} versions={} filename={}\n",
         count(FindingKind::Outside),
         count(FindingKind::Mixed),
-        count(FindingKind::Versions)
+        count(FindingKind::Versions),
+        count(FindingKind::FileName)
     ));
     Ok(GenerationLintReport { stdout, findings })
 }
@@ -638,6 +699,89 @@ mod tests {
             Some("2026.06")
         );
         assert_eq!(eessi_version_named("/tmp/stack.yml"), None);
+    }
+
+    #[test]
+    fn file_name_names_its_toolchain_generation() {
+        let table = GenerationTable::bundled().unwrap();
+        let g = |name: &str| filename_generation(&table, name);
+        assert_eq!(
+            g("eessi-2025.06-eb-5.4.1-2025b.yml").as_deref(),
+            Some("2025b")
+        );
+        assert_eq!(
+            g("eessi-2023.06-eb-5.1.2-2023a-CUDA.yml").as_deref(),
+            Some("2023a")
+        );
+        assert_eq!(
+            g("eessi-2026.06-eb-5.4.1-2026.1.yml").as_deref(),
+            Some("2026.1")
+        );
+        assert_eq!(
+            g("easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml").as_deref(),
+            Some("2025b")
+        );
+        assert_eq!(g("eessi-2023.06-eb-4.9.4-001-system.yml"), None);
+        assert_eq!(g("eessi-2023.06-eb-4.8.2-010-CUDA.yml"), None);
+        assert_eq!(g("eessi-2023.06-eb-4.9.4-cc70-CUDA.yml"), None);
+        assert_eq!(g("stack.yml"), None);
+    }
+
+    #[test]
+    fn an_entry_in_the_wrong_generation_file_is_reported() {
+        let table = GenerationTable::bundled().unwrap();
+        let in_2025b = plan(
+            None,
+            &[(
+                "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml",
+                &["GROMACS-2025.4-foss-2025a.eb"],
+                &[],
+            )],
+        );
+        let findings = lint_plan(&table, &in_2025b, None, &BTreeSet::new(), &[]).unwrap();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::FileName);
+        assert_eq!(
+            findings[0].message,
+            "GROMACS-2025.4-foss-2025a.eb in eessi-2025.06-eb-5.4.1-2025b.yml is generation 2025a, but the file name says 2025b; move it to the -2025a.yml easystack"
+        );
+        let in_2025a = plan(
+            None,
+            &[(
+                "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025a.yml",
+                &["GROMACS-2025.4-foss-2025a.eb"],
+                &[],
+            )],
+        );
+        assert!(lint_plan(&table, &in_2025a, None, &BTreeSet::new(), &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_file_naming_a_foreign_generation_is_reported_once_and_entries_are_skipped() {
+        let table = GenerationTable::bundled().unwrap();
+        let findings = lint_plan(
+            &table,
+            &plan(
+                None,
+                &[(
+                    "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2026.1.yml",
+                    &["GROMACS-2025.4-foss-2025a.eb", "OpenFOAM-12-foss-2025b.eb"],
+                    &[],
+                )],
+            ),
+            None,
+            &BTreeSet::new(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::FileName);
+        assert_eq!(
+            findings[0].message,
+            "eessi-2025.06-eb-5.4.1-2026.1.yml names generation 2026.1, which EESSI 2025.06 does not carry; 2025.06 carries 2024a, 2025a, 2025b"
+        );
     }
 
     #[test]

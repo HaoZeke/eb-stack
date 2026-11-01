@@ -387,6 +387,15 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack generation` and `eb_stack_generation` check each added entry's
+  toolchain generation against the generation the easystack file name names,
+  the token after `eb-<X.Y.Z>-` such as `-2025b.yml`. An entry whose
+  generation its EESSI version carries but that differs from the file name's
+  generation is a new `filename` finding, so a `foss-2025a` entry added to a
+  `-2025b.yml` file is caught even though 2025.06 carries 2025a. The count
+  line now reads `outside=N mixed=N versions=N filename=N`, and the MCP tool
+  returns a `filename` array. Non-generation groups such as `001-system`,
+  `010-CUDA` and `cc70-CUDA` are not checked this way.
 - `stack known-failures` and the MCP tool `eb_stack_known_failures` take a
   `--strict` flag (`strict: true`). It prints the same report, then exits 1
   (returns a tool error that lists the warnings) when a warning remains, so a

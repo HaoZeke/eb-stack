@@ -3180,6 +3180,7 @@ fn stack_generation_tool(arguments: &Value) -> Result<Value, String> {
         "outside": report.of(FindingKind::Outside),
         "mixed": report.of(FindingKind::Mixed),
         "versions": report.of(FindingKind::Versions),
+        "filename": report.of(FindingKind::FileName),
     }))
 }
 

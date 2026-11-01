@@ -47,7 +47,7 @@ fn pr_1472_first_push_puts_a_2023a_recipe_in_2025_06() {
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
     assert_eq!(
         stdout,
-        format!("#1472: {PV_2025_06}\noutside=1 mixed=0 versions=0\n")
+        format!("#1472: {PV_2025_06}\noutside=1 mixed=0 versions=0 filename=0\n")
     );
     assert!(stderr.contains(PV_2025_06), "{stderr}");
 }
@@ -61,7 +61,10 @@ fn pr_1472_after_the_move_to_2023_06_passes() {
         text(&output.stdout),
         text(&output.stderr)
     );
-    assert_eq!(text(&output.stdout), "outside=0 mixed=0 versions=0\n");
+    assert_eq!(
+        text(&output.stdout),
+        "outside=0 mixed=0 versions=0 filename=0\n"
+    );
 }
 
 #[test]
@@ -76,7 +79,7 @@ fn pr_1472_head_file_as_an_easystack_fails_the_same_way() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        format!("{PV_2025_06}\noutside=1 mixed=0 versions=0\n")
+        format!("{PV_2025_06}\noutside=1 mixed=0 versions=0 filename=0\n")
     );
 }
 
@@ -92,7 +95,7 @@ fn pr_1834_before_the_split_targets_two_eessi_versions() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "#1834: the easystacks are for 2 EESSI versions: 2025.06 (eessi-2025.06-eb-5.4.1-2025b.yml), 2026.06 (eessi-2026.06-eb-5.4.1-2026.1.yml); the bot builds one EESSI version per pull request\noutside=0 mixed=1 versions=0\n"
+        "#1834: the easystacks are for 2 EESSI versions: 2025.06 (eessi-2025.06-eb-5.4.1-2025b.yml), 2026.06 (eessi-2026.06-eb-5.4.1-2026.1.yml); the bot builds one EESSI version per pull request\noutside=0 mixed=1 versions=0 filename=0\n"
     );
 
     let split = run(&["stack", "generation", "--pr", &path("prs/1834-split.json")]);
@@ -107,7 +110,7 @@ fn pr_1497_adds_a_second_gromacs_to_2025b_and_needs_an_allow() {
     assert_eq!(refused.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "#1497: GROMACS has 2 versions in generation 2025b: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2025b.eb); pass --allow-versions GROMACS@2025b to accept\noutside=0 mixed=0 versions=1\n"
+        "#1497: GROMACS has 2 versions in generation 2025b: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2025b.eb); pass --allow-versions GROMACS@2025b to accept\noutside=0 mixed=0 versions=1 filename=0\n"
     );
 
     let allowed = run(&[
@@ -149,9 +152,54 @@ fn deployed_easystacks_count_and_their_own_duplicates_do_not() {
     );
     assert!(!stdout.contains("CMake"), "{stdout}");
     assert!(
-        stdout.ends_with("outside=0 mixed=0 versions=1\n"),
+        stdout.ends_with("outside=0 mixed=0 versions=1 filename=0\n"),
         "{stdout}"
     );
+}
+
+#[test]
+fn an_entry_in_the_wrong_generation_file_is_a_filename_finding() {
+    let output = run(&[
+        "stack",
+        "generation",
+        "--easystack",
+        &path("easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml"),
+    ]);
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "OpenFOAM-12-foss-2025a.eb in eessi-2025.06-eb-5.4.1-2025b.yml is generation 2025a, but the file name says 2025b; move it to the -2025a.yml easystack\noutside=0 mixed=0 versions=0 filename=1\n"
+    );
+}
+
+#[test]
+fn a_pr_that_adds_an_entry_to_the_wrong_generation_file_is_a_filename_finding() {
+    let output = run(&[
+        "stack",
+        "generation",
+        "--pr",
+        &path("prs/wrong-generation-file.json"),
+    ]);
+    let stdout = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "#1500: OpenFOAM-12-foss-2025a.eb in eessi-2025.06-eb-5.4.1-2025b.yml is generation 2025a, but the file name says 2025b; move it to the -2025a.yml easystack\noutside=0 mixed=0 versions=0 filename=1\n"
+    );
+}
+
+#[test]
+fn a_system_toolchain_entry_in_a_system_file_is_no_finding() {
+    let output = run(&[
+        "stack",
+        "generation",
+        "--easystack",
+        &path("easystacks/software.eessi.io/2023.06/eessi-2023.06-eb-4.9.4-001-system.yml"),
+    ]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert_eq!(stdout, "outside=0 mixed=0 versions=0 filename=0\n");
 }
 
 #[test]
@@ -243,7 +291,7 @@ fn the_howto_quotes_the_output_of_each_command() {
         assert_eq!(text(&output.stdout), quoted, "{words:?}");
         checked += 1;
     }
-    assert_eq!(checked, 4);
+    assert_eq!(checked, 5);
 }
 
 #[test]
@@ -269,6 +317,10 @@ fn the_mcp_tool_refuses_the_same_plans() {
     assert_eq!(allowed["result"]["isError"], false, "{allowed}");
     assert_eq!(
         allowed["result"]["structuredContent"]["text"],
-        "outside=0 mixed=0 versions=0\n"
+        "outside=0 mixed=0 versions=0 filename=0\n"
+    );
+    assert_eq!(
+        allowed["result"]["structuredContent"]["filename"],
+        json!([])
     );
 }

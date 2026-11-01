@@ -1,0 +1,3 @@
+easyconfigs:
+  - GROMACS-2025.4-foss-2025b.eb
+  - OpenFOAM-12-foss-2025a.eb
