@@ -5,9 +5,8 @@
 stack has installed, and names the easyconfig that would close each
 gap. This is separate from ~stack solve~. The files below are in this
 checkout, so the command runs before a site listing or an EESSI prefix
-exists. ~--help~ names ~snellius-2025.txt~ and ~eessi-2026.06-zen4.txt~.
-Those paths are not in the checkout; a missing ~--site~ file exits 1
-and names the path.
+exists. The example in ~stack gap --help~ uses these same files. A
+missing ~--site~ file exits 1 and names the path.
 
 * Run it
 

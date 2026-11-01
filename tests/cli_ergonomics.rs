@@ -1031,3 +1031,45 @@ fn bump_needs_a_toolchain_name_and_warns_only_on_an_accepted_pair() {
         "a rejected name is not accepted:\n{stderr}"
     );
 }
+
+#[test]
+fn stack_gap_help_names_files_that_are_in_the_tree() {
+    let help = help_text(&["stack".into(), "gap".into()]);
+    assert!(
+        !help.contains("snellius"),
+        "stack gap help must not name a site file that is not in the tree:\n{help}"
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for path in [
+        "tests/rebuild_set_fixtures/installed.txt",
+        "tests/pr_overlap_layer/installed.txt",
+        "tests/rebuild_set_fixtures/release",
+    ] {
+        assert!(root.join(path).exists(), "example path {path} is missing");
+        assert!(
+            help.contains(path),
+            "stack gap help should name {path}:\n{help}"
+        );
+    }
+}
+
+#[test]
+fn mcp_skill_does_not_hardcode_a_tool_count() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/mcp/SKILL.md");
+    let text = std::fs::read_to_string(&path).expect("read skill");
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        let Some(index) = lower.find("returns ") else {
+            continue;
+        };
+        let after = lower[index + "returns ".len()..].trim_start();
+        let Some(token) = after.split_whitespace().next() else {
+            continue;
+        };
+        let digits: String = token.chars().take_while(|c| c.is_ascii_digit()).collect();
+        assert!(
+            digits.is_empty() || !after.contains("tool"),
+            "do not hard-code the MCP tool count:\n{line}"
+        );
+    }
+}

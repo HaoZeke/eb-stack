@@ -1099,7 +1099,7 @@ enum StackCommand {
     /// `gap.tsv`, one TSV per route, `roots.txt` for `stack batch
     /// --roots-file`, and `bump-sources.txt`.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack gap --site /site/modules --older /eessi/2025.06/modules --installed /eessi/2026.06/zen4/modules --installed /eessi/2026.06/zen4/accel/nvidia/cc90/modules --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --eessi-version 2026.06 --exclude-file site-only.tsv --filter-deps zlib,binutils --open-layer open-layer.json --open-easyconfigs open-easyconfigs.json --out-dir gap"
+        after_long_help = "Examples:\n  eb-stack stack gap --site tests/rebuild_set_fixtures/installed.txt --installed tests/pr_overlap_layer/installed.txt --easyconfigs tests/rebuild_set_fixtures/release --generation 2026.1 --out-dir gap\n\nThose paths are files in this repository. A missing --site file exits 1 and names the path."
     )]
     Gap {
         /// Site module tree or listing. A directory is walked. Repeatable.
