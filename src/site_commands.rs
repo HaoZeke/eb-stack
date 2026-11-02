@@ -708,9 +708,10 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     }
     let findings = match &args.findings {
         Some(path) => Some(
-            crate::findings::parse_findings_csv(
+            crate::findings::parse_findings(
                 &std::fs::read_to_string(path)
                     .with_context(|| format!("--findings {}: not readable", path.display()))?,
+                &installed,
             )
             .map_err(|error| usage(format!("--findings {}: {error}", path.display())))?,
         ),
@@ -745,6 +746,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter_deps = FilterDeps::parse(&filter_specs)
         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
+    let filter_for_report = filter_deps.clone();
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let mut easystacks = Vec::new();
     for path in &args.easystacks {
@@ -817,7 +819,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
             )?;
             std::fs::write(
                 args.out_dir.join("backport.md"),
-                crate::findings::render_backport(&summary, &reach),
+                crate::findings::render_backport(&summary, &reach, findings, &filter_for_report),
             )?;
             let fix = crate::fix_cost::report(findings, &installed, &document, &evidence, &reach);
             write_json_pretty(&args.out_dir.join("fix-cost.json"), &fix)?;

@@ -23,6 +23,7 @@
 //! other name stays `unclassified` until a site file passed to
 //! [`ReachTable::overlay`] says otherwise. [`render_backport`] is that list.
 
+use crate::dep_filter::FilterDeps;
 use crate::rebuild_set::{
     RebuildDocument, StackEasystack, CLASS_MUST_REBUILD, CLASS_NO_REBUILD, CLASS_REVIEW,
 };
@@ -311,6 +312,9 @@ pub enum FindingsError {
     /// The file has no header.
     #[error("findings: empty file")]
     Empty,
+    /// The file is JSON and is not a Trivy, Grype, or OSV-scanner export.
+    #[error("findings: {0}")]
+    Scanner(String),
 }
 
 /// One row of the scanner export.
@@ -330,6 +334,9 @@ pub struct Finding {
     pub fix_state: String,
     /// Modules that carry the package, `Name/VersionFull`.
     pub modules: Vec<String>,
+    /// Commit URLs the advisory names. Empty when the export names none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fix_commits: Vec<String>,
 }
 
 const COLUMNS_REQUIRED: [&str; 4] = ["severity", "vuln_id", "package", "used_in"];
@@ -370,6 +377,7 @@ pub fn parse_findings_csv(text: &str) -> Result<Vec<Finding>, FindingsError> {
     let version = index("version");
     let fixed_in = index("fixed_in");
     let fix_state = index("fix_state");
+    let fix_commits = index("fix_commits");
     let mut findings = Vec::new();
     for (line, fields) in iter {
         if fields.iter().all(|field| field.trim().is_empty()) {
@@ -400,9 +408,36 @@ pub fn parse_findings_csv(text: &str) -> Result<Vec<Finding>, FindingsError> {
             fixed_in: get(fixed_in),
             fix_state: get(fix_state),
             modules,
+            fix_commits: split_list(&get(fix_commits)),
         });
     }
     Ok(findings)
+}
+
+/// Read a scanner export.
+///
+/// A file that starts with `{` or `[` is Trivy (`Results`), Grype
+/// (`matches`), or OSV-scanner (`results` of packages). Anything else is
+/// the comma-separated export [`parse_findings_csv`] reads. A JSON row has
+/// no EasyBuild module column: `installed` supplies `used_in` by matching
+/// the package name and version to `Name/version-toolchain`.
+pub fn parse_findings(
+    text: &str,
+    installed: &BTreeSet<String>,
+) -> Result<Vec<Finding>, FindingsError> {
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return parse_findings_json(trimmed, installed);
+    }
+    parse_findings_csv(text)
+}
+
+fn split_list(raw: &str) -> Vec<String> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Records with the line each one starts on.
@@ -1063,7 +1098,12 @@ fn cost_pair(row: &ModuleFindings) -> (String, String) {
 /// The backport list: modules whose reach class justifies a backport, the
 /// modules a site file recorded and left off that list, and the modules
 /// still unclassified.
-pub fn render_backport(document: &FindingsDocument, reach: &ReachTable) -> String {
+pub fn render_backport(
+    document: &FindingsDocument,
+    reach: &ReachTable,
+    findings: &[Finding],
+    filter: &FilterDeps,
+) -> String {
     let mut out = String::new();
     out.push_str("# Backport list\n\n");
     out.push_str(&format!(
@@ -1197,6 +1237,494 @@ pub fn render_backport(document: &FindingsDocument, reach: &ReachTable) -> Strin
             ));
         }
     }
+    append_os_errata(&mut out, document, filter);
+    append_scaffolds(&mut out, document, findings, filter);
+    append_curl_note(&mut out, document, findings, filter);
+    out
+}
+
+fn software_name(module: &str) -> &str {
+    module.split('/').next().unwrap_or(module)
+}
+
+/// Software version, without the toolchain suffix of a module string.
+fn software_version(module: &str, stated: &str) -> String {
+    let stated = stated.trim();
+    if !stated.is_empty() {
+        return stated.to_string();
+    }
+    let rest = module.split_once('/').map(|(_, rest)| rest).unwrap_or("");
+    let mut version = String::new();
+    for (index, part) in rest.split('-').enumerate() {
+        if part.is_empty() || (index > 0 && !part.starts_with(|c: char| c.is_ascii_digit())) {
+            break;
+        }
+        if !version.is_empty() {
+            version.push('-');
+        }
+        version.push_str(part);
+    }
+    version
+}
+
+fn patch_token(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn module_is_filtered(filter: &FilterDeps, module: &str) -> bool {
+    let name = software_name(module);
+    let version = software_version(module, "");
+    filter.dep_is_filtered(name, &version)
+}
+
+fn curl_package(name: &str) -> bool {
+    matches!(reach_key(name).as_str(), "curl" | "libcurl")
+}
+
+const CURL_FILTER_NOTE: &str = "\
+--filter-deps=cURL changes only builds that have not been installed yet. \
+It drops the EasyBuild cURL module and takes cURL from the host or the EESSI \
+compat layer, so later cURL fixes come from the operating-system errata stream. \
+The cost is the newer protocol features that the EasyBuild cURL build carries. \
+Decide it for the new stack. It does not rewrite modules that are already installed.";
+
+fn append_os_errata(out: &mut String, document: &FindingsDocument, filter: &FilterDeps) {
+    out.push_str("\n## OS errata\n\n");
+    let rows: Vec<&ModuleFindings> = document
+        .ranked
+        .iter()
+        .filter(|row| row.backport && module_is_filtered(filter, &row.module))
+        .collect();
+    if rows.is_empty() {
+        out.push_str("No backport module is dropped by `--filter-deps`.\n");
+        return;
+    }
+    out.push_str(
+        "`--filter-deps` drops these modules. Their reach class would justify a \
+         backport, and the fix is the operating-system errata stream rather than \
+         a site patch. No scaffold is written for them. `backport` on the findings \
+         document stays the reach class.\n\n",
+    );
+    for row in rows {
+        out.push_str(&format!("- `{}`\n", row.module));
+    }
+}
+
+fn append_scaffolds(
+    out: &mut String,
+    document: &FindingsDocument,
+    findings: &[Finding],
+    filter: &FilterDeps,
+) {
+    out.push_str("\n## Patch scaffolds\n\n");
+    out.push_str(
+        "Each scaffold is an in-place patch: the same module name and version. \
+         The checksum line is filled with the sha256 of the patch file once that \
+         file exists. Checksums stay in source order, then patch order.\n\n",
+    );
+    let mut wrote = false;
+    let mut seen = BTreeSet::new();
+    for row in document.ranked.iter().filter(|row| row.backport) {
+        if module_is_filtered(filter, &row.module) {
+            continue;
+        }
+        for finding in findings {
+            if !finding.modules.iter().any(|module| module == &row.module) {
+                continue;
+            }
+            let id = finding.vuln_id.trim();
+            if id.is_empty() || !seen.insert((row.module.clone(), id.to_string())) {
+                continue;
+            }
+            wrote = true;
+            let name = scaffold_name(&row.module, &finding.package);
+            let version = software_version(&row.module, &finding.version);
+            let filename = format!("{}-{}_{}.patch", name, version, patch_token(id));
+            out.push_str(&format!("### `{filename}`\n\n"));
+            if let Some(file) = easyconfig_filename(&row.module) {
+                out.push_str(&format!("Edit `{file}`.\n\n"));
+            }
+            out.push_str("```python\n");
+            out.push_str(&format!("patches = ['{filename}']\n"));
+            out.push_str("checksums = [\n");
+            out.push_str("    # existing source checksums stay ahead of the patch checksums\n");
+            out.push_str(&format!("    # {filename}\n"));
+            out.push_str("    '<sha256 of the patch file>',\n");
+            out.push_str("]\n```\n\n");
+            if finding.fixed_in.trim().is_empty() {
+                out.push_str("The export names no fixed version.\n\n");
+            } else {
+                out.push_str(&format!("Fixed in {}.\n\n", finding.fixed_in.trim()));
+            }
+            if finding.fix_commits.is_empty() {
+                out.push_str("The advisory names no fix commit URL.\n\n");
+            } else {
+                out.push_str("Upstream fix commit:\n\n");
+                for url in &finding.fix_commits {
+                    out.push_str(&format!("- {url}\n"));
+                }
+                out.push('\n');
+            }
+        }
+    }
+    if !wrote {
+        out.push_str("No in-place patch was chosen.\n");
+    }
+}
+
+fn scaffold_name(module: &str, package: &str) -> String {
+    let software = software_name(module);
+    if package.is_empty() || reach_key(software) == reach_key(package) {
+        software.to_string()
+    } else {
+        package.to_string()
+    }
+}
+
+fn append_curl_note(
+    out: &mut String,
+    document: &FindingsDocument,
+    findings: &[Finding],
+    filter: &FilterDeps,
+) {
+    let hit = findings.iter().any(|finding| {
+        curl_package(&finding.package)
+            || finding
+                .modules
+                .iter()
+                .any(|module| curl_package(software_name(module)))
+    }) || document.ranked.iter().any(|row| {
+        curl_package(software_name(&row.module))
+            || row.packages.iter().any(|package| curl_package(package))
+    });
+    if !hit {
+        return;
+    }
+    out.push_str("\n## cURL and --filter-deps\n\n");
+    out.push_str(CURL_FILTER_NOTE);
+    out.push('\n');
+    if filter.dep_is_filtered("cURL", "")
+        || filter.dep_is_filtered("curl", "")
+        || filter.dep_is_filtered("libcurl", "")
+    {
+        out.push_str(
+            "\ncURL is in the filter-deps list for this run, so these findings are on the OS errata stream.\n",
+        );
+    }
+}
+
+fn parse_findings_json(
+    text: &str,
+    installed: &BTreeSet<String>,
+) -> Result<Vec<Finding>, FindingsError> {
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|error| FindingsError::Scanner(format!("scanner JSON: {error}")))?;
+    let raw = if value
+        .get("matches")
+        .and_then(|item| item.as_array())
+        .is_some()
+    {
+        parse_grype(&value)
+    } else if value
+        .get("Results")
+        .and_then(|item| item.as_array())
+        .is_some()
+    {
+        parse_trivy(&value)
+    } else if value
+        .get("results")
+        .and_then(|item| item.as_array())
+        .is_some_and(|results| {
+            results.iter().any(|result| {
+                result
+                    .get("packages")
+                    .and_then(|item| item.as_array())
+                    .is_some()
+            })
+        })
+    {
+        parse_osv_scanner(&value)
+    } else {
+        return Err(FindingsError::Scanner(
+            "scanner JSON is not Trivy (Results), Grype (matches), or OSV-scanner (results)"
+                .to_string(),
+        ));
+    };
+    Ok(raw
+        .into_iter()
+        .map(|mut finding| {
+            if finding.modules.is_empty() {
+                finding.modules = modules_for(&finding.package, &finding.version, installed);
+            }
+            finding
+        })
+        .collect())
+}
+
+fn modules_for(package: &str, version: &str, installed: &BTreeSet<String>) -> Vec<String> {
+    let mut hits = Vec::new();
+    for spec in installed {
+        let Some((name, rest)) = spec.split_once('/') else {
+            continue;
+        };
+        if reach_key(name) != reach_key(package) {
+            continue;
+        }
+        if version.is_empty()
+            || rest == version
+            || rest
+                .strip_prefix(version)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('-'))
+        {
+            hits.push(spec.clone());
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    hits
+}
+
+fn parse_trivy(value: &serde_json::Value) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some(results) = value.get("Results").and_then(|item| item.as_array()) else {
+        return out;
+    };
+    for result in results {
+        let Some(vulns) = result
+            .get("Vulnerabilities")
+            .and_then(|item| item.as_array())
+        else {
+            continue;
+        };
+        for vuln in vulns {
+            let Some(id) = json_text(vuln, "VulnerabilityID") else {
+                continue;
+            };
+            out.push(Finding {
+                severity: json_text(vuln, "Severity").unwrap_or_default(),
+                vuln_id: id,
+                package: json_text(vuln, "PkgName").unwrap_or_default(),
+                version: json_text(vuln, "InstalledVersion").unwrap_or_default(),
+                fixed_in: json_text(vuln, "FixedVersion")
+                    .unwrap_or_default()
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+                fix_state: String::new(),
+                modules: Vec::new(),
+                fix_commits: json_urls(vuln, "References")
+                    .into_iter()
+                    .filter(|url| commit_url_like(url))
+                    .collect(),
+            });
+        }
+    }
+    out
+}
+
+fn parse_grype(value: &serde_json::Value) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some(matches) = value.get("matches").and_then(|item| item.as_array()) else {
+        return out;
+    };
+    for matched in matches {
+        let vuln = matched
+            .get("vulnerability")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let artifact = matched
+            .get("artifact")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let Some(id) = json_text(&vuln, "id") else {
+            continue;
+        };
+        let fixed_in = vuln
+            .pointer("/fix/versions")
+            .and_then(|item| item.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .to_string();
+        out.push(Finding {
+            severity: json_text(&vuln, "severity").unwrap_or_default(),
+            vuln_id: id,
+            package: json_text(&artifact, "name").unwrap_or_default(),
+            version: json_text(&artifact, "version").unwrap_or_default(),
+            fixed_in,
+            fix_state: String::new(),
+            modules: Vec::new(),
+            fix_commits: json_urls(&vuln, "urls")
+                .into_iter()
+                .filter(|url| commit_url_like(url))
+                .collect(),
+        });
+    }
+    out
+}
+
+fn parse_osv_scanner(value: &serde_json::Value) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some(results) = value.get("results").and_then(|item| item.as_array()) else {
+        return out;
+    };
+    for result in results {
+        let Some(packages) = result.get("packages").and_then(|item| item.as_array()) else {
+            continue;
+        };
+        for package in packages {
+            let meta = package
+                .get("package")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let name = json_text(&meta, "name").unwrap_or_default();
+            let version = json_text(&meta, "version").unwrap_or_default();
+            let Some(vulns) = package
+                .get("vulnerabilities")
+                .or_else(|| package.get("vulns"))
+                .and_then(|item| item.as_array())
+            else {
+                continue;
+            };
+            for vuln in vulns {
+                let Some(id) = json_text(vuln, "id") else {
+                    continue;
+                };
+                out.push(Finding {
+                    severity: String::new(),
+                    vuln_id: id,
+                    package: name.clone(),
+                    version: version.clone(),
+                    fixed_in: osv_fixed_versions(vuln)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default(),
+                    fix_state: String::new(),
+                    modules: Vec::new(),
+                    fix_commits: osv_fix_commits(vuln),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn json_text(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+}
+
+fn json_urls(value: &serde_json::Value, field: &str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn commit_url_like(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("/commit/") || lower.contains("/commits/")
+}
+
+fn osv_fixed_versions(document: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(affected) = document.get("affected").and_then(|value| value.as_array()) else {
+        return out;
+    };
+    for entry in affected {
+        let Some(ranges) = entry.get("ranges").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for range in ranges {
+            let kind = range
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if kind != "SEMVER" && kind != "ECOSYSTEM" {
+                continue;
+            }
+            let Some(events) = range.get("events").and_then(|value| value.as_array()) else {
+                continue;
+            };
+            for event in events {
+                if let Some(fixed) = event.get("fixed").and_then(|value| value.as_str()) {
+                    let fixed = fixed.trim();
+                    if !fixed.is_empty() {
+                        out.push(fixed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn osv_fix_commits(document: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(references) = document
+        .get("references")
+        .and_then(|value| value.as_array())
+    {
+        for reference in references {
+            let Some(url) = reference.get("url").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if commit_url_like(url) {
+                out.push(url.to_string());
+            }
+        }
+    }
+    if let Some(affected) = document.get("affected").and_then(|value| value.as_array()) {
+        for entry in affected {
+            let Some(ranges) = entry.get("ranges").and_then(|value| value.as_array()) else {
+                continue;
+            };
+            for range in ranges {
+                if range.get("type").and_then(|value| value.as_str()) != Some("GIT") {
+                    continue;
+                }
+                let Some(repo) = range.get("repo").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let Some(events) = range.get("events").and_then(|value| value.as_array()) else {
+                    continue;
+                };
+                for event in events {
+                    let Some(sha) = event.get("fixed").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    if (7..=40).contains(&sha.len()) && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                        let repo = repo.trim().trim_end_matches('/').trim_end_matches(".git");
+                        out.push(format!("{repo}/commit/{sha}"));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
     out
 }
 
@@ -1409,7 +1937,12 @@ Medium,\"GHSA-a,b\",\"py \"\"x\"\"\",2.0,2.1,not-fixed,PyApp/1.0-GCCcore-15.2.0\
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("| 1 | `zlib/1.3.1-GCCcore-15.2.0` | unclassified | Critical |"));
         assert!(markdown.contains("- `Gone/1.0`"));
-        let backport = render_backport(&summary, &ReachTable::builtin());
+        let backport = render_backport(
+            &summary,
+            &ReachTable::builtin(),
+            &findings,
+            &FilterDeps::empty(),
+        );
         assert!(backport.contains("## Unclassified"));
         assert!(backport.contains("`zlib/1.3.1-GCCcore-15.2.0`"));
         assert!(backport.contains("No module in this export is `cross-user` or `network-facing`."));
@@ -1526,8 +2059,81 @@ Low,CVE-7,Python,3.10.1,,not-fixed,Python/3.10.1-GCCcore-15.2.0\n";
         assert_eq!(patch.reach, REACH_UNCLASSIFIED);
         assert!(!by_module("Python/3.12.0-GCCcore-15.2.0").python_patch_in_place);
         assert!(!by_module("Python/3.10.1-GCCcore-15.2.0").python_patch_in_place);
-        let backport = render_backport(&summary, &ReachTable::builtin());
+        let backport = render_backport(
+            &summary,
+            &ReachTable::builtin(),
+            &findings,
+            &FilterDeps::empty(),
+        );
         assert!(backport.contains("`Python/3.11.5-GCCcore-15.2.0` fixed in 3.11.7"));
         assert!(backport.contains("No module in this export is `cross-user` or `network-facing`."));
+        assert!(backport.contains("No in-place patch was chosen."));
+    }
+
+    #[test]
+    fn a_json_export_maps_onto_installed_modules_and_scaffolds_the_patch() {
+        let installed: BTreeSet<String> = [
+            "jupyter_server/9.9.9-GCCcore-15.2.0".to_string(),
+            "cURL/9.8.0-GCCcore-15.2.0".to_string(),
+            "zlib/1.3.1-GCCcore-15.2.0".to_string(),
+        ]
+        .into();
+        let text = r#"{
+          "Results": [
+            {"Vulnerabilities": [
+              {
+                "VulnerabilityID": "SYNTH-2099-0101",
+                "PkgName": "jupyter-server",
+                "InstalledVersion": "9.9.9",
+                "FixedVersion": "9.9.10",
+                "Severity": "CRITICAL",
+                "References": ["https://example.invalid/jupyter-server/commit/0123456789abcdef0123456789abcdef01234567"]
+              }
+            ]},
+            {"Vulnerabilities": [
+              {
+                "VulnerabilityID": "SYNTH-2099-0102",
+                "PkgName": "curl",
+                "InstalledVersion": "9.8.0",
+                "FixedVersion": "9.8.1",
+                "Severity": "HIGH"
+              }
+            ]}
+          ]
+        }"#;
+        let findings = parse_findings(text, &installed).expect("json");
+        assert_eq!(findings[0].modules, ["jupyter_server/9.9.9-GCCcore-15.2.0"]);
+        assert_eq!(
+            findings[0].fix_commits,
+            ["https://example.invalid/jupyter-server/commit/0123456789abcdef0123456789abcdef01234567"]
+        );
+        assert_eq!(findings[1].modules, ["cURL/9.8.0-GCCcore-15.2.0"]);
+        let summary = summarize(
+            &findings,
+            &installed,
+            &document(Vec::new(), Vec::new()),
+            &ReachTable::builtin(),
+        );
+        assert_eq!(summary.backport_modules, 2);
+        let report = render_backport(
+            &summary,
+            &ReachTable::builtin(),
+            &findings,
+            &FilterDeps::empty(),
+        );
+        assert!(report.contains("### `jupyter_server-9.9.9_SYNTH-2099-0101.patch`"));
+        assert!(report.contains("patches = ['jupyter_server-9.9.9_SYNTH-2099-0101.patch']"));
+        assert!(report.contains("'<sha256 of the patch file>'"));
+        assert!(report.contains("https://example.invalid/jupyter-server/commit/0123456789abcdef0123456789abcdef01234567"));
+        assert!(report.contains("### `cURL-9.8.0_SYNTH-2099-0102.patch`"));
+        assert!(report.contains("## cURL and --filter-deps"));
+        assert!(report.contains("--filter-deps=cURL"));
+        let filtered = FilterDeps::parse(&["cURL".into()]).unwrap();
+        let held = render_backport(&summary, &ReachTable::builtin(), &findings, &filtered);
+        assert!(held.contains("## OS errata"));
+        assert!(held.contains("`cURL/9.8.0-GCCcore-15.2.0`"));
+        assert!(!held.contains("### `cURL-9.8.0_SYNTH-2099-0102.patch`"));
+        assert!(held.contains("cURL is in the filter-deps list"));
+        assert!(parse_findings(r#"{"hello":1}"#, &installed).is_err());
     }
 }

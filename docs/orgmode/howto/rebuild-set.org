@@ -129,6 +129,22 @@ under Python patch releases. Keeping the module path costs the in-place
 column. Renaming the easyconfig to that patch version costs the bump
 column. The note does not by itself put Python on the backport list.
 
+The same file then writes one patch scaffold per chosen advisory. The
+filename is ~<Name>-<version>_<ID>.patch~. The Python block is the
+~patches~ assignment and the checksum line to append after the source
+checksums. A fix commit URL is included when the export names one. A
+module that ~--filter-deps~ drops is listed under OS errata and gets no
+scaffold. A cURL finding states the ~--filter-deps=cURL~ trade-off: the
+flag changes only new builds, and it moves later cURL fixes to the
+operating-system errata stream at the cost of the newer protocol features
+the EasyBuild cURL build carries.
+
+~--findings~ may be Trivy, Grype, or OSV-scanner JSON instead of the CSV.
+The command detects the shape. A JSON row has no module column, so the
+installed list supplies it: the package name and version must match
+~Name/version-toolchain~. ~curl~ matches the module ~cURL~. ~curl~ does
+not match ~libcurl~.
+
 #+begin_src bash
 eb-stack rebuild-set \
   --findings findings.csv \

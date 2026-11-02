@@ -604,7 +604,12 @@ finding. A Python interpreter whose fix stays on the same minor is named
 under Python patch releases: the in-place column is the cost of keeping
 the module path, and the bump column is the cost of renaming the
 easyconfig to that patch version. The built-in name table is in the file.
-A site file's names are a second table.
+A site file's names are a second table. After that, OS errata lists
+backport modules that ~--filter-deps~ drops: they get no scaffold, and
+~backport~ on the JSON stays the reach class. Patch scaffolds follow,
+one heading per ~<Name>-<version>_<ID>.patch~, with the ~patches~
+assignment, the checksum line, the fixed version, and any fix commit
+URL. A cURL finding adds the ~--filter-deps=cURL~ note.
 
 ** ~fix-cost.json~, ~fix-cost.tsv~, ~fix-cost.md~
 

@@ -460,7 +460,13 @@ All notable changes to this project are documented here.
   interpreter whose fix stays on the same minor is annotated: keeping the
   module path costs the in-place column, and renaming the easyconfig to
   that patch version costs the bump column. The count line includes
-  `backport=N`. Findings schema version is 2.
+  `backport=N`. Findings schema version is 2. The same `backport.md`
+  adds a patch scaffold for each chosen module (`<Name>-<version>_<ID>.patch`,
+  the `patches` and `checksums` lines, and a fix commit URL when the export
+  names one). `--findings` also accepts Trivy, Grype, and OSV-scanner JSON.
+  A module `--filter-deps` drops is listed as the OS errata stream and is
+  not given a scaffold. A cURL finding records the `--filter-deps=cURL`
+  trade-off.
 - `rebuild-set --findings` also writes `fix-cost.json`, `fix-cost.tsv`, and
   `fix-cost.md`. Each advisory is one row. A version bump is the
   reverse-dependency closure from the rebuild set, and it breaks

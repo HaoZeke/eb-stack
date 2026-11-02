@@ -120,6 +120,18 @@ minor, so applying the patch release under the same module path costs
 ~bump~, the whole Python closure. The annotation does not classify the
 interpreter.
 
+The list then names the patch file ~<Name>-<version>_<ID>.patch~ and the
+~patches~ and ~checksums~ lines for each chosen advisory. The module name
+is kept when it is the same package (~cURL~ for a scanner row ~curl~). An
+extension keeps the bundle as the easyconfig and uses the package name in
+the filename. ~--filter-deps~ does not change the reach class. A dropped
+module is listed as the OS errata stream and is not given that scaffold.
+A cURL finding states the trade-off of ~--filter-deps=cURL~: new builds
+only, OS errata instead of the EasyBuild module, and the newer protocol
+features that choice gives up. ~--findings~ accepts Trivy, Grype, and
+OSV-scanner JSON. Those files do not name a module, so the installed list
+is the match.
+
 ~fix-cost.json~ is that same rebuild set, one advisory at a time. It does
 not walk the graph again. The bump cost is the union of the modules'
 reverse-dependency closures. The in-place cost is the patched module, a

@@ -1477,6 +1477,7 @@ mod tests {
             fixed_in: fixed.to_string(),
             fix_state: "fixed".to_string(),
             modules: vec![module.to_string()],
+            fix_commits: Vec::new(),
         }
     }
 

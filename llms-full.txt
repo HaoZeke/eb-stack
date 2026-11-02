@@ -2957,6 +2957,22 @@ under Python patch releases. Keeping the module path costs the in-place
 column. Renaming the easyconfig to that patch version costs the bump
 column. The note does not by itself put Python on the backport list.
 
+The same file then writes one patch scaffold per chosen advisory. The
+filename is `<Name>-<version>_<ID>.patch`. The Python block is the
+`patches` assignment and the checksum line to append after the source
+checksums. A fix commit URL is included when the export names one. A
+module that `--filter-deps` drops is listed under OS errata and gets no
+scaffold. A cURL finding states the `--filter-deps=cURL` trade-off: the
+flag changes only new builds, and it moves later cURL fixes to the
+operating-system errata stream at the cost of the newer protocol features
+the EasyBuild cURL build carries.
+
+`--findings` may be Trivy, Grype, or OSV-scanner JSON instead of the CSV.
+The command detects the shape. A JSON row has no module column, so the
+installed list supplies it: the package name and version must match
+`Name/version-toolchain`. `curl` matches the module `cURL`. `curl` does
+not match `libcurl`.
+
 ```bash
 eb-stack rebuild-set \
   --findings findings.csv \
@@ -6166,7 +6182,21 @@ does not match `libcurl` and `jupyterlab` does not match
 `jupyterlab-server`. A name in neither list is `unclassified`. `backport.md`
 lists a module only when its class is `cross-user` or `network-facing`.
 The count line includes `backport=N`. A class the file does not name is
-status 2.
+status 2. `backport.md` then writes a patch scaffold for each chosen
+advisory: `<Name>-<version>_<ID>.patch`, the `patches` assignment, and
+the checksum line to append. A fix commit URL is printed when the export
+names one (`fix_commits` in the CSV, separated by `;`, or a JSON
+reference whose path contains `/commit/`). A module `--filter-deps`
+drops is listed under OS errata and is not given a scaffold. `backport`
+on the findings document stays the reach class. A cURL or libcurl
+finding adds the `--filter-deps=cURL` trade-off. The EasyBuild name in
+that flag is `cURL`.
+
+`--findings` may also be Trivy (`Results`), Grype (`matches`), or
+OSV-scanner (`results` of packages) JSON. The shape is detected. Those
+exports do not name an EasyBuild module, so `--installed` is matched on
+the package name and version. A JSON file that is none of those three
+shapes is status 2.
 
 The same run also writes `fix-cost.json`, `fix-cost.tsv`, and
 `fix-cost.md`, one row per advisory. The reach class is the one above.
@@ -8191,7 +8221,12 @@ finding. A Python interpreter whose fix stays on the same minor is named
 under Python patch releases: the in-place column is the cost of keeping
 the module path, and the bump column is the cost of renaming the
 easyconfig to that patch version. The built-in name table is in the file.
-A site file's names are a second table.
+A site file's names are a second table. After that, OS errata lists
+backport modules that `--filter-deps` drops: they get no scaffold, and
+`backport` on the JSON stays the reach class. Patch scaffolds follow,
+one heading per `<Name>-<version>_<ID>.patch`, with the `patches`
+assignment, the checksum line, the fixed version, and any fix commit
+URL. A cURL finding adds the `--filter-deps=cURL` note.
 
 ## `fix-cost.json`, `fix-cost.tsv`, `fix-cost.md`
 
@@ -9428,6 +9463,18 @@ minor, so applying the patch release under the same module path costs
 `in_place`. Renaming the easyconfig to the new patch version costs
 `bump`, the whole Python closure. The annotation does not classify the
 interpreter.
+
+The list then names the patch file `<Name>-<version>_<ID>.patch` and the
+`patches` and `checksums` lines for each chosen advisory. The module name
+is kept when it is the same package (`cURL` for a scanner row `curl`). An
+extension keeps the bundle as the easyconfig and uses the package name in
+the filename. `--filter-deps` does not change the reach class. A dropped
+module is listed as the OS errata stream and is not given that scaffold.
+A cURL finding states the trade-off of `--filter-deps=cURL`: new builds
+only, OS errata instead of the EasyBuild module, and the newer protocol
+features that choice gives up. `--findings` accepts Trivy, Grype, and
+OSV-scanner JSON. Those files do not name a module, so the installed list
+is the match.
 
 `fix-cost.json` is that same rebuild set, one advisory at a time. It does
 not walk the graph again. The bump cost is the union of the modules'
