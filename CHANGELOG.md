@@ -73,6 +73,15 @@ All notable changes to this project are documented here.
   records the closures, the shard weights and a SHA-256 of the inputs.
   A line that cannot be resolved exits 1 and writes nothing.
   `eb_stack_shard` is the same command over MCP.
+- `stack oom --hooks FILE` reads `PARALLELISM_LIMITS` from an EESSI
+  `eb_hooks.py` in place of the hook rows of
+  `data/eessi-bot-resources.toml`. The file is parsed as Python and
+  never run. A key may be a module-level string constant such as
+  `CPU_TARGET_A64FX`, and a repeated key keeps its last value. A
+  `divide_by_factor` that is not an integer is a warning that names the
+  file and line (`16 // 2.5` is `6.0`, a float). An op other than
+  `divide_by_factor` or `set_maximum`, a `**` unpacking, or a key that
+  is not a string exits 1 with the line. `eb_stack_oom` takes `hooks`.
 
 ### Documentation
 

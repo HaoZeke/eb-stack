@@ -4705,9 +4705,11 @@ bigger node.
 
 The parallel level comes from the hook limits in
 `data/eessi-bot-resources.toml`. Pass `--resources` to try other limits
-or other nodes. Pull request 1608 ran out of memory in the PETSc test
-step on zen5 before software-layer-scripts #298 halved PETSc. With the
-current hooks, PETSc fits:
+or other nodes, or `--hooks` to read the limits from an `eb_hooks.py`
+(see [[*Read the limits from eb_hooks.py][below]]). Pull request 1608
+ran out of memory in the PETSc test step on zen5 before
+software-layer-scripts #298 halved PETSc. With the current hooks, PETSc
+fits:
 
 ```bash
 eb-stack stack oom \
@@ -4815,6 +4817,52 @@ The warning is the float. The estimate then uses 6, so 6 times 4.0 GiB
 is 24 GiB and the 32 GiB zen4 job fits. With the integer divider of 2
 the same build is the warning in the first example. The command still
 exits 0.
+
+# Read the limits from eb_hooks.py
+
+The hook rows in `data/eessi-bot-resources.toml` are a copy of
+`PARALLELISM_LIMITS`. `--hooks` reads that dict from an `eb_hooks.py`
+instead, so a hook change can be checked before it is merged. The file
+is parsed as Python, and nothing in it runs. The fixture
+`hooks/divide-2.5.py` has the layout of the real file and the libxc
+divider of 2.5:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/divide-2.5.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/divide-2.5.py
+warning: tests/oom_profile_fixtures/hooks/divide-2.5.py:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
+oom=0 fits=2 builds=5 nodes=2
+```
+
+The first line says how many rows were read, and from which file. The
+warning names the line of the `(divide_by_factor, 2.5)` tuple. The nodes
+still come from the bot resource table, so both zen4 nodes are checked.
+With every factor an integer there is no warning:
+
+```bash
+eb-stack stack oom --hooks tests/oom_profile_fixtures/hooks/integers.py
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+```
+
+The libxc and A64FX rows of `integers.py` are the ones in the bot
+resource table, so `--node` prints the same parallel levels with and
+without it. For the real hooks, pass the file from a software-layer-scripts
+checkout, `--hooks software-layer-scripts/eb_hooks.py`.
+
+A key is a string or a module-level string constant such as
+`CPU_TARGET_A64FX`. A key the dict repeats keeps its last value, as in
+Python. An op other than `divide_by_factor` or `set_maximum`, a `**`
+unpacking, or a key that is not a string stops the command with the
+file and the line: the parallel levels would be wrong without that row.
 
 # A memory limit instead of a core fraction
 
@@ -4957,6 +5005,9 @@ then.
   steps, test steps that run with a different parallel level, or memory
   that other jobs on the node use. It does not model `ulimit -u`, which
   `det_parallelism` also consults.
+- `--hooks` reads the `PARALLELISM_LIMITS` literal. It does not run
+  `post_ready_hook`; the rules that pick a row are the ones described
+  under [[*Where the numbers come from][where the numbers come from]].
 - `limit_by_memory` does not replace the estimate. The estimate follows
   the hooks that are in `eb_hooks.py`. The `--node` report is the
   comparison. A package with no measured `mib_per_job` stays
@@ -5851,7 +5902,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with neither `--easystack` nor `--node`. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with none of `--easystack`, `--node`, and `--hooks`. A `--hooks` file that is not valid Python, has no module-level `PARALLELISM_LIMITS`, or has a row the model cannot follow is status 1, and the message names the line. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -6986,8 +7037,20 @@ worst compile has not been measured, and the table does not guess.
 the current hook leaves beside `limit_by_memory(parallel, mib_per_job)`,
 which is `max(1, min(parallel, memory_mib // mib_per_job))`. The memory
 a hook would read on the build machine is the smallest cgroup v2
-`memory.max` on the process's cgroup path, else `MemTotal`. Pass
-`--easystack`, `--node`, or both. The command exits 0 when it warns. See
+`memory.max` on the process's cgroup path, else `MemTotal`.
+
+`--hooks` reads `PARALLELISM_LIMITS` from an EESSI `eb_hooks.py` in
+place of the hook rows of `data/eessi-bot-resources.toml`. The nodes
+and EasyBuild's `max-parallel` still come from the table. The file is
+parsed, not run. A key is a string or a module-level string constant
+such as `CPU_TARGET_A64FX`, and a key the dict repeats keeps its last
+value, as in Python. An op other than `divide_by_factor` or
+`set_maximum`, a `**` unpacking, or a key that is not a string is
+refused with its line: the parallel levels would be wrong without that
+row. The output starts with ~hooks: N PARALLELISM_LIMITS rows from
+FILE`, and a `divide~ that is not an integer is a warning that names the
+file and the line. Pass `--easystack`, `--node`, `--hooks`, or a mix.
+The command exits 0 when it warns. See
 [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/../howto/oom-profile.html.md).
 
 ## `stack bot-classify`
@@ -7632,10 +7695,10 @@ needs one `easystack` or `pr`. It returns the same report as
 stdout, and `hits`, one object per line. Warnings are not a tool error
 unless `strict` is true, when a remaining warning is.
 `eb_stack_oom` takes `easystack`, `arch`, `easyconfigs`,
-`installed`, `profile`, `resources`, `node`, and `job_memory`. It needs
-an easystack or a node. It returns the `stack oom` text, one object per
-warning, and `factor_warnings` for a divide factor that is not an
-integer. A warning is not a tool error.
+`installed`, `profile`, `resources`, `node`, `job_memory`, and `hooks`.
+It needs an easystack, a node, or hooks. It returns the `stack oom`
+text, one object per warning, and `factor_warnings` for a divide factor
+that is not an integer. A warning is not a tool error.
 `eb_stack_bot_classify` requires `files`. It returns `text`, the
 `stack bot-classify` stdout, `jobs`, one object per job, and `counts`.
 `eb_stack_batch` takes `arch`, `unsupported`, `known_failures`,

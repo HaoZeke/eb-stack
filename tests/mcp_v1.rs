@@ -3792,3 +3792,27 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         assert!(listed, "CLI subcommand {rendered} has no MCP tool");
     }
 }
+
+#[test]
+fn mcp_stack_oom_reads_an_eb_hooks_py() {
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/hooks/divide-2.5.py")
+        .display()
+        .to_string();
+    let response = call(1, "eb_stack_oom", json!({"hooks": hooks}));
+    let body = &response["result"]["structuredContent"];
+    let warnings = body["factor_warnings"].as_array().expect("factor_warnings");
+    assert_eq!(warnings.len(), 1, "{body}");
+    let warning = warnings[0].as_str().expect("warning text");
+    assert!(
+        warning.starts_with(&format!(
+            "warning: {hooks}:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5"
+        )),
+        "{warning}"
+    );
+    let text = body["text"].as_str().expect("text");
+    assert!(
+        text.starts_with(&format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n")),
+        "{text}"
+    );
+}

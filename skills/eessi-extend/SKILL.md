@@ -341,7 +341,9 @@ The hook ops are `divide_by_factor` (`max(1, parallel // factor)`) and
 `set_maximum` (`min(parallel, n)`). A CPU-target key overrides `*`.
 A64FX divides every other build by 4. A divide factor that is not an
 integer is a warning: `16 // 2.5` is the float `6.0`. Use an integer.
-`eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
+`--hooks software-layer-scripts/eb_hooks.py` reads `PARALLELISM_LIMITS`
+from the file instead of the bundled copy, and the warning names the
+line. `eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
 the message never prints. That is upstream. Do not patch it from here.
 
 `eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook

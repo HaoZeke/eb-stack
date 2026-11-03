@@ -213,6 +213,7 @@ fn a_target_without_a_bot_node_is_reported_not_checked() {
 fn an_easystack_is_required_and_a_directory_is_refused() {
     let (code, _, stderr) = run(&["stack", "oom"]);
     assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("--hooks"), "{stderr}");
     let (code, _, stderr) = run(&["stack", "oom", "--easystack", &arg("easystacks")]);
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("is a directory"), "{stderr}");
@@ -242,6 +243,104 @@ fn a_non_integer_divide_warns_and_the_estimate_uses_six() {
         stdout.ends_with("oom=0 fits=1 builds=5 nodes=1\n"),
         "{stdout}"
     );
+}
+
+#[test]
+fn an_eb_hooks_py_with_a_float_divider_warns_at_its_line() {
+    let hooks = arg("hooks/divide-2.5.py");
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--hooks",
+        &hooks,
+        "--easystack",
+        &arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml"),
+    ]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n\
+             warning: {hooks}:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.\n\
+             oom=0 fits=2 builds=5 nodes=2\n"
+        )
+    );
+}
+
+#[test]
+fn an_eb_hooks_py_with_integer_dividers_does_not_warn() {
+    let hooks = arg("hooks/integers.py");
+    let (code, stdout, stderr) = run(&["stack", "oom", "--hooks", &hooks]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n")
+    );
+
+    // The fixture's libxc and A64FX rows are the bundled table's, so the
+    // parallel levels match.
+    let nodes = [
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ];
+    let (_, bundled, _) = run(&[&["stack", "oom"][..], &nodes].concat());
+    let (code, read, stderr) = run(&[&["stack", "oom", "--hooks", &hooks][..], &nodes].concat());
+    assert_eq!(code, 0, "{stderr}");
+    for line in [
+        "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n",
+        "  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured\n",
+        "  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured\n",
+    ] {
+        assert!(bundled.contains(line), "{bundled}");
+        assert!(read.contains(line), "{read}");
+    }
+    assert!(!read.contains("warning:"), "{read}");
+
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--hooks",
+        &hooks,
+        "--easystack",
+        &arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml"),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("  parallel 8: 16 cores, eb_hooks.py divides libxc by 2\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("warning:"), "{stdout}");
+    assert!(
+        stdout.ends_with("oom=1 fits=1 builds=5 nodes=2\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn an_eb_hooks_py_row_the_model_cannot_follow_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("eb_hooks.py");
+    std::fs::write(
+        &hooks,
+        "PARALLELISM_LIMITS = {\n    'libxc': {'*': (limit_by_memory, 6400)},\n}\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["stack", "oom", "--hooks", hooks.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{}:2: PARALLELISM_LIMITS row for libxc on * uses limit_by_memory; the ops are divide_by_factor and set_maximum",
+            hooks.display()
+        )),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty(), "{stdout}");
 }
 
 #[test]
@@ -443,6 +542,6 @@ fn the_how_to_shows_the_real_output() {
             "{command}"
         );
     }
-    assert_eq!(oom_blocks, 7);
+    assert_eq!(oom_blocks, 9);
     assert_eq!(rss_blocks, 1);
 }

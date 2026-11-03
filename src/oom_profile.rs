@@ -13,9 +13,11 @@
 //! The hook ops are `divide_by_factor` and `set_maximum` from
 //! `eb_hooks.py`. A divide factor that is not an integer makes Python's
 //! `//` return a float (`16 // 2.5` is `6.0`); the command warns and uses
-//! the numeric floor for the estimate. `data/job-memory.toml` holds
-//! `mib_per_job` for `limit_by_memory`. A row with no number is
-//! unmeasured. `--node` prints the hook parallelism beside that rule.
+//! the numeric floor for the estimate. `--hooks` reads the rows from an
+//! `eb_hooks.py` instead of the table, through [`crate::eb_hooks`].
+//! `data/job-memory.toml` holds `mib_per_job` for `limit_by_memory`. A row
+//! with no number is unmeasured. `--node` prints the hook parallelism
+//! beside that rule.
 
 use crate::arch_support::{plan_requirers, split_easyconfig_filename};
 use crate::build_order::{closure_against_installed, reverse_uses, Choice, ModuleKey};
@@ -364,14 +366,14 @@ impl std::fmt::Debug for DivideFactor {
 }
 
 impl DivideFactor {
-    fn from_integer(value: u32) -> Self {
+    pub(crate) fn from_integer(value: u32) -> Self {
         Self {
             bits: f64::from(value).to_bits(),
             integer_literal: true,
         }
     }
 
-    fn from_float(value: f64) -> Self {
+    pub(crate) fn from_float(value: f64) -> Self {
         Self {
             bits: value.to_bits(),
             integer_literal: false,
@@ -519,6 +521,9 @@ pub struct HookLimit {
     pub target: String,
     /// The limit.
     pub op: LimitOp,
+    /// Line of the `(op, argument)` tuple in the `eb_hooks.py` the row was
+    /// read from. `None` for a row of the bot resource table.
+    pub line: Option<usize>,
 }
 
 /// The bot job table and the EESSI hook limits.
@@ -688,6 +693,7 @@ impl BotResources {
                 software: limit.software,
                 target: limit.target,
                 op,
+                line: None,
             });
         }
         Ok(Self {
@@ -731,7 +737,8 @@ impl BotResources {
     ///
     /// `eb_hooks.py` computes `max(1, parallel // factor)`. A non-integer
     /// factor makes `//` return a float: `16 // 2.5` is `6.0`. A whole
-    /// number written as a float does the same: `16 // 2.0` is `8.0`.
+    /// number written as a float does the same: `16 // 2.0` is `8.0`. A
+    /// row read from an `eb_hooks.py` names its file and line.
     pub fn factor_warnings(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for limit in &self.limits {
@@ -748,8 +755,12 @@ impl BotResources {
             } else {
                 format!("{shown}, which is not an integer")
             };
+            let at = limit
+                .line
+                .map(|line| format!("{}:{line}: ", self.hooks_source))
+                .unwrap_or_default();
             lines.push(format!(
-                "warning: PARALLELISM_LIMITS divide_by_factor for {who} on {} uses {kind}; eb_hooks.py computes max(1, parallel // factor), and {}. Use an integer factor.",
+                "warning: {at}PARALLELISM_LIMITS divide_by_factor for {who} on {} uses {kind}; eb_hooks.py computes max(1, parallel // factor), and {}. Use an integer factor.",
                 limit.target,
                 float_example(factor)
             ));
@@ -1489,6 +1500,9 @@ pub struct OomCheckRequest {
     pub nodes: Vec<String>,
     /// Override `data/job-memory.toml`.
     pub job_memory: Option<PathBuf>,
+    /// An EESSI `eb_hooks.py` whose `PARALLELISM_LIMITS` replace the hook
+    /// rows of the bot resource table.
+    pub hooks: Option<PathBuf>,
 }
 
 /// What `stack oom` prints.
@@ -1512,16 +1526,16 @@ pub struct OomCheckReport {
 /// Estimate each plan build's peak on each bot node and warn where it
 /// reaches the job's memory.
 pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
-    if request.easystacks.is_empty() && request.nodes.is_empty() {
+    if request.easystacks.is_empty() && request.nodes.is_empty() && request.hooks.is_none() {
         return Err(usage(
-            "pass at least one --easystack, or --node to compare parallelism",
+            "pass at least one --easystack, --node to compare parallelism, or --hooks to check an eb_hooks.py",
         ));
     }
     let mut nodes = Vec::new();
     for text in &request.nodes {
         nodes.push(parse_node_size(text).map_err(usage)?);
     }
-    let resources = match &request.resources {
+    let mut resources = match &request.resources {
         Some(path) => BotResources::load(path)?,
         None => BotResources::bundled()?,
     };
@@ -1529,9 +1543,21 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         Some(path) => JobMemoryTable::load(path)?,
         None => JobMemoryTable::bundled()?,
     };
+    let mut stdout = String::new();
+    if let Some(path) = &request.hooks {
+        let file = path.display().to_string();
+        let text = std::fs::read_to_string(path).with_context(|| format!("--hooks {file}"))?;
+        let hooks = crate::eb_hooks::parse_hooks(&text, &file)?;
+        stdout.push_str(&format!(
+            "hooks: {} {} rows from {file}\n",
+            hooks.limits.len(),
+            crate::eb_hooks::LIMITS_NAME
+        ));
+        resources.limits = hooks.limits;
+        resources.hooks_source = file;
+    }
     let factor_warnings = resources.factor_warnings();
     if request.easystacks.is_empty() {
-        let mut stdout = String::new();
         for line in &factor_warnings {
             stdout.push_str(line);
             stdout.push('\n');
@@ -1623,7 +1649,6 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         }
     }
 
-    let mut stdout = String::new();
     for arch in &unknown_arches {
         stdout.push_str(&format!(
             "{arch} has no bot node in the bot resource table, so it is not checked\n"
