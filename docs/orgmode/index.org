@@ -91,6 +91,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
    *What is the newest stable upstream release of a recipe?* → :doc:`howto/package-latest`
 
+   *Where does the reproduction grind stand?* → :doc:`howto/repro-summary`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -187,6 +189,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/stack-easystack
    howto/recipe-identity
    howto/package-latest
+   howto/repro-summary
 
 .. toctree::
    :maxdepth: 2
@@ -348,7 +351,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]],
     [[file:howto/stack-easystack.org][write an easystack from a stack lock]],
     [[file:howto/recipe-identity.org][read the easyblock, templates, and hierarchy]],
-    [[file:howto/package-latest.org][report the newest stable upstream release]].
+    [[file:howto/package-latest.org][report the newest stable upstream release]],
+    [[file:howto/repro-summary.org][read the reproduction scoreboard]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],

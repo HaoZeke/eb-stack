@@ -73,6 +73,7 @@ All notable changes to this project are documented here.
   toolchain hierarchy EasyBuild derives.
 - How to report the newest stable upstream release of an EasyBuild
   recipe, and why a listed version was kept or dropped.
+- How to read the reproduction scoreboard and hold it to a ratchet file.
 
 ## 0.4.0 - 2026-11-01
 

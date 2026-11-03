@@ -122,7 +122,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md),
     [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md),
     [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md),
-    [report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md).
+    [report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md),
+    [read the reproduction scoreboard](https://eb-stack.rgoswami.me/howto/repro-summary.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5545,6 +5546,76 @@ uses the PyPI backend. That command queries the network, and the newest
 stable release moves, so the page does not freeze a version number from
 one run. `eb_package_latest` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Read the reproduction scoreboard
+
+What it does: `repro summary` reads every `*.json` case score under
+`--scores` and prints the scoreboard. `Score` is `EXACT`, `SEMANTIC`, or
+`MATERIAL`. `Allowance` is how many hand-added lines the case still
+forgives. `Residual` is the raw diff lines left after that allowance.
+`--ratchet` checks those allowance counts against a committed file.
+
+Why you'd use it: the reproduction suite writes one JSON file per case.
+The table is the grind's current position, and the ratchet fails the
+run when an allowance grows.
+
+# Two cases and a ratchet that holds
+
+The two files below are the shape `repro summary` reads. The GROMACS
+case still forgives one line. ScaFaCoS has an empty allowance and a
+semantic diff, so its residual in this file is 0.
+
+```bash
+mkdir -p /tmp/repro-scores
+cat > /tmp/repro-scores/reproduces_gromacs.json <<'EOF'
+{
+  "case": "reproduces_gromacs",
+  "pull_request": null,
+  "source": "source.eb",
+  "target": "target.eb",
+  "score": "EXACT",
+  "allowance": ["    ('pybind11', '2.12.0'),"],
+  "stale_allowance": [],
+  "residual_lines": 0
+}
+EOF
+cat > /tmp/repro-scores/reproduces_scafacos.json <<'EOF'
+{
+  "case": "reproduces_scafacos",
+  "pull_request": null,
+  "source": "source.eb",
+  "target": "target.eb",
+  "score": "SEMANTIC",
+  "allowance": [],
+  "stale_allowance": [],
+  "residual_lines": 0
+}
+EOF
+cat > /tmp/repro-ratchet.json <<'EOF'
+{"note":"example","cases":{"reproduces_gromacs":1,"reproduces_scafacos":0},"total":1}
+EOF
+eb-stack repro summary --scores /tmp/repro-scores --ratchet /tmp/repro-ratchet.json
+```
+
+That command printed:
+
+```
+| Case | PR | Score | Allowance | Residual |
+|---+---+---+---+---|
+| reproduces_gromacs | - | EXACT | 1 | 0 |
+| reproduces_scafacos | - | SEMANTIC | 0 | 0 |
+
+2 cases: 1 EXACT, 1 SEMANTIC, 0 MATERIAL; allowance total 1
+ratchet: 2 cases hold at 1
+```
+
+A pull request number prints as `#N`. A case with none prints `-`.
+`--ratchet` exits nonzero when a case's allowance disagrees with the
+file, when a case is missing, or when `total` is not the sum of
+`cases`. `--json` prints the case records instead of the table. An
+empty `--scores` directory is an error. `eb_repro_summary` is the same
+command. See [reproduction fidelity](https://eb-stack.rgoswami.me/../explanation/fidelity.html.md)
+and [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary
 
