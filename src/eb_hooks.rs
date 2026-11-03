@@ -9,6 +9,10 @@
 //! The file is parsed, never run. A row this reader cannot model is an
 //! error that names its line, because the parallel levels would be wrong
 //! without it.
+//!
+//! The same file is checked for a statement that adds to a name and drops
+//! the result: `msg+ "..."` on a line of its own builds a longer string and
+//! throws it away, where `msg += "..."` appends.
 
 use crate::oom_profile::{DivideFactor, HookLimit, LimitOp};
 use anyhow::{anyhow, bail, Result};
@@ -32,9 +36,39 @@ pub struct HooksFile {
     /// `PARALLELISM_LIMITS` rows. A key the dict repeats keeps its last
     /// value, as Python does.
     pub limits: Vec<HookLimit>,
+    /// Statements that add to a name and drop the sum.
+    pub dropped_sums: Vec<DroppedSum>,
 }
 
-/// Read `PARALLELISM_LIMITS` from `text`.
+/// `name + ...` as a statement of its own: the sum is computed and lost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedSum {
+    /// 1-based line of the statement.
+    pub line: usize,
+    /// The innermost `def` around the statement. `None` at module level.
+    pub function: Option<String>,
+    /// The name left of `+`, `msg`.
+    pub name: String,
+    /// The statement's first source line, trimmed.
+    pub statement: String,
+}
+
+impl DroppedSum {
+    /// The warning `stack oom` prints, with `file` as the location.
+    pub fn message(&self, file: &str) -> String {
+        let place = match &self.function {
+            Some(function) => format!("in {function}"),
+            None => "at module level".to_string(),
+        };
+        let name = &self.name;
+        format!(
+            "warning: {file}:{}: {} {place} adds to {name} and drops the result, so {name} does not change; {name} += appends",
+            self.line, self.statement
+        )
+    }
+}
+
+/// Read `PARALLELISM_LIMITS` and the dropped sums from `text`.
 ///
 /// `file` names the file in errors and in each row's location. The last
 /// module-level assignment to `PARALLELISM_LIMITS` is the one
@@ -63,7 +97,12 @@ pub fn parse_hooks(text: &str, file: &str) -> Result<HooksFile> {
         );
     };
     let limits = reader.limits(dict)?;
-    Ok(HooksFile { limits })
+    let mut dropped_sums = Vec::new();
+    collect_dropped_sums(&suite, None, text, &mut dropped_sums);
+    Ok(HooksFile {
+        limits,
+        dropped_sums,
+    })
 }
 
 /// The last module-level `PARALLELISM_LIMITS = ...`, and the string
@@ -283,6 +322,89 @@ impl Reader<'_> {
     }
 }
 
+/// Every `name + ...` expression statement, in source order.
+fn collect_dropped_sums(
+    statements: &[ast::Stmt],
+    function: Option<&str>,
+    text: &str,
+    out: &mut Vec<DroppedSum>,
+) {
+    for statement in statements {
+        match statement {
+            ast::Stmt::Expr(expr) => {
+                let ast::Expr::BinOp(sum) = expr.value.as_ref() else {
+                    continue;
+                };
+                let ast::Expr::Name(name) = sum.left.as_ref() else {
+                    continue;
+                };
+                if !matches!(sum.op, ast::Operator::Add) {
+                    continue;
+                }
+                let range = expr.range();
+                let source = text
+                    .get(offset(range.start())..offset(range.end()))
+                    .unwrap_or("");
+                out.push(DroppedSum {
+                    line: line_at(text, offset(range.start())),
+                    function: function.map(str::to_string),
+                    name: name.id.to_string(),
+                    statement: source.lines().next().unwrap_or("").trim().to_string(),
+                });
+            }
+            ast::Stmt::FunctionDef(def) => {
+                collect_dropped_sums(&def.body, Some(def.name.as_str()), text, out);
+            }
+            ast::Stmt::AsyncFunctionDef(def) => {
+                collect_dropped_sums(&def.body, Some(def.name.as_str()), text, out);
+            }
+            ast::Stmt::ClassDef(class) => collect_dropped_sums(&class.body, function, text, out),
+            ast::Stmt::For(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                collect_dropped_sums(&block.orelse, function, text, out);
+            }
+            ast::Stmt::AsyncFor(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                collect_dropped_sums(&block.orelse, function, text, out);
+            }
+            ast::Stmt::While(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                collect_dropped_sums(&block.orelse, function, text, out);
+            }
+            ast::Stmt::If(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                collect_dropped_sums(&block.orelse, function, text, out);
+            }
+            ast::Stmt::With(block) => collect_dropped_sums(&block.body, function, text, out),
+            ast::Stmt::AsyncWith(block) => collect_dropped_sums(&block.body, function, text, out),
+            ast::Stmt::Match(block) => {
+                for case in &block.cases {
+                    collect_dropped_sums(&case.body, function, text, out);
+                }
+            }
+            ast::Stmt::Try(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                for handler in &block.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_dropped_sums(&handler.body, function, text, out);
+                }
+                collect_dropped_sums(&block.orelse, function, text, out);
+                collect_dropped_sums(&block.finalbody, function, text, out);
+            }
+            ast::Stmt::TryStar(block) => {
+                collect_dropped_sums(&block.body, function, text, out);
+                for handler in &block.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_dropped_sums(&handler.body, function, text, out);
+                }
+                collect_dropped_sums(&block.orelse, function, text, out);
+                collect_dropped_sums(&block.finalbody, function, text, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn offset(size: TextSize) -> usize {
     u32::from(size) as usize
 }
@@ -437,5 +559,49 @@ PARALLELISM_LIMITS = {TARGET: (set_maximum, 8)}
             let error = refusal(text);
             assert!(error.contains(expected), "{text:?}: {error}");
         }
+    }
+
+    #[test]
+    fn a_sum_statement_is_reported_and_an_augmented_assignment_is_not() {
+        let text = "\
+def post_ready_hook(self):
+    msg = 'limiting parallelism to %s '
+    msg+ 'to avoid out-of-memory failures'
+    note = 'a'
+    note += 'b'
+    if self:
+        try:
+            pass
+        except OSError:
+            note + 'c'
+    return msg
+
+total = 1
+total + 2
+'''A docstring is an expression statement too, and is not a sum.'''
+PARALLELISM_LIMITS = {}
+";
+        let hooks = parse_hooks(text, "hooks.py").unwrap();
+        assert!(hooks.limits.is_empty());
+        let found: Vec<(usize, Option<&str>, &str)> = hooks
+            .dropped_sums
+            .iter()
+            .map(|sum| (sum.line, sum.function.as_deref(), sum.name.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (3, Some("post_ready_hook"), "msg"),
+                (10, Some("post_ready_hook"), "note"),
+                (14, None, "total"),
+            ]
+        );
+        assert_eq!(
+            hooks.dropped_sums[0].message("hooks.py"),
+            "warning: hooks.py:3: msg+ 'to avoid out-of-memory failures' in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends"
+        );
+        assert!(hooks.dropped_sums[2]
+            .message("hooks.py")
+            .contains("total + 2 at module level adds to total"));
     }
 }

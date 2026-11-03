@@ -1164,7 +1164,10 @@ value, as in Python. An op other than ~divide_by_factor~ or
 refused with its line: the parallel levels would be wrong without that
 row. The output starts with ~hooks: N PARALLELISM_LIMITS rows from
 FILE~, and a ~divide~ that is not an integer is a warning that names the
-file and the line. Pass ~--easystack~, ~--node~, ~--hooks~, or a mix.
+file and the line. A statement that adds to a name and drops the sum,
+such as ~msg+ "..."~ in ~post_ready_hook~, is a warning that names the
+file, the line, and the function; ~msg += "..."~ is not. Pass
+~--easystack~, ~--node~, ~--hooks~, or a mix.
 The command exits 0 when it warns. See
 [[file:../howto/oom-profile.org][warn before a bot job runs out of memory]].
 
@@ -1812,8 +1815,9 @@ unless ~strict~ is true, when a remaining warning is.
 ~eb_stack_oom~ takes ~easystack~, ~arch~, ~easyconfigs~,
 ~installed~, ~profile~, ~resources~, ~node~, ~job_memory~, and ~hooks~.
 It needs an easystack, a node, or hooks. It returns the ~stack oom~
-text, one object per warning, and ~factor_warnings~ for a divide factor
-that is not an integer. A warning is not a tool error.
+text, one object per warning, ~factor_warnings~ for a divide factor
+that is not an integer, and ~hook_warnings~ for a dropped sum in the
+~hooks~ file. A warning is not a tool error.
 ~eb_stack_bot_classify~ requires ~files~. It returns ~text~, the
 ~stack bot-classify~ stdout, ~jobs~, one object per job, and ~counts~.
 ~eb_stack_batch~ takes ~arch~, ~unsupported~, ~known_failures~,

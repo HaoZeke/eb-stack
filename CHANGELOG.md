@@ -82,6 +82,12 @@ All notable changes to this project are documented here.
   file and line (`16 // 2.5` is `6.0`, a float). An op other than
   `divide_by_factor` or `set_maximum`, a `**` unpacking, or a key that
   is not a string exits 1 with the line. `eb_stack_oom` takes `hooks`.
+- `stack oom --hooks FILE` warns on a statement that adds to a name and
+  drops the sum, such as `msg+ "..."` in the EESSI `post_ready_hook`:
+  the second half of its log message never prints. The warning names
+  the file, the line, and the function; `msg += "..."` is not reported,
+  and the parallel levels do not change. `eb_stack_oom` returns these
+  as `hook_warnings`.
 
 ### Documentation
 

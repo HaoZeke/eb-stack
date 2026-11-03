@@ -1521,6 +1521,9 @@ pub struct OomCheckReport {
     pub unknown_arches: Vec<String>,
     /// Divide factors that are not integers. Also included in `stdout`.
     pub factor_warnings: Vec<String>,
+    /// `--hooks` statements that add to a name and drop the sum, such as
+    /// `msg+ "..."`. Also included in `stdout`.
+    pub hook_warnings: Vec<String>,
 }
 
 /// Estimate each plan build's peak on each bot node and warn where it
@@ -1544,6 +1547,7 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         None => JobMemoryTable::bundled()?,
     };
     let mut stdout = String::new();
+    let mut hook_warnings = Vec::new();
     if let Some(path) = &request.hooks {
         let file = path.display().to_string();
         let text = std::fs::read_to_string(path).with_context(|| format!("--hooks {file}"))?;
@@ -1553,12 +1557,17 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
             hooks.limits.len(),
             crate::eb_hooks::LIMITS_NAME
         ));
+        hook_warnings = hooks
+            .dropped_sums
+            .iter()
+            .map(|sum| sum.message(&file))
+            .collect();
         resources.limits = hooks.limits;
         resources.hooks_source = file;
     }
     let factor_warnings = resources.factor_warnings();
     if request.easystacks.is_empty() {
-        for line in &factor_warnings {
+        for line in factor_warnings.iter().chain(&hook_warnings) {
             stdout.push_str(line);
             stdout.push('\n');
         }
@@ -1573,6 +1582,7 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
             partitions: 0,
             unknown_arches: Vec::new(),
             factor_warnings,
+            hook_warnings,
         });
     }
     let profile = match &request.profile {
@@ -1654,7 +1664,7 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
             "{arch} has no bot node in the bot resource table, so it is not checked\n"
         ));
     }
-    for line in &factor_warnings {
+    for line in factor_warnings.iter().chain(&hook_warnings) {
         stdout.push_str(line);
         stdout.push('\n');
     }
@@ -1683,6 +1693,7 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
         partitions: partitions.len(),
         unknown_arches,
         factor_warnings,
+        hook_warnings,
     })
 }
 

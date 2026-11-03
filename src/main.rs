@@ -1542,7 +1542,8 @@ enum StackCommand {
     /// `data/eessi-bot-resources.toml` is a warning with remedies. A
     /// `divide_by_factor` that is not an integer is a warning too: Python's
     /// `//` then returns a float (`16 // 2.5` is `6.0`). `--hooks` reads
-    /// the limits from an `eb_hooks.py`. `--node` prints the hook
+    /// the limits from an `eb_hooks.py` and also warns on a statement such
+    /// as `msg+ "..."` that drops its sum. `--node` prints the hook
     /// parallelism beside `limit_by_memory` for a core count and a memory.
     /// The command does not fail on a warning. Pass `--easystack`,
     /// `--node`, `--hooks`, or a mix.
@@ -1586,7 +1587,8 @@ enum StackCommand {
         /// of the hook rows of the bot resource table. The nodes and
         /// EasyBuild's max-parallel still come from the table. The file is
         /// parsed, not run. An op other than `divide_by_factor` or
-        /// `set_maximum` is refused with its line.
+        /// `set_maximum` is refused with its line. A statement that adds to
+        /// a name and drops the sum, such as `msg+ "..."`, is a warning.
         #[arg(long)]
         hooks: Option<PathBuf>,
     },

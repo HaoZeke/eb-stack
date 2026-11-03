@@ -344,6 +344,53 @@ fn an_eb_hooks_py_row_the_model_cannot_follow_is_refused() {
 }
 
 #[test]
+fn a_dropped_msg_sum_in_eb_hooks_py_warns_at_its_line() {
+    let hooks = arg("hooks/msg-plus.py");
+    let warning = format!(
+        "warning: {hooks}:30: msg+ \"to avoid out-of-memory failures during building/testing\" in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends\n"
+    );
+    let (code, stdout, stderr) = run(&["stack", "oom", "--hooks", &hooks]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n{warning}")
+    );
+
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--hooks",
+        &hooks,
+        "--easystack",
+        &arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml"),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with(&format!(
+            "hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n{warning}libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("oom=1 fits=1 builds=5 nodes=2\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn an_eb_hooks_py_that_appends_with_plus_equals_does_not_warn() {
+    let hooks = arg("hooks/msg-plus-equals.py");
+    let (code, stdout, stderr) = run(&["stack", "oom", "--hooks", &hooks]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n")
+    );
+}
+
+#[test]
 fn node_sizes_compare_the_hook_with_the_memory_rule() {
     let (code, stdout, stderr) = run(&[
         "stack",
@@ -542,6 +589,6 @@ fn the_how_to_shows_the_real_output() {
             "{command}"
         );
     }
-    assert_eq!(oom_blocks, 9);
+    assert_eq!(oom_blocks, 10);
     assert_eq!(rss_blocks, 1);
 }

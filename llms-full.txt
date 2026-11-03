@@ -4791,7 +4791,8 @@ msg+ "to avoid out-of-memory failures during building/testing"
 The second statement adds nothing. `msg + "..."` is an expression, and
 the result is thrown away. The operator that appends is `+=`. The line
 that prints stops after the CPU target. This is upstream `eb_hooks.py`.
-eb-stack does not patch it.
+eb-stack does not patch it. `--hooks` reports it with its line (see
+[[*Read the limits from eb_hooks.py][below]]).
 
 # A divide factor that is not an integer
 
@@ -4863,6 +4864,23 @@ A key is a string or a module-level string constant such as
 Python. An op other than `divide_by_factor` or `set_maximum`, a `**`
 unpacking, or a key that is not a string stops the command with the
 file and the line: the parallel levels would be wrong without that row.
+
+The same file is checked for a statement that adds to a name and drops
+the sum, such as the `msg+` in `post_ready_hook`. The fixture
+`hooks/msg-plus.py` has that statement:
+
+```bash
+eb-stack stack oom --hooks tests/oom_profile_fixtures/hooks/msg-plus.py
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/msg-plus.py
+warning: tests/oom_profile_fixtures/hooks/msg-plus.py:30: msg+ "to avoid out-of-memory failures during building/testing" in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends
+```
+
+The warning names the function and the line. It does not change a
+parallel level, and the command still exits 0. `msg += "..."`, as in
+`hooks/msg-plus-equals.py`, appends and is not reported.
 
 # A memory limit instead of a core fraction
 
@@ -5008,6 +5026,8 @@ then.
 - `--hooks` reads the `PARALLELISM_LIMITS` literal. It does not run
   `post_ready_hook`; the rules that pick a row are the ones described
   under [[*Where the numbers come from][where the numbers come from]].
+  Of the rest of the file it checks only for a statement that drops a
+  sum. Other mistakes in the hooks are not found.
 - `limit_by_memory` does not replace the estimate. The estimate follows
   the hooks that are in `eb_hooks.py`. The `--node` report is the
   comparison. A package with no measured `mib_per_job` stays
@@ -7049,7 +7069,10 @@ value, as in Python. An op other than `divide_by_factor` or
 refused with its line: the parallel levels would be wrong without that
 row. The output starts with ~hooks: N PARALLELISM_LIMITS rows from
 FILE`, and a `divide~ that is not an integer is a warning that names the
-file and the line. Pass `--easystack`, `--node`, `--hooks`, or a mix.
+file and the line. A statement that adds to a name and drops the sum,
+such as `msg+ "..."` in `post_ready_hook`, is a warning that names the
+file, the line, and the function; `msg += "..."` is not. Pass
+`--easystack`, `--node`, `--hooks`, or a mix.
 The command exits 0 when it warns. See
 [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/../howto/oom-profile.html.md).
 
@@ -7697,8 +7720,9 @@ unless `strict` is true, when a remaining warning is.
 `eb_stack_oom` takes `easystack`, `arch`, `easyconfigs`,
 `installed`, `profile`, `resources`, `node`, `job_memory`, and `hooks`.
 It needs an easystack, a node, or hooks. It returns the `stack oom`
-text, one object per warning, and `factor_warnings` for a divide factor
-that is not an integer. A warning is not a tool error.
+text, one object per warning, `factor_warnings` for a divide factor
+that is not an integer, and `hook_warnings` for a dropped sum in the
+`hooks` file. A warning is not a tool error.
 `eb_stack_bot_classify` requires `files`. It returns `text`, the
 `stack bot-classify` stdout, `jobs`, one object per job, and `counts`.
 `eb_stack_batch` takes `arch`, `unsupported`, `known_failures`,

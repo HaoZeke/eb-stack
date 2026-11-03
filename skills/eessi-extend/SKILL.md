@@ -345,6 +345,7 @@ integer is a warning: `16 // 2.5` is the float `6.0`. Use an integer.
 from the file instead of the bundled copy, and the warning names the
 line. `eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
 the message never prints. That is upstream. Do not patch it from here.
+`--hooks` prints it as a warning with the line and `post_ready_hook`.
 
 `eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook
 with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`.

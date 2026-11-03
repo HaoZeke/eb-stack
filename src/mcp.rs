@@ -540,7 +540,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_oom",
-            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A divide_by_factor that is not an integer is also a warning: Python's // returns a float (16 // 2.5 is 6.0). hooks is an eb_hooks.py whose PARALLELISM_LIMITS replace the table's hook rows. node is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET and prints the hook parallelism beside limit_by_memory. Pass easystack, node, or hooks. A warning is not an error.",
+            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A divide_by_factor that is not an integer is also a warning: Python's // returns a float (16 // 2.5 is 6.0). hooks is an eb_hooks.py whose PARALLELISM_LIMITS replace the table's hook rows; a statement such as msg+ \"...\" that drops its sum is returned in hook_warnings. node is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET and prints the hook parallelism beside limit_by_memory. Pass easystack, node, or hooks. A warning is not an error.",
             &[],
             &[
                 ("easystack", "array"),
@@ -3442,6 +3442,7 @@ fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
         "nodes": report.partitions,
         "unknown_arch": report.unknown_arches,
         "factor_warnings": report.factor_warnings,
+        "hook_warnings": report.hook_warnings,
     }))
 }
 

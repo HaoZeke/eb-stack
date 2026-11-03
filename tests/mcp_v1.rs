@@ -3815,4 +3815,22 @@ fn mcp_stack_oom_reads_an_eb_hooks_py() {
         text.starts_with(&format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n")),
         "{text}"
     );
+    assert_eq!(body["hook_warnings"], json!([]), "{body}");
+}
+
+#[test]
+fn mcp_stack_oom_returns_the_dropped_msg_sum() {
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/hooks/msg-plus.py")
+        .display()
+        .to_string();
+    let response = call(1, "eb_stack_oom", json!({"hooks": hooks}));
+    let body = &response["result"]["structuredContent"];
+    let warning = format!(
+        "warning: {hooks}:30: msg+ \"to avoid out-of-memory failures during building/testing\" in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends"
+    );
+    assert_eq!(body["hook_warnings"], json!([warning]), "{body}");
+    assert_eq!(body["factor_warnings"], json!([]), "{body}");
+    let text = body["text"].as_str().expect("text");
+    assert!(text.ends_with(&format!("{warning}\n")), "{text}");
 }
