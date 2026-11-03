@@ -36,6 +36,9 @@ pub struct ShardLine {
     /// Whether the line forces a rebuild (`--rebuild` or `--force`), so its
     /// own module counts as not installed.
     pub forced: bool,
+    /// Whether EasyBuild fetches the line's easyconfig itself
+    /// (`--from-pr` or `--from-commit`), so it need not be on the robot path.
+    pub fetched: bool,
 }
 
 /// Parse a build list. Blank lines and `#` comments are skipped; every other
@@ -52,15 +55,17 @@ pub fn parse_lines(text: &str) -> Vec<ShardLine> {
             }
             let mut words = trimmed.split_whitespace();
             let file = words.next()?.to_string();
-            let forced = words.any(|w| {
-                let key = w.split('=').next().unwrap_or(w);
-                key == "--rebuild" || key == "--force"
-            });
+            let keys: Vec<&str> = words.map(|w| w.split('=').next().unwrap_or(w)).collect();
+            let forced = keys.iter().any(|k| *k == "--rebuild" || *k == "--force");
+            let fetched = keys
+                .iter()
+                .any(|k| *k == "--from-pr" || *k == "--from-commit");
             Some(ShardLine {
                 number: i + 1,
                 text: line.to_string(),
                 file,
                 forced,
+                fetched,
             })
         })
         .collect()
@@ -325,6 +330,20 @@ mod tests {
         assert!(!lines[0].forced);
         assert_eq!(lines[1].file, "B-2.eb");
         assert!(lines[1].forced);
+        assert!(!lines[0].fetched && !lines[1].fetched);
+    }
+
+    #[test]
+    fn from_pr_and_from_commit_lines_are_fetched() {
+        let lines = parse_lines(
+            "A-1.eb --from-pr=27108 --include-systems=x\nB-2.eb --from-commit=0123abcd\nC-3.eb --include-easyblocks-from-pr=4241\n",
+        );
+        assert!(lines[0].fetched);
+        assert!(lines[1].fetched);
+        assert!(
+            !lines[2].fetched,
+            "an easyblock from a PR does not fetch the easyconfig"
+        );
     }
 
     #[test]

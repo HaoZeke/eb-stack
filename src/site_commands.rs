@@ -2292,9 +2292,35 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Whether a file named `name` exists anywhere under one of `roots`.
+fn file_under(roots: &[PathBuf], name: &str) -> bool {
+    let mut stack: Vec<PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if entry.file_name() != ".git" {
+                    stack.push(path);
+                }
+            } else if entry.file_name() == name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Split a build list into shards whose builds do not overlap, plus a prelude
-/// of the dependencies two or more shards need. Writes nothing when a line
-/// cannot be resolved.
+/// of the dependencies two or more shards need. A line eb-stack cannot
+/// resolve is planned as an opaque line when EasyBuild fetches its easyconfig
+/// (`--from-pr`, `--from-commit`) or the file is on the robot path but does
+/// not parse; any other unresolved line writes nothing.
 pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
     use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
     use crate::domain::Candidate;
@@ -2364,6 +2390,9 @@ pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
     // every bad line named.
     let mut problems = Vec::new();
     let mut starts: Vec<Option<ModuleKey>> = Vec::new();
+    // A line eb-stack cannot resolve but EasyBuild can still build is planned
+    // as an opaque line: its own group, no closure, the default weight.
+    let mut opaque: Vec<Option<&'static str>> = Vec::new();
     for line in &lines {
         if !line.file.ends_with(".eb") {
             problems.push(format!(
@@ -2371,16 +2400,29 @@ pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
                 line.number, line.file
             ));
             starts.push(None);
+            opaque.push(None);
             continue;
         }
         match by_file.get(&line.file) {
-            Some(c) => starts.push(Some(ModuleKey::of(c))),
+            Some(c) => {
+                starts.push(Some(ModuleKey::of(c)));
+                opaque.push(None);
+            }
+            None if line.fetched => {
+                starts.push(None);
+                opaque.push(Some("fetched by EasyBuild (--from-pr or --from-commit)"));
+            }
+            None if file_under(&args.easyconfigs, &line.file) => {
+                starts.push(None);
+                opaque.push(Some("on the robot path, not parsed by eb-stack"));
+            }
             None => {
                 problems.push(format!(
                     "line {}: {}: no such easyconfig on the robot path",
                     line.number, line.file
                 ));
                 starts.push(None);
+                opaque.push(None);
             }
         }
     }
@@ -2394,7 +2436,14 @@ pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
         |key: &ModuleKey| !forced.contains(key) && installed.contains(&module_name(key));
     let mut closures = Vec::new();
     let mut reached: BTreeSet<ModuleKey> = BTreeSet::new();
-    for (line, start) in lines.iter().zip(&starts) {
+    for ((line, start), why) in lines.iter().zip(&starts).zip(&opaque) {
+        if why.is_some() {
+            closures.push(LineClosure {
+                root: line.file.clone(),
+                to_build: vec![line.file.clone()],
+            });
+            continue;
+        }
         let Some(start) = start else { continue };
         let closure = closure_against_installed(
             &universe,
@@ -2520,6 +2569,7 @@ pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
                 "group": planned.group_of[i] + 1,
                 "shard": shard_name(planned.shard_of[i]),
                 "closure": closures[i].to_build,
+                "opaque": opaque[i],
             })
         })
         .collect();

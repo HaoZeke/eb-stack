@@ -1,0 +1,6 @@
+# A site easyconfig the eb-stack parser does not read: it computes its fields in Python.
+import os
+name = os.environ.get("NAME", "Opaque")
+version = "1.0"
+toolchain = SYSTEM
+local_files = [f for f in os.listdir(".") if f.endswith(".lic")]

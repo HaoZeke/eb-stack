@@ -249,6 +249,47 @@ fn an_unresolved_line_fails_and_writes_nothing() {
 }
 
 #[test]
+fn fetched_and_unparsed_lines_are_planned_as_opaque_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("shards");
+    let run = shard("opaque.list", &out, &["--shards", "4"]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let plan: Value = serde_json::from_str(&read(out.join("plan.json"))).unwrap();
+    let lines = plan["lines"].as_array().unwrap();
+    let by_file = |f: &str| {
+        lines
+            .iter()
+            .find(|l| l["easyconfig"] == f)
+            .unwrap_or_else(|| panic!("{f} not in the plan"))
+            .clone()
+    };
+    let fetched = by_file("Bowtie2-2.5.5-GCC-15.2.0.eb");
+    assert_eq!(
+        fetched["opaque"],
+        "fetched by EasyBuild (--from-pr or --from-commit)"
+    );
+    assert_eq!(
+        fetched["closure"],
+        serde_json::json!(["Bowtie2-2.5.5-GCC-15.2.0.eb"])
+    );
+    let unparsed = by_file("Opaque-1.0.eb");
+    assert_eq!(
+        unparsed["opaque"],
+        "on the robot path, not parsed by eb-stack"
+    );
+    assert!(by_file("OpenFOAM-13-GCCcore-15.2.0.eb")["opaque"].is_null());
+    // The opaque line is written to its shard as it stands, flags and all.
+    let shard_file = format!("{}.list", fetched["shard"].as_str().unwrap());
+    assert!(read(out.join(&shard_file)).contains(
+        "Bowtie2-2.5.5-GCC-15.2.0.eb --from-commit=e71b392cfab2449cb64f0ac5569cba75f0c5290d --include-systems=snel-zen2"
+    ));
+}
+
+#[test]
 fn zero_shards_is_a_usage_error() {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("shards");

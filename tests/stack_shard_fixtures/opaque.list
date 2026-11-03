@@ -1,0 +1,5 @@
+# wave 1 plus two lines eb-stack cannot resolve but EasyBuild can build
+OpenFOAM-13-GCCcore-15.2.0.eb --hooks=/sw/hooks/openfoam.py
+ParaView-6.0.0-GCCcore-15.2.0.eb
+Bowtie2-2.5.5-GCC-15.2.0.eb --from-commit=e71b392cfab2449cb64f0ac5569cba75f0c5290d --include-systems=snel-zen2
+Opaque-1.0.eb
