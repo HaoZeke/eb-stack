@@ -694,7 +694,7 @@ path, not left as site layer. ~--licensed~ and ~--licensed-file~ warn
 for group-restricted names; ~data/site-licensed.txt~ is that list for
 VASP, MATLAB, ANSYS, ORCA, and Gurobi. With neither flag there is no
 warning. ~--strict~ makes a remaining warning exit 1. Stdout lists each
-hit as ~provided <file> name=<Name> list=<path>~ and ends with
+hit as ~provided <file> name=<Name> list=<path> line=<N>~ and ends with
 ~hits= unparsed= allowed= provided= toolchain= hooks= family= licensed=~.
 ~--format~ is ~text~ by default, ~github~ for workflow commands, or
 ~json~. ~--json~ is the same as ~--format json~. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]
