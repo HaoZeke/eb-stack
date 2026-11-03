@@ -1544,7 +1544,9 @@ enum StackCommand {
     /// `//` then returns a float (`16 // 2.5` is `6.0`). `--hooks` reads
     /// the limits from an `eb_hooks.py` and also warns on a statement such
     /// as `msg+ "..."` that drops its sum. `--node` prints the hook
-    /// parallelism beside `limit_by_memory` for a core count and a memory.
+    /// parallelism beside `limit_by_memory` for a core count and a memory,
+    /// and with an `mib_per_job` the memory cap
+    /// `min(current, memory // mib_per_job)`.
     /// The command does not fail on a warning. Pass `--easystack`,
     /// `--node`, `--hooks`, or a mix.
     #[command(
@@ -1575,13 +1577,17 @@ enum StackCommand {
         #[arg(long)]
         resources: Option<PathBuf>,
         /// Node size `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
-        /// Repeatable. Memory is MiB. Prints the hook parallelism and
+        /// Repeatable. Memory is MiB. Prints the hook parallelism, its
+        /// memory cap when the package has an `mib_per_job`, and
         /// `limit_by_memory` for each size. With no `--easystack`, this
         /// report is the whole output.
         #[arg(long)]
         node: Vec<String>,
-        /// Replace the bundled per-package `mib_per_job` table.
-        #[arg(long)]
+        /// Replace the bundled per-package `mib_per_job` table,
+        /// `data/job-memory.toml`. For a package with a number, `--node`
+        /// prints the memory cap `min(current, memory // mib_per_job)`
+        /// beside the hook's level.
+        #[arg(long, visible_alias = "mib-per-job")]
         job_memory: Option<PathBuf>,
         /// EESSI `eb_hooks.py` to read `PARALLELISM_LIMITS` from, in place
         /// of the hook rows of the bot resource table. The nodes and

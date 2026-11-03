@@ -3834,3 +3834,23 @@ fn mcp_stack_oom_returns_the_dropped_msg_sum() {
     let text = body["text"].as_str().expect("text");
     assert!(text.ends_with(&format!("{warning}\n")), "{text}");
 }
+
+#[test]
+fn mcp_stack_oom_prints_the_memory_cap_beside_the_core_cap() {
+    let job_memory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/job-memory-fixture.toml")
+        .display()
+        .to_string();
+    let response = call(
+        1,
+        "eb_stack_oom",
+        json!({"node": ["16:4096:x86_64/amd/zen4"], "job_memory": job_memory}),
+    );
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 0 (min(8, 4096 // 8192)), not one 8192 MiB job fits; memory 1 (max(1, min(16, 4096 // 8192)))\n"),
+        "{text}"
+    );
+}

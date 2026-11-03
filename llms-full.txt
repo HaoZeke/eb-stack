@@ -4956,6 +4956,43 @@ that name. The footer names the rows that are unmeasured. libxc 7.0 is
 the one the table calls out; the other names are absent from the table,
 which is the same as unmeasured.
 
+With a number in the table, the line also prints the memory cap: the
+level the hook leaves, with a memory ceiling on top,
+`min(current, memory_mib // mib_per_job)`. The memory is a whole number
+of MiB, so the quotient is the same as
+`memory_bytes // (mib_per_job * 2**20)`. `--mib-per-job FILE` is the
+same flag as `--job-memory FILE`. The fixture
+`job-memory-fixture.toml` gives libxc 8192 MiB, which is arithmetic and
+not a measurement. With `hooks/integers.py` the report is libxc alone:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/integers.py \
+  --mib-per-job tests/oom_profile_fixtures/job-memory-fixture.toml \
+  --node 16:32768:x86_64/amd/zen4 \
+  --node 16:131072:x86_64/amd/zen4 \
+  --node 16:4096:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 4 (min(8, 32768 // 8192)); memory 4 (max(1, min(16, 32768 // 8192)))
+node 16 cores, 131072 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 8 (min(8, 131072 // 8192)); memory 16 (max(1, min(16, 131072 // 8192)))
+node 16 cores, 4096 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 0 (min(8, 4096 // 8192)), not one 8192 MiB job fits; memory 1 (max(1, min(16, 4096 // 8192)))
+job memory: every package in the table has an mib_per_job
+```
+
+On 32 GiB the memory allows four 8192 MiB jobs and the hook allows 8,
+so the memory cap is 4. On 128 GiB the memory allows 16, and the cap
+stays at the hook's 8; `limit_by_memory` in place of the hook would
+give 16. On 4 GiB not one job fits. `limit_by_memory` still says 1,
+because it never goes below one job. The memory cap is 0: one compile
+already needs more than the node has.
+
 # Measure the worst compile
 
 `mib_per_job` comes from a compiler launcher, not from a guess.
@@ -5028,9 +5065,10 @@ then.
   under [[*Where the numbers come from][where the numbers come from]].
   Of the rest of the file it checks only for a statement that drops a
   sum. Other mistakes in the hooks are not found.
-- `limit_by_memory` does not replace the estimate. The estimate follows
-  the hooks that are in `eb_hooks.py`. The `--node` report is the
-  comparison. A package with no measured `mib_per_job` stays
+- `limit_by_memory` and the memory cap do not replace the estimate. The
+  estimate follows the hooks that are in `eb_hooks.py`. The `--node`
+  report is the comparison, and the warnings for an easystack do not
+  print the cap. A package with no measured `mib_per_job` stays
   unmeasured.
 - The MCP tool `eb_stack_oom` returns the same lines and each warning as
   JSON.
@@ -7048,14 +7086,20 @@ already installed. `--arch` repeats and takes a target or a prefix such
 as `aarch64`. No `--arch` checks every node in the table; a target with
 no node is reported and skipped. `--profile` replaces
 `data/build-memory.toml`. `--resources` replaces
-`data/eessi-bot-resources.toml`. `--job-memory` replaces
-`data/job-memory.toml`, the per-package `mib_per_job` table. A row with
-no number is unmeasured. libxc 7.0 is unmeasured; the peak RSS of its
-worst compile has not been measured, and the table does not guess.
+`data/eessi-bot-resources.toml`. `--job-memory`, also spelled
+`--mib-per-job`, replaces `data/job-memory.toml`, the per-package
+`mib_per_job` table. A row with no number is unmeasured. libxc 7.0 is
+unmeasured; the peak RSS of its worst compile has not been measured,
+and the table does not guess.
 `--node` repeats. Each value is `CORES:MEMORY_MIB` or
 `CORES:MEMORY_MIB:TARGET`, and memory is MiB. It prints the parallelism
 the current hook leaves beside `limit_by_memory(parallel, mib_per_job)`,
-which is `max(1, min(parallel, memory_mib // mib_per_job))`. The memory
+which is `max(1, min(parallel, memory_mib // mib_per_job))`. For a
+package with a number, the memory cap
+`min(current, memory_mib // mib_per_job)` follows the hook's level: the
+core cap with a memory ceiling on top. It is not raised to 1, so
+`memory cap 0` with `not one N MiB job fits` says one compile needs more
+than the node's memory. The memory
 a hook would read on the build machine is the smallest cgroup v2
 `memory.max` on the process's cgroup path, else `MemTotal`.
 

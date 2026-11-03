@@ -466,6 +466,22 @@ pub fn limit_by_memory(parallel: u32, mib_per_job: u32, memory_mib: u64) -> u32 
     parallel.min(by_memory).max(1)
 }
 
+/// The core cap with a memory ceiling on top:
+/// `min(core_cap, memory_mib // mib_per_job)`.
+///
+/// `core_cap` is the level the hook leaves. Unlike [`limit_by_memory`]
+/// the result is not raised to 1: 0 says one job needs more memory than
+/// the node has. Flooring the MiB first does not change the quotient,
+/// so this is also `memory_bytes // (mib_per_job * 2**20)`. A zero
+/// `mib_per_job` is not a budget; the table parser refuses it, and this
+/// returns `core_cap`.
+pub fn memory_cap(core_cap: u32, mib_per_job: u32, memory_mib: u64) -> u32 {
+    let Some(jobs) = memory_mib.checked_div(u64::from(mib_per_job)) else {
+        return core_cap;
+    };
+    core_cap.min(u32::try_from(jobs).unwrap_or(u32::MAX))
+}
+
 impl LimitOp {
     fn apply(self, cores: u32) -> u32 {
         match self {
@@ -1370,6 +1386,16 @@ fn current_clause(resources: &BotResources, name: &str, node: &NodeSize) -> (u32
     (got.level, text)
 }
 
+fn memory_cap_clause(core_cap: u32, mib_per_job: u32, node: &NodeSize) -> String {
+    let cap = memory_cap(core_cap, mib_per_job, node.memory_mib);
+    let formula = format!("min({core_cap}, {} // {mib_per_job})", node.memory_mib);
+    if cap == 0 {
+        format!("memory cap 0 ({formula}), not one {mib_per_job} MiB job fits")
+    } else {
+        format!("memory cap {cap} ({formula})")
+    }
+}
+
 fn memory_clause(mib_per_job: Option<u32>, node: &NodeSize, max_parallel: u32) -> String {
     let Some(mib_per_job) = mib_per_job else {
         return "memory unmeasured".to_string();
@@ -1435,7 +1461,8 @@ fn job_memory_footer(jobs: &JobMemoryTable) -> String {
 /// target. The hook column is what `post_ready_hook` would leave, including
 /// EasyBuild's `max-parallel`. The memory column is
 /// `limit_by_memory(cores, mib_per_job)` when the table has a number, and
-/// `unmeasured` when it does not. No number is invented.
+/// `unmeasured` when it does not. With a number, the hook column is
+/// followed by its [`memory_cap`]. No number is invented.
 pub fn render_parallelism(
     resources: &BotResources,
     jobs: &JobMemoryTable,
@@ -1458,8 +1485,11 @@ pub fn render_parallelism(
         for name in &names {
             let (level, clause) = current_clause(resources, name, node);
             let mib = jobs.get(name).and_then(|package| package.mib_per_job);
+            let cap = mib
+                .map(|mib| format!("; {}", memory_cap_clause(level, mib, node)))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "  {name}: current {level} ({clause}); {}\n",
+                "  {name}: current {level} ({clause}){cap}; {}\n",
                 memory_clause(mib, node, resources.max_parallel)
             ));
         }
@@ -1989,6 +2019,30 @@ source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263
     }
 
     #[test]
+    fn the_memory_cap_is_not_raised_to_one_and_matches_the_byte_quotient() {
+        assert_eq!(memory_cap(8, 8192, 32_768), 4);
+        assert_eq!(memory_cap(8, 8192, 131_072), 8);
+        assert_eq!(memory_cap(8, 8192, 4096), 0);
+        assert_eq!(memory_cap(6, 8192, 30_016), 3);
+        assert_eq!(memory_cap(8, 0, 32_768), 8);
+        const BYTES_PER_MIB: u64 = 1 << 20;
+        let gib = 1024 * BYTES_PER_MIB;
+        for bytes in [
+            0,
+            BYTES_PER_MIB - 1,
+            32 * gib,
+            32 * gib + 12_345,
+            30_016 * BYTES_PER_MIB + BYTES_PER_MIB - 1,
+        ] {
+            for mib_per_job in [1, 5, 6554, 8192] {
+                let by_bytes = bytes / (u64::from(mib_per_job) * BYTES_PER_MIB);
+                let by_mib = memory_cap(u32::MAX, mib_per_job, bytes / BYTES_PER_MIB);
+                assert_eq!(u64::from(by_mib), by_bytes, "{bytes} // {mib_per_job} MiB");
+            }
+        }
+    }
+
+    #[test]
     fn a_non_integer_divide_warns_and_uses_the_numeric_floor() {
         let text = r#"
 [easybuild]
@@ -2140,7 +2194,7 @@ note = "fixture for the report arithmetic, not a measurement of libxc"
         let one = render_parallelism(&resources, &fixture, &nodes[..1]);
         assert!(
             one.contains(
-                "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
+                "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 4 (min(8, 32768 // 8192)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
             ),
             "{one}"
         );

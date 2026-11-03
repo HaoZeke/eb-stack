@@ -1143,14 +1143,20 @@ already installed. ~--arch~ repeats and takes a target or a prefix such
 as ~aarch64~. No ~--arch~ checks every node in the table; a target with
 no node is reported and skipped. ~--profile~ replaces
 ~data/build-memory.toml~. ~--resources~ replaces
-~data/eessi-bot-resources.toml~. ~--job-memory~ replaces
-~data/job-memory.toml~, the per-package ~mib_per_job~ table. A row with
-no number is unmeasured. libxc 7.0 is unmeasured; the peak RSS of its
-worst compile has not been measured, and the table does not guess.
+~data/eessi-bot-resources.toml~. ~--job-memory~, also spelled
+~--mib-per-job~, replaces ~data/job-memory.toml~, the per-package
+~mib_per_job~ table. A row with no number is unmeasured. libxc 7.0 is
+unmeasured; the peak RSS of its worst compile has not been measured,
+and the table does not guess.
 ~--node~ repeats. Each value is ~CORES:MEMORY_MIB~ or
 ~CORES:MEMORY_MIB:TARGET~, and memory is MiB. It prints the parallelism
 the current hook leaves beside ~limit_by_memory(parallel, mib_per_job)~,
-which is ~max(1, min(parallel, memory_mib // mib_per_job))~. The memory
+which is ~max(1, min(parallel, memory_mib // mib_per_job))~. For a
+package with a number, the memory cap
+~min(current, memory_mib // mib_per_job)~ follows the hook's level: the
+core cap with a memory ceiling on top. It is not raised to 1, so
+~memory cap 0~ with ~not one N MiB job fits~ says one compile needs more
+than the node's memory. The memory
 a hook would read on the build machine is the smallest cgroup v2
 ~memory.max~ on the process's cgroup path, else ~MemTotal~.
 

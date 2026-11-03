@@ -446,7 +446,7 @@ fn node_sizes_compare_the_hook_with_the_memory_rule() {
     assert_eq!(code, 0, "{stderr}");
     assert!(
         stdout.contains(
-            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 4 (min(8, 32768 // 8192)); memory 4 (max(1, min(16, 32768 // 8192)))\n"
         ),
         "{stdout}"
     );
@@ -455,6 +455,63 @@ fn node_sizes_compare_the_hook_with_the_memory_rule() {
         stdout.contains("job memory: every package in the table has an mib_per_job\n"),
         "{stdout}"
     );
+}
+
+#[test]
+fn the_memory_cap_is_the_core_cap_under_the_memory_ceiling() {
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--mib-per-job",
+        &arg("job-memory-fixture.toml"),
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--node",
+        "16:131072:x86_64/amd/zen4",
+        "--node",
+        "16:4096:x86_64/amd/zen4",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let libxc: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("  libxc: "))
+        .collect();
+    assert_eq!(
+        libxc,
+        [
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 4 (min(8, 32768 // 8192)); memory 4 (max(1, min(16, 32768 // 8192)))",
+            // The hook already holds libxc below what 128 GiB allows.
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 8 (min(8, 131072 // 8192)); memory 16 (max(1, min(16, 131072 // 8192)))",
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 0 (min(8, 4096 // 8192)), not one 8192 MiB job fits; memory 1 (max(1, min(16, 4096 // 8192)))",
+            "  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory cap 3 (min(6, 30016 // 8192)); memory 3 (max(1, min(48, 30016 // 8192)))",
+        ]
+    );
+    // A name the table does not measure gets no cap.
+    assert!(
+        stdout.contains(
+            "  LLVM: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("memory cap").count(), 4, "{stdout}");
+
+    let (_, by_long_name, _) = run(&[
+        "stack",
+        "oom",
+        "--job-memory",
+        &arg("job-memory-fixture.toml"),
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--node",
+        "16:131072:x86_64/amd/zen4",
+        "--node",
+        "16:4096:x86_64/amd/zen4",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ]);
+    assert_eq!(by_long_name, stdout);
 }
 
 #[test]
@@ -589,6 +646,6 @@ fn the_how_to_shows_the_real_output() {
             "{command}"
         );
     }
-    assert_eq!(oom_blocks, 10);
+    assert_eq!(oom_blocks, 11);
     assert_eq!(rss_blocks, 1);
 }

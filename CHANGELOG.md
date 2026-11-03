@@ -88,6 +88,14 @@ All notable changes to this project are documented here.
   the file, the line, and the function; `msg += "..."` is not reported,
   and the parallel levels do not change. `eb_stack_oom` returns these
   as `hook_warnings`.
+- `stack oom --node` prints the memory cap beside the level the hook
+  leaves, for a package with an `mib_per_job`:
+  `min(current, memory_mib // mib_per_job)`, the same quotient as
+  `memory_bytes // (mib_per_job * 2**20)`. It is not raised to 1, so
+  `memory cap 0 (...), not one N MiB job fits` says one compile needs
+  more than the node has. `--mib-per-job FILE` is a visible alias of
+  `--job-memory FILE`. The `memory` column, `limit_by_memory` in place of
+  the hook, is unchanged.
 
 ### Documentation
 

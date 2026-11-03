@@ -348,7 +348,9 @@ the message never prints. That is upstream. Do not patch it from here.
 `--hooks` prints it as a warning with the line and `post_ready_hook`.
 
 `eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook
-with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`.
+with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`;
+`--mib-per-job FILE` replaces it, and a package with a number gets the
+memory cap `min(current, memory // mib_per_job)` beside the hook's level.
 libxc is unmeasured. Measure a compile with `scripts/compile_rss.py`
 under `-O2 -ftree-vectorize -march=<target> -fno-math-errno`, and do not
 invent the number. The how-to is `docs/orgmode/howto/oom-profile.org`.
