@@ -3263,6 +3263,7 @@ fn mcp_stack_order_matches_the_cli() {
             ("easystack_out", "string"),
             ("hashes_out", "string"),
             ("filter_deps", "array"),
+            ("installed", "array"),
         ],
     );
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -3411,6 +3412,53 @@ fn mcp_stack_order_matches_the_cli() {
     let filtered_text = std::fs::read_to_string(&mcp_filtered).unwrap();
     assert!(!filtered_text.contains("OpenBLAS-"), "{filtered_text}");
     assert!(filtered_text.contains("GROMACS-"), "{filtered_text}");
+
+    let installed = root.join("fixtures/stack_order_installed/installed.txt");
+    let installed = installed.to_str().expect("utf8");
+    let cli_installed = temp.path().join("cli-installed.txt");
+    let mcp_installed = temp.path().join("mcp-installed.txt");
+    let installed_stdout = cli_stdout(&[
+        "stack",
+        "order",
+        "--easyconfigs",
+        trees,
+        "--root",
+        "GROMACS",
+        "--installed",
+        installed,
+        "--filter-deps",
+        "FFTW",
+        "--out",
+        cli_installed.to_str().expect("utf8"),
+    ]);
+    let installed_body = mcp_tool(
+        135,
+        "eb_stack_order",
+        json!({
+            "easyconfigs": [trees],
+            "root": ["GROMACS"],
+            "installed": [installed],
+            "filter_deps": ["FFTW"],
+            "out": mcp_installed,
+        }),
+    );
+    assert_eq!(
+        swap_paths(
+            installed_body["text"].as_str().unwrap_or(""),
+            &mcp_installed,
+            "ORDER"
+        ),
+        swap_paths(&installed_stdout, &cli_installed, "ORDER")
+    );
+    assert_eq!(
+        std::fs::read(&cli_installed).unwrap(),
+        std::fs::read(&mcp_installed).unwrap()
+    );
+    assert_eq!(installed_body["installed"], 1);
+    let installed_text = std::fs::read_to_string(&mcp_installed).unwrap();
+    assert!(!installed_text.contains("OpenBLAS-"), "{installed_text}");
+    assert!(!installed_text.contains("FFTW-"), "{installed_text}");
+    assert!(installed_text.contains("GROMACS-"), "{installed_text}");
 
     let missing = mcp_error_text(
         133,

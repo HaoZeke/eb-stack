@@ -29,6 +29,15 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack order --installed` stops the build order at modules already on
+  the machine. A file is a module listing and a directory is an Lmod
+  tree, read the same way as `stack gap --installed`. The version is the
+  full module version. A listed module is left out of the order, and so
+  are the dependencies that were installed with it. `--filter-deps`
+  still drops dependencies first. The modules that remain are chosen
+  with the synthetic GCC-family rule `recipe hierarchy --export`
+  prints. Stdout reports `installed=` as how many modules the walk
+  stopped at. `eb_stack_order` takes the same `installed` list.
 - `stack shadow` reports a site-layer recipe that shadows a module the
   EESSI base stack already provides. `--base` is an Lmod tree or a module
   listing, loaded with the same inventory reader as `stack gap`. The same

@@ -118,6 +118,25 @@ eb-stack stack order \
 requirement. The hash file is one ~<sha256>  <module>~ line per build.
 See [[file:../reference/cli.org][the CLI reference]].
 
+~--installed~ stops the walk at modules the site already has, the way
+the robot does. ~--filter-deps~ still drops dependencies before that
+walk. The two compose: a filtered dependency is gone, and a listed
+module is a leaf whose own dependencies are not ordered.
+
+#+begin_src bash
+eb-stack stack order \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --root GROMACS \
+  --installed fixtures/stack_order_installed/installed.txt \
+  --filter-deps FFTW \
+  --out /tmp/build-order.txt
+#+end_src
+
+The order file has no ~OpenBLAS~ path and no ~FFTW~ path. ~GROMACS~ is
+still in it. Standard output ends with ~installed=1~ and then
+~order=/tmp/build-order.txt builds=~. ~installed=1~ is OpenBLAS. FFTW
+was filtered, so it is not a leaf the walk stopped at.
+
 * One lock per toolchain family
 
 A foss solve only sees the foss hierarchy.
