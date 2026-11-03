@@ -124,6 +124,15 @@ All notable changes to this project are documented here.
 - How to read the reproduction scoreboard and hold it to a ratchet file.
 - How to report a site-layer recipe that shadows a module the EESSI
   base stack already provides.
+- The out-of-memory how-to checks two forms of libxc's row with
+  `--hooks`: a cap of 8, `(set_maximum, 8)`, the form proposed in the
+  review of software-layer-scripts #337, and a reduction of 8,
+  `(divide_by_factor, 8)`, as asked in the review of #337
+  (issuecomment-6599147327). On the bot's 16-core nodes the cap gives 8,
+  the same as dividing by 2, and pull request 1772 still warns on the
+  32 GiB zen4 node; the reduction gives 2 and fits. A cap does not scale
+  with the node: it gives 8 on 64 cores and on 12. The fixtures are
+  `hooks/set-maximum-8.py` and `hooks/divide-8.py`.
 
 ## 0.4.0 - 2026-11-01
 

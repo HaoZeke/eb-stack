@@ -349,6 +349,12 @@ from the file instead of the bundled copy, and the warning names the
 line. `eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
 the message never prints. That is upstream. Do not patch it from here.
 `--hooks` prints it as a warning with the line and `post_ready_hook`.
+A cap does not scale with the node: on the bot's 16-core nodes
+`(set_maximum, 8)` and `(divide_by_factor, 2)` both leave 8, and 2 cores
+of 16 is `(divide_by_factor, 8)`. Before a software-layer pull request
+points `bot/software_layer_scripts_commit` at a scripts change, run
+`stack oom --hooks` on that commit's `eb_hooks.py` with `--node` for the
+bot node, and check that the level is the one asked for.
 
 `eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook
 with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`;

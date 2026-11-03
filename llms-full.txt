@@ -5052,6 +5052,90 @@ give 16. On 4 GiB not one job fits. `limit_by_memory` still says 1,
 because it never goes below one job. The memory cap is 0: one compile
 already needs more than the node has.
 
+# A cap of 8 or a reduction of 8 for libxc
+
+Two forms of libxc's `'*'` row in `PARALLELISM_LIMITS` have come up in
+the review of software-layer-scripts pull request 337. Each fixture is
+`hooks/integers.py` with that row in place of `(divide_by_factor, 2)`,
+and the A64FX row stays at `(set_maximum, 6)`:
+
+- `hooks/set-maximum-8.py` has a cap of 8, `(set_maximum, 8)`, the form
+  proposed in review.
+- `hooks/divide-8.py` has a reduction of 8, `(divide_by_factor, 8)`, as
+  asked in the review of 337 (issuecomment-6599147327).
+
+Compare node sizes under the cap of 8:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/set-maximum-8.py \
+  --node 16:32768:x86_64/amd/zen4 \
+  --node 48:30016:aarch64/a64fx \
+  --node 64:262144:x86_64/amd/zen4 \
+  --node 12:24576:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/set-maximum-8.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(16, 8)); memory unmeasured
+node 48 cores, 30016 MiB, aarch64/a64fx
+  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured
+  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured
+node 64 cores, 262144 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(64, 8)); memory unmeasured
+node 12 cores, 24576 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(12, 8)); memory unmeasured
+job memory: libxc 7.0 unmeasured, no mib_per_job
+```
+
+With `hooks/integers.py` the same four nodes give libxc 8, 6, 16 and 6.
+A cap is a number of jobs, so it does not grow with the node: on 64
+cores it gives 8, where `64 // 2` is 32 and max-parallel holds that at
+16. It does not shrink either: on 12 cores it gives 8, where `12 // 2`
+is 6. The two rows agree on 16 and 17 cores. Every node in the bot
+resource table has 16 cores except A64FX, which keeps its own row, so
+on the bot the cap leaves libxc where it is. Pull request 1772 still
+warns on the 32 GiB zen4 node:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/set-maximum-8.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/set-maximum-8.py
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+  parallel 8: 16 cores, eb_hooks.py caps libxc at 8
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
+  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+oom=1 fits=1 builds=5 nodes=2
+```
+
+The estimate is the one in the first example. Only the `parallel` line
+changes, and it names the cap in place of the divide. The reduction of
+8 in `hooks/divide-8.py` leaves 2 cores on these nodes:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/divide-8.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/divide-8.py
+oom=0 fits=2 builds=5 nodes=2
+```
+
+`max(1, 16 // 8)` is 2, so libxc fits on both zen4 nodes. On 64 cores
+the same row gives 8.
+
 # Measure the worst compile
 
 `mib_per_job` comes from a compiler launcher, not from a guess.
