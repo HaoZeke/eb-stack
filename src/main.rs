@@ -1371,7 +1371,8 @@ enum StackCommand {
         /// ranged GET fallback) against every resolved source URL in the plan.
         /// A source no probed family can fetch is `unreachable`. A source
         /// another probed family can fetch is `arch-missing`, so one
-        /// `--arch` reports a missing source as `unreachable`.
+        /// `--arch` reports a missing source as `unreachable`. Two
+        /// `--arch` values compare only that pair.
         #[arg(long = "probe-sources")]
         probe_sources: bool,
         /// Extra attempts after the first source probe request.

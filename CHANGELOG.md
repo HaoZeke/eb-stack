@@ -279,6 +279,9 @@ include `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`,
   `source probe:`. With no `--arch` all three are still probed. With one
   family there is nothing to compare with, so a source it cannot fetch
   is `unreachable` rather than `arch-missing`, and still exits 1.
+  Two families compare only with each other: a miss is `arch-missing`
+  when the other named family fetched that source slot, and
+  `unreachable` when neither did.
 - `classify_build_failure` classes `No space left on device` and
   `Disk quota exceeded` as `resource`. A full disk in an EasyBuild log was
   `compile` before.

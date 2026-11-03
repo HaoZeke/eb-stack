@@ -510,7 +510,7 @@ fn kaleido_server() -> (String, std::thread::JoinHandle<()>, std::net::SocketAdd
 
 /// `arch-unsupported.org` quotes the source-probe output with the server
 /// address written as the fixture's `__BASE_URL__`: first with no `--arch`,
-/// then with `--arch aarch64`.
+/// then with `--arch aarch64`, then with `--arch x86_64 --arch aarch64`.
 #[test]
 fn the_source_probe_howto_quotes_the_output_it_prints() {
     use std::io::Write;
@@ -554,6 +554,7 @@ fn the_source_probe_howto_quotes_the_output_it_prints() {
     };
     let every_arch = probe(&[]);
     let aarch64 = probe(&["aarch64"]);
+    let two = probe(&["x86_64", "aarch64"]);
     if let Ok(mut stop) = std::net::TcpStream::connect(addr) {
         let _ = stop.write_all(b"STOP / HTTP/1.1\r\n\r\n");
     }
@@ -569,12 +570,13 @@ fn the_source_probe_howto_quotes_the_output_it_prints() {
         "{section}"
     );
     assert!(section.contains("  --arch aarch64 \\\n"), "{section}");
+    assert!(section.contains("  --arch x86_64 \\\n"), "{section}");
     let quoted: Vec<&str> = section
         .split("#+begin_example\n")
         .skip(1)
         .filter_map(|rest| rest.split("#+end_example").next())
         .collect();
-    assert_eq!(quoted.len(), 2, "{section}");
+    assert_eq!(quoted.len(), 3, "{section}");
     assert_eq!(
         quoted[0], every_arch,
         "page:\n{}\nstdout:\n{every_arch}",
@@ -585,6 +587,7 @@ fn the_source_probe_howto_quotes_the_output_it_prints() {
         "page:\n{}\nstdout:\n{aarch64}",
         quoted[1]
     );
+    assert_eq!(quoted[2], two, "page:\n{}\nstdout:\n{two}", quoted[2]);
     assert!(quoted.iter().all(|text| !text.contains("127.0.0.1")));
 }
 

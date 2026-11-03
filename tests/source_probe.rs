@@ -226,6 +226,96 @@ fn stack_arch_probes_aarch64_alone_and_names_the_missing_wheel() {
 }
 
 #[test]
+fn stack_arch_probe_with_two_arches_compares_only_that_pair() {
+    let server = FixtureServer::start();
+    let fixture = write_real_pr_1670_fixture(&server.base_url());
+
+    let paired = arch_probe(&["x86_64", "aarch64"], &fixture);
+    let stdout = text(&paired.stdout);
+    let stderr = text(&paired.stderr);
+    assert_eq!(paired.status.code(), Some(1), "{stdout}\n{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(
+        lines[0].starts_with(&format!(
+            "Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is arch-missing on aarch64: {}/kaleido-0.2.1-manylinux2014-aarch64.whl (",
+            server.base_url()
+        )),
+        "{stdout}"
+    );
+    assert!(lines[0].contains("HEAD=status:404"), "{stdout}");
+    assert_eq!(
+        lines[1],
+        "parse_failed=0 unsupported=0 flagged=0 source_unreachable=0 source_arch_missing=1"
+    );
+    assert!(!stdout.contains("riscv64") && !stderr.contains("riscv64"));
+    assert!(stderr.contains("is arch-missing on aarch64"), "{stderr}");
+    assert_eq!(
+        text(&arch_probe(&["aarch64", "x86_64"], &fixture).stdout),
+        stdout
+    );
+    assert_eq!(
+        text(&arch_probe(&["x86_64/amd/zen4", "aarch64/neoverse_v1"], &fixture).stdout),
+        stdout
+    );
+
+    let neither = arch_probe(&["aarch64", "riscv64"], &fixture);
+    let neither_out = text(&neither.stdout);
+    let neither_err = text(&neither.stderr);
+    assert_eq!(
+        neither.status.code(),
+        Some(1),
+        "{neither_out}\n{neither_err}"
+    );
+    let neither_lines: Vec<&str> = neither_out.lines().collect();
+    assert_eq!(neither_lines.len(), 3, "{neither_out}");
+    assert!(
+        neither_lines[0].starts_with(&format!(
+            "Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is unreachable on aarch64: {}/kaleido-0.2.1-manylinux2014-aarch64.whl (",
+            server.base_url()
+        )),
+        "{neither_out}"
+    );
+    assert!(
+        neither_lines[1].starts_with(&format!(
+            "Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-riscv64.whl is unreachable on riscv64: {}/kaleido-0.2.1-manylinux2014-riscv64.whl (",
+            server.base_url()
+        )),
+        "{neither_out}"
+    );
+    assert!(
+        neither_lines[0].contains("HEAD=status:404"),
+        "{neither_out}"
+    );
+    assert!(
+        neither_lines[1].contains("HEAD=status:404"),
+        "{neither_out}"
+    );
+    assert_eq!(
+        neither_lines[2],
+        "parse_failed=0 unsupported=0 flagged=0 source_unreachable=2 source_arch_missing=0"
+    );
+    assert!(!neither_out.contains("x86_64") && !neither_err.contains("x86_64"));
+    assert!(!neither_out.contains("arch-missing"), "{neither_out}");
+    assert_eq!(
+        text(&arch_probe(&["aarch64", "aarch64/neoverse_v1"], &fixture).stdout),
+        text(&arch_probe(&["aarch64"], &fixture).stdout)
+    );
+
+    for arches in [&["x86_64", "aarch64"][..], &["aarch64", "riscv64"][..]] {
+        let cli = text(&arch_probe(arches, &fixture).stdout);
+        let cli_findings: Vec<&str> = cli
+            .lines()
+            .filter(|line| !line.starts_with("parse_failed="))
+            .collect();
+        let mcp = mcp_arch_probe(arches, &fixture);
+        assert_eq!(mcp["isError"], true, "{mcp}");
+        let mcp_text = mcp["content"][0]["text"].as_str().expect("error text");
+        assert_eq!(mcp_text.lines().collect::<Vec<_>>(), cli_findings);
+    }
+}
+
+#[test]
 fn stack_arch_does_not_probe_an_arch_it_did_not_parse() {
     let server = FixtureServer::start();
     let fixture = write_real_pr_1670_fixture(&server.base_url());
