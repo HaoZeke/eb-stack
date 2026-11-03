@@ -1,0 +1,290 @@
+From 57757bd5e7e6af5c1f426d224e823629dde92f75 Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:12:55 +0000
+Subject: [PATCH 2/7] feat(stack): capture live module inventories
+
+---
+ CHANGELOG.md                       |  3 ++
+ docs/orgmode/howto/module-gap.org  | 49 +++++++++++++++++++++++++
+ scripts/dump-module-trees.sh       | 48 ++++++++++++++++++++++++
+ tests/gap_routes/one-per-route.txt |  7 ++++
+ tests/module_tree_dump_script.rs   | 59 ++++++++++++++++++++++++++++++
+ tests/stack_gap.rs                 | 53 +++++++++++++++++++++++++++
+ 6 files changed, 219 insertions(+)
+ create mode 100755 scripts/dump-module-trees.sh
+ create mode 100644 tests/gap_routes/one-per-route.txt
+ create mode 100644 tests/module_tree_dump_script.rs
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 3866917..3ccb293 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
+ - `stack provided` includes the one-based build-list line on every
+   `provided` and `unparsed` finding in its text report, as it already did for
+   hook, toolchain, family-lock, and licensed findings.
++- `scripts/dump-module-trees.sh` captures the live site, older EESSI, and
++  target EESSI `module -t avail` inventories in isolated, purged shells for
++  `stack gap`.
+ - `stack shard` splits one Jenkins build list into shards that can
+   build at the same time. A line's set is its closure over
+   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod
+diff --git a/docs/orgmode/howto/module-gap.org b/docs/orgmode/howto/module-gap.org
+index 13ef27c..475f9a5 100644
+--- a/docs/orgmode/howto/module-gap.org
++++ b/docs/orgmode/howto/module-gap.org
+@@ -20,6 +20,55 @@ A toolchain whose version is the generation counts as on it, so
+ generation in ~data/eessi-generations.toml~, such as
+ ~llvm-compilers-21.1.8~.
+ 
++* Capture the live inventories
++
++Run the helper from a shell where the ~module~ command is initialized.
++Its four arguments are the output directory, the site meta-module, the
++older EESSI module, and the target EESSI module. Use ~-~ for the site
++argument when the base module path is the live site tree.
++
++#+begin_src bash
++scripts/dump-module-trees.sh \
++  /tmp/module-dumps - EESSI/2025.06 EESSI/2026.06
++#+end_src
++
++Each inventory is captured in a separately purged subshell, so loading
++one EESSI version cannot add paths to the next dump. The files are
++~/tmp/module-dumps/site.txt~, ~eessi-older.txt~, and
++~eessi-target.txt~. Pass them as ~--site~, ~--older~, and
++~--installed~, respectively. They are the raw ~module -t avail~
++output; ~stack gap~ ignores path headers and default markers.
++
++* Read the open-pull-request inventories
++
++The two ~fetch-prs.sh~ examples produce the JSON accepted by
++~--open-layer~ and ~--open-easyconfigs~. Run each script in the clone
++named in its comment:
++
++#+begin_src bash
++EB_STACK=/path/to/eb-stack
++(cd /path/to/software-layer && \
++  "$EB_STACK/examples/eessi-pr-overlap/fetch-prs.sh" \
++    EESSI/software-layer 2026.06 /tmp/open-layer)
++(cd /path/to/easybuild-easyconfigs && \
++  "$EB_STACK/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
++    easybuilders/easybuild-easyconfigs /tmp/open-easyconfigs)
++
++layer_args=()
++for file in /tmp/open-layer/prs/*.json; do
++  layer_args+=(--open-layer "$file")
++done
++easyconfig_args=()
++for file in /tmp/open-easyconfigs/prs/*.json; do
++  easyconfig_args+=(--open-easyconfigs "$file")
++done
++#+end_src
++
++Add ~"${layer_args[@]}"~ and ~"${easyconfig_args[@]}"~ to the
++~stack gap~ command. The fetch scripts only read pull requests. A
++closed pull request disappears from their rewritten ~prs/~ directory
++on the next run.
++
+ * Run the fixture
+ 
+ The nine names are in ~tests/gap_routes/site.txt~. The easyconfig tree
+diff --git a/scripts/dump-module-trees.sh b/scripts/dump-module-trees.sh
+new file mode 100755
+index 0000000..421c853
+--- /dev/null
++++ b/scripts/dump-module-trees.sh
+@@ -0,0 +1,48 @@
++#!/usr/bin/env bash
++# Capture the live module inventories that `eb-stack stack gap` compares.
++#
++# Usage:
++#   dump-module-trees.sh OUT_DIR SITE_MODULE OLDER_EESSI_MODULE TARGET_EESSI_MODULE
++#
++# Pass - for SITE_MODULE to capture the base site tree without loading a
++# meta-module. Run this from a shell where the `module` command is initialized.
++set -euo pipefail
++
++if [[ $# -ne 4 ]]; then
++  echo "usage: $0 OUT_DIR SITE_MODULE OLDER_EESSI_MODULE TARGET_EESSI_MODULE" >&2
++  exit 2
++fi
++
++readonly out_dir=$1
++readonly site_module=$2
++readonly older_module=$3
++readonly target_module=$4
++
++if ! type module >/dev/null 2>&1; then
++  echo "dump-module-trees: the module command is not initialized" >&2
++  exit 2
++fi
++
++mkdir -p "$out_dir"
++
++dump_tree() {
++  local label=$1
++  local selector=$2
++  local output=$3
++  local temporary="${output}.tmp"
++
++  (
++    module --force purge >/dev/null 2>&1
++    if [[ $selector != - ]]; then
++      module load "$selector" >/dev/null 2>&1
++    fi
++    module -t avail
++  ) >"$temporary" 2>&1
++  mv "$temporary" "$output"
++  printf '%s\t%s\n' "$label" "$output"
++}
++
++trap 'rm -f "$out_dir"/*.tmp' EXIT
++dump_tree site "$site_module" "$out_dir/site.txt"
++dump_tree older "$older_module" "$out_dir/eessi-older.txt"
++dump_tree target "$target_module" "$out_dir/eessi-target.txt"
+diff --git a/tests/gap_routes/one-per-route.txt b/tests/gap_routes/one-per-route.txt
+new file mode 100644
+index 0000000..9f96c6c
+--- /dev/null
++++ b/tests/gap_routes/one-per-route.txt
+@@ -0,0 +1,7 @@
++BLAST+/2.16.0-gompi-2024a
++CP2K/2025.2-foss-2025a
++FFTW/3.3.10-gompi-2026.1
++LAMMPS/2024.2
++MATLAB/2024b
++QuantumESPRESSO/7.4
++zlib/1.3.1
+diff --git a/tests/module_tree_dump_script.rs b/tests/module_tree_dump_script.rs
+new file mode 100644
+index 0000000..24d8052
+--- /dev/null
++++ b/tests/module_tree_dump_script.rs
+@@ -0,0 +1,59 @@
++//! The live-module dump helper isolates and records all three inventories.
++
++use std::path::Path;
++use std::process::Command;
++
++fn root() -> &'static Path {
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++}
++
++#[test]
++fn helper_dumps_site_older_and_target_module_trees() {
++    let temporary = tempfile::tempdir().expect("temp");
++    let bash_env = temporary.path().join("module-init.sh");
++    std::fs::write(
++        &bash_env,
++        r#"
++module() {
++  case "$1 $2" in
++    "--force purge") unset TEST_MODULE ;;
++    "load EESSI/2025.06") export TEST_MODULE=older ;;
++    "load EESSI/2026.06") export TEST_MODULE=target ;;
++    "-t avail")
++      case "${TEST_MODULE:-site}" in
++        site) printf 'SiteApp/1.0\n' ;;
++        older) printf 'LAMMPS/2024.0\n' ;;
++        target) printf 'FFTW/3.3.10-gompi-2026.1\n' ;;
++      esac
++      ;;
++    *) return 2 ;;
++  esac
++}
++"#,
++    )
++    .expect("module init");
++    let output_dir = temporary.path().join("dumps");
++    let output = Command::new(root().join("scripts/dump-module-trees.sh"))
++        .env("BASH_ENV", &bash_env)
++        .arg(&output_dir)
++        .args(["-", "EESSI/2025.06", "EESSI/2026.06"])
++        .output()
++        .expect("dump helper");
++    assert!(
++        output.status.success(),
++        "{}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++    assert_eq!(
++        std::fs::read_to_string(output_dir.join("site.txt")).unwrap(),
++        "SiteApp/1.0\n"
++    );
++    assert_eq!(
++        std::fs::read_to_string(output_dir.join("eessi-older.txt")).unwrap(),
++        "LAMMPS/2024.0\n"
++    );
++    assert_eq!(
++        std::fs::read_to_string(output_dir.join("eessi-target.txt")).unwrap(),
++        "FFTW/3.3.10-gompi-2026.1\n"
++    );
++}
+diff --git a/tests/stack_gap.rs b/tests/stack_gap.rs
+index c5181a9..f6f6864 100644
+--- a/tests/stack_gap.rs
++++ b/tests/stack_gap.rs
+@@ -96,6 +96,59 @@ fn routes_are_written_one_file_per_set() {
+     }
+ }
+ 
++#[test]
++fn route_fixture_has_one_row_for_every_route() {
++    let out = tempfile::tempdir().expect("temp");
++    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
++        .current_dir(root())
++        .env_remove("EASYBUILD_FILTER_DEPS")
++        .args([
++            "stack",
++            "gap",
++            "--site",
++            "tests/gap_routes/one-per-route.txt",
++            "--installed",
++            "tests/gap_routes/installed.txt",
++            "--easyconfigs",
++            "tests/gap_routes/easyconfigs",
++            "--generation",
++            "2026.1",
++            "--exclude-file",
++            "tests/gap_routes/site-only.tsv",
++            "--filter-deps",
++            "zlib",
++            "--open-layer",
++            "tests/gap_routes/open-layer.json",
++            "--open-easyconfigs",
++            "tests/gap_routes/open-easyconfigs.json",
++            "--out-dir",
++        ])
++        .arg(out.path())
++        .output()
++        .expect("stack gap");
++    let stdout = String::from_utf8(output.stdout).unwrap();
++    let stderr = String::from_utf8_lossy(&output.stderr);
++    assert!(output.status.success(), "{stdout}{stderr}");
++    assert!(
++        stdout.contains(
++            "site=7 in-stack=1 filtered=1 open-layer=1 recipe=1 open-easyconfigs=1 no-recipe=1 excluded=1"
++        ),
++        "{stdout}"
++    );
++    for name in [
++        "in-stack.tsv",
++        "site-only.tsv",
++        "filtered.tsv",
++        "open-layer.tsv",
++        "recipe.tsv",
++        "open-easyconfigs.tsv",
++        "bump.tsv",
++    ] {
++        let text = std::fs::read_to_string(out.path().join(name)).unwrap();
++        assert_eq!(text.lines().count(), 2, "{name}:\n{text}");
++    }
++}
++
+ #[test]
+ fn live_module_trees_union_the_site_an_older_eessi_and_both_target_dirs() {
+     let out = tempfile::tempdir().expect("temp");
+-- 
+2.43.0
+

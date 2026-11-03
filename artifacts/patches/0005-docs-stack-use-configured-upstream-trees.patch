@@ -1,0 +1,51 @@
+From 3ada26fd06841aa776b2b84b4abe502a53aaa741 Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:17:10 +0000
+Subject: [PATCH 5/7] docs(stack): use configured upstream trees
+
+---
+ docs/orgmode/howto/module-gap.org | 6 +++---
+ llms-full.txt                     | 6 +++---
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/docs/orgmode/howto/module-gap.org b/docs/orgmode/howto/module-gap.org
+index 625f5ee..ff79390 100644
+--- a/docs/orgmode/howto/module-gap.org
++++ b/docs/orgmode/howto/module-gap.org
+@@ -46,11 +46,11 @@ The two ~fetch-prs.sh~ examples produce the JSON accepted by
+ named in its comment:
+ 
+ #+begin_src bash
+-EB_STACK=/path/to/eb-stack
+-(cd /path/to/software-layer && \
++EB_STACK=$PWD
++(cd "$EB_EESSI_SOFTWARE_LAYER" && \
+   "$EB_STACK/examples/eessi-pr-overlap/fetch-prs.sh" \
+     EESSI/software-layer 2026.06 /tmp/open-layer)
+-(cd /path/to/easybuild-easyconfigs && \
++(cd "$EB_EASYCONFIGS_DEVELOP" && \
+   "$EB_STACK/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
+     easybuilders/easybuild-easyconfigs /tmp/open-easyconfigs)
+ 
+diff --git a/llms-full.txt b/llms-full.txt
+index 3eb8338..668bfaa 100644
+--- a/llms-full.txt
++++ b/llms-full.txt
+@@ -4193,11 +4193,11 @@ The two `fetch-prs.sh` examples produce the JSON accepted by
+ named in its comment:
+ 
+ ```bash
+-EB_STACK=/path/to/eb-stack
+-(cd /path/to/software-layer && \
++EB_STACK=$PWD
++(cd "$EB_EESSI_SOFTWARE_LAYER" && \
+   "$EB_STACK/examples/eessi-pr-overlap/fetch-prs.sh" \
+     EESSI/software-layer 2026.06 /tmp/open-layer)
+-(cd /path/to/easybuild-easyconfigs && \
++(cd "$EB_EASYCONFIGS_DEVELOP" && \
+   "$EB_STACK/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
+     easybuilders/easybuild-easyconfigs /tmp/open-easyconfigs)
+ 
+-- 
+2.43.0
+
