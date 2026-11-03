@@ -1832,6 +1832,47 @@ eb-stack stack order \
 requirement. The hash file is one `<sha256>  <module>` line per build.
 See [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# One lock per toolchain family
+
+A foss solve only sees the foss hierarchy.
+The LLVM family is `lfoss`, `lompi`, `lfbf`, and `llvm-compilers`.
+OpenMPI under `llvm-compilers-21.1.8` is in that family.
+`data/eessi-generations.toml` lists `llvm-compilers-20.1.8` for generation 2025b and `llvm-compilers-21.1.8` for generation 2026.1, because an LLVM release is not a generation name.
+
+An easystack entry such as `GROMACS-2025.0-lfoss-2025b.eb` is absent from a foss baseline.
+The foss solve then selects the foss build of the same name, and the stack diff marks that row added.
+Added is the site layer.
+Keep one lock per toolchain family: solve `lfoss` on its own.
+Passing `--baseline-also-toolchain lfoss/2025b` keeps that family's hierarchy in the foss baseline, and the warning stays quiet for `lfoss`.
+
+```bash
+eb-stack stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --toolchain foss/2025b \
+  --root GROMACS \
+  --baseline-easystack /tmp/lfoss.yml \
+  --lock-out /tmp/foss.lock.json \
+  --stack-diff-out /tmp/foss.diff.md
+```
+
+`/tmp/lfoss.yml` has one entry:
+
+```yaml
+easyconfigs:
+  - GROMACS-2025.0-lfoss-2025b.eb
+```
+
+The solve still exits 0.
+Standard error names the unresolved entry.
+It also prints a warning that the added GROMACS row is the LLVM family:
+
+```text
+warning: GROMACS (GROMACS-2025.0-lfoss-2025b.eb) is the LLVM family (lfoss). A foss solve cannot reach it, so the site layer includes GROMACS (fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb). Keep one lock per toolchain family: solve lfoss on its own, or pass --baseline-also-toolchain lfoss/2025b.
+```
+
+The path in that warning is the foss easyconfig the solve selected.
+A package the foss closure only version-bumps stays off this warning.
+
 See [the policy reference](https://eb-stack.rgoswami.me/../reference/policy.html.md) and
 [the format reference](https://eb-stack.rgoswami.me/../reference/formats.html.md).
 
@@ -5124,14 +5165,14 @@ Flags and exit status stay in the [command-line reference](https://eb-stack.rgos
   `--baseline-easyconfigs` and the first `--easyconfigs` tree is the
   baseline. See [emit a build list and stack diff](https://eb-stack.rgoswami.me/../howto/emit-reports.html.md).
 
-- toolchain family :: The toolchain name without its version (`foss`,
-  `GCCcore`, `gfbf`). A bump retargets an explicit dependency's family
-  onto the new generation. `--baseline-also-toolchain` keeps another
-  family's hierarchy in the baseline. This manual does not use the phrase
-  "family lock": a lock is one solved selection, and a family is only the
-  toolchain name. On an architecture, family is the text before the first
-  slash (`x86_64`, `aarch64`). See
-  [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md).
+- toolchain family :: The toolchain name without its version (`foss`, `GCCcore`, `gfbf`).
+  A bump retargets an explicit dependency's family onto the new generation.
+  `--baseline-also-toolchain` keeps another family's hierarchy in the baseline.
+  Keep one lock per toolchain family.
+  A foss solve that marks an `lfoss`, `lompi`, `lfbf`, or `llvm-compilers` package added warns on standard error; see [one lock per toolchain family](https://eb-stack.rgoswami.me/../howto/solve-lock.html.md).
+  This manual does not use the phrase "family lock": a lock is one solved selection, and a family is only the toolchain name.
+  On an architecture, family is the text before the first slash (`x86_64`, `aarch64`).
+  See [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md).
 
 - lock :: The Resolvo result for one selection. A package bundle has
   `locks/<profile>.lock.json` per profile. `stack solve` writes
@@ -5787,26 +5828,23 @@ requirement; a builddependency is dashed. A `.svg` or `.png` path is rendered
 with the Graphviz `dot` program. Any other suffix, including `.dot`, is the
 DOT source. The MCP field `dot_out` writes the same file.
 
-The baseline is either a previous generation (`--baseline-easyconfigs`, by
-default the first `--easyconfigs` tree) or what a set of easystacks installs
-(`--baseline-easystack`, repeatable). An easystack baseline is every entry
-plus the closure its recipes pin, read from the `--easyconfigs` trees and kept
-to the policy toolchain's hierarchy. An entry pinned with `from-commit` is read
-from that commit of `--baseline-commits-from` when given, and matched by
-filename otherwise. Entries that name no recipe are listed on standard error.
-`--baseline-also-toolchain` keeps another family's hierarchy in the baseline,
-such as `lfoss/2026.1` beside a `foss/2026.1` solve. `--filter-deps` drops each named dependency before the solve, together
-with the subtree under it, using EasyBuild's matching: a bare name,
-`name=version`, or `name=[low:high]`. `[` and `]` include a limit, the
-opposite bracket excludes it, and an empty side is open. The last spec for
-a name wins. Pass EESSI-extend's `EASYBUILD_FILTER_DEPS` list when solving
-against a European Environment for Scientific Software Installations (EESSI) baseline, or the build list carries modules the compat
-layer already provides.
-Against an EESSI version's easystacks, `unchanged` in the stack diff means the
-software layer already provides that module, and
-`--build-list-excludes-baseline` drops those modules (same name, version,
-toolchain and versionsuffix) from the build list, leaving what the site layer
-builds on top in dependency order.
+The baseline is either a previous generation (`--baseline-easyconfigs`, by default the first `--easyconfigs` tree) or what a set of easystacks installs (`--baseline-easystack`, repeatable).
+An easystack baseline is every entry plus the closure its recipes pin, read from the `--easyconfigs` trees and kept to the policy toolchain's hierarchy.
+An entry pinned with `from-commit` is read from that commit of `--baseline-commits-from` when given, and matched by filename otherwise.
+Entries that name no recipe are listed on standard error.
+`--baseline-also-toolchain` keeps another family's hierarchy in the baseline, such as `lfoss/2026.1` beside a `foss/2026.1` solve.
+A foss solve cannot see the LLVM family (`lfoss`, `lompi`, `lfbf`, `llvm-compilers`).
+A baseline easystack can name one of those toolchains.
+If the stack diff then marks that package added, the solve warns on standard error and still exits 0.
+The added row is the site layer because the foss universe dropped the LLVM recipe.
+Keep one lock per toolchain family, or pass `--baseline-also-toolchain` for that family so its hierarchy stays in the baseline.
+See [one lock per toolchain family](https://eb-stack.rgoswami.me/../howto/solve-lock.html.md).
+`--filter-deps` drops each named dependency before the solve, together with the subtree under it, using EasyBuild's matching: a bare name, `name=version`, or `name=[low:high]`.
+`[` and `]` include a limit.
+The opposite bracket excludes it, and an empty side is open.
+The last spec for a name wins.
+Pass EESSI-extend's `EASYBUILD_FILTER_DEPS` list when solving against a European Environment for Scientific Software Installations (EESSI) baseline, or the build list carries modules the compat layer already provides.
+Against an EESSI version's easystacks, `unchanged` in the stack diff means the software layer already provides that module, and `--build-list-excludes-baseline` drops those modules (same name, version, toolchain and versionsuffix) from the build list, leaving what the site layer builds on top in dependency order.
 
 A Jenkins build list is one easyconfig filename per line with optional `eb`
 flags, `#` for comments. `--roots-from-build-list` takes the package name of

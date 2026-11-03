@@ -172,6 +172,7 @@ jobs:
             --test easyblock_layers \
             --test easyblock_owed \
             --test extension_provides \
+            --test family_site_layer \
             --test fetch_prs_script \
             --test fix_cost \
             --test from_commit \

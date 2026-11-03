@@ -19,6 +19,11 @@ All notable changes to this project are documented here.
   and older-EESSI inventories. A module in the target is `moved` and names
   its EESSI version; an excluded module is `site-only`; every other missing
   route is `gone` until it lands.
+- `stack solve` warns on standard error when a foss solve's baseline easystack names an LLVM-family recipe (`lfoss`, `lompi`, `lfbf`, or `llvm-compilers`) and the stack diff marks that package added.
+  The foss universe cannot see that family, so the added row is the site layer by mistake.
+  The solve still exits 0.
+  Keep one lock per toolchain family, or pass `--baseline-also-toolchain` for that family.
+  `llvm-compilers-20.1.8` and `llvm-compilers-21.1.8` are the versions `data/eessi-generations.toml` lists for generations 2025b and 2026.1.
 - `stack shard` splits one Jenkins build list into shards that can
   build at the same time. A line's set is its closure over
   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod

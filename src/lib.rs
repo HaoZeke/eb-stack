@@ -878,8 +878,51 @@ pub fn solve_with_baseline_source(
         anyhow::anyhow!("{text}{hint}{constraints}")
     })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
+    if let Some(base) = baseline.as_ref() {
+        let (easystack_files, also) = llvm_baseline_inputs(baseline_source)?;
+        let added: Vec<(String, String)> = classify_stack_diff(base, &lock)
+            .into_iter()
+            .filter(|change| change.kind == PackageChangeKind::Added)
+            .map(|change| {
+                (
+                    change.name,
+                    change.solved_easyconfig_path.unwrap_or_default(),
+                )
+            })
+            .collect();
+        for warning in generation_lint::llvm_site_layer_warnings(
+            &policy.toolchain,
+            &also,
+            &easystack_files,
+            &added,
+        ) {
+            eprintln!("warning: {warning}");
+        }
+    }
     write_lock_sbom_and_extras(&lock, baseline.as_ref(), lock_out, sbom_out, extra)?;
     Ok(lock)
+}
+
+/// Easyconfig filenames a baseline easystack names, and the extra families
+/// the solve was asked to keep. A tree baseline has neither.
+fn llvm_baseline_inputs(source: BaselineSource<'_>) -> Result<(Vec<String>, Vec<Toolchain>)> {
+    let BaselineSource::Easystacks {
+        files,
+        also_toolchains,
+        ..
+    } = source
+    else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let mut names = Vec::new();
+    for path in files {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let entries =
+            parse_easystack_entries(&text).with_context(|| format!("parse {}", path.display()))?;
+        names.extend(entries.into_iter().map(|entry| entry.file));
+    }
+    Ok((names, also_toolchains.to_vec()))
 }
 
 #[cfg(test)]

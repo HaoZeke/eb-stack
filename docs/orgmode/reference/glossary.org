@@ -29,14 +29,14 @@ Flags and exit status stay in the [[file:cli.org][command-line reference]].
   ~--baseline-easyconfigs~ and the first ~--easyconfigs~ tree is the
   baseline. See [[file:../howto/emit-reports.org][emit a build list and stack diff]].
 
-- toolchain family :: The toolchain name without its version (~foss~,
-  ~GCCcore~, ~gfbf~). A bump retargets an explicit dependency's family
-  onto the new generation. ~--baseline-also-toolchain~ keeps another
-  family's hierarchy in the baseline. This manual does not use the phrase
-  "family lock": a lock is one solved selection, and a family is only the
-  toolchain name. On an architecture, family is the text before the first
-  slash (~x86_64~, ~aarch64~). See
-  [[file:../howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
+- toolchain family :: The toolchain name without its version (~foss~, ~GCCcore~, ~gfbf~).
+  A bump retargets an explicit dependency's family onto the new generation.
+  ~--baseline-also-toolchain~ keeps another family's hierarchy in the baseline.
+  Keep one lock per toolchain family.
+  A foss solve that marks an ~lfoss~, ~lompi~, ~lfbf~, or ~llvm-compilers~ package added warns on standard error; see [[file:../howto/solve-lock.org][one lock per toolchain family]].
+  This manual does not use the phrase "family lock": a lock is one solved selection, and a family is only the toolchain name.
+  On an architecture, family is the text before the first slash (~x86_64~, ~aarch64~).
+  See [[file:../howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
 
 - lock :: The Resolvo result for one selection. A package bundle has
   ~locks/<profile>.lock.json~ per profile. ~stack solve~ writes
