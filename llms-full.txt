@@ -123,7 +123,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md),
     [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md),
     [report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md),
-    [read the reproduction scoreboard](https://eb-stack.rgoswami.me/howto/repro-summary.html.md).
+    [read the reproduction scoreboard](https://eb-stack.rgoswami.me/howto/repro-summary.html.md),
+    [report a site recipe that shadows an EESSI module](https://eb-stack.rgoswami.me/howto/site-layer-shadow.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5616,6 +5617,78 @@ file, when a case is missing, or when `total` is not the sum of
 empty `--scores` directory is an error. `eb_repro_summary` is the same
 command. See [reproduction fidelity](https://eb-stack.rgoswami.me/../explanation/fidelity.html.md)
 and [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Report a site recipe that shadows an EESSI module
+
+What it does: `stack shadow` compares site-layer easyconfigs with the
+modules the European Environment for Scientific Software Installations
+(EESSI) base stack already provides. `--base` is loaded by the same
+reader `stack gap` uses for `--installed`: a directory is an Lmod tree,
+and a file is `module -t avail`, `module spider -t`, or `Name/version`.
+The comparison is the recipe's own name and software version. A match
+is `same`. Another recorded version of that name is `different`. A base
+name with no recorded version is `unversioned`. A name the base does
+not have is the site layer and is not reported.
+
+Why you'd use it: a site module path searched before the EESSI path
+hides the base module of the same name. The site layer is supposed to
+be the software EESSI does not install. This check fails when a recipe
+would override one that it does.
+
+# The fixture layer
+
+`tests/shadow_fixtures/easyconfigs` has four recipes. zlib 1.3.1 is the
+version in the base tree (`1.3.1-GCCcore-15.2.0`, the spelling EasyBuild
+uses for an installed module: software version, then `-`, then the
+toolchain). FFTW 3.3.11 is not the base's 3.3.10. `bare.txt` names
+OnlyName and records no version. VASP is absent from the base. The file
+`default` under zlib is not a module version.
+
+```bash
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt
+```
+
+That command printed:
+
+```
+same zlib-1.3.1-GCCcore-15.2.0.eb name=zlib version=1.3.1 base=1.3.1-GCCcore-15.2.0
+different FFTW-3.3.11-gompi-2023a.eb name=FFTW version=3.3.11 base=3.3.10-gompi-2023a
+unversioned OnlyName-1.2-GCCcore-15.2.0.eb name=OnlyName version=1.2 base=-
+same=1 different=1 unversioned=1 recipes=4 base=3
+```
+
+The process exited 1. Standard error was:
+
+```
+error: 3 site-layer recipes shadow a module the EESSI base stack provides
+```
+
+Names match without regard to case. A recipe versionsuffix has to end
+the base module version, so a CUDA variant is not the same version as
+the plain build. `--json` prints `hits`, `same`, `different`,
+`unversioned`, `recipes`, and `base_names`.
+
+# A recipe the base does not provide
+
+```bash
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs/v/VASP/VASP-6.5.1-foss-2026.1.eb \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt
+```
+
+That command printed:
+
+```
+same=0 different=0 unversioned=0 recipes=1 base=3
+```
+
+The process exited 0. A recipe that does not parse exits 1 and names
+the file. `eb_stack_shadow` is the same check. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary
 

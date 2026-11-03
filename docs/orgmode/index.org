@@ -93,6 +93,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
    *Where does the reproduction grind stand?* → :doc:`howto/repro-summary`
 
+   *A site recipe that shadows an EESSI module?* → :doc:`howto/site-layer-shadow`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -190,6 +192,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/recipe-identity
    howto/package-latest
    howto/repro-summary
+   howto/site-layer-shadow
 
 .. toctree::
    :maxdepth: 2
@@ -352,7 +355,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/stack-easystack.org][write an easystack from a stack lock]],
     [[file:howto/recipe-identity.org][read the easyblock, templates, and hierarchy]],
     [[file:howto/package-latest.org][report the newest stable upstream release]],
-    [[file:howto/repro-summary.org][read the reproduction scoreboard]].
+    [[file:howto/repro-summary.org][read the reproduction scoreboard]],
+    [[file:howto/site-layer-shadow.org][report a site recipe that shadows an EESSI module]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],

@@ -74,6 +74,8 @@ All notable changes to this project are documented here.
 - How to report the newest stable upstream release of an EasyBuild
   recipe, and why a listed version was kept or dropped.
 - How to read the reproduction scoreboard and hold it to a ratchet file.
+- How to report a site-layer recipe that shadows a module the EESSI
+  base stack already provides.
 
 ## 0.4.0 - 2026-11-01
 
