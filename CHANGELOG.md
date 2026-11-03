@@ -6,6 +6,15 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack shard` plans a build-list line it cannot resolve as an opaque
+  line when EasyBuild can still build it: the line carries `--from-pr`
+  or `--from-commit`, or its easyconfig is on the robot path but does
+  not parse (a site recipe that computes its fields in Python). The
+  line packs as its own group with the default weight and no closure,
+  is written to its shard unchanged, and `plan.json` gives the reason
+  under `opaque`. Any other unresolved line is still an error and
+  nothing is written. A list with 22 `--from-commit` lines and seven
+  site recipes failed whole before.
 - `stack order` exits 1 when runtime requirements of one name at one
   toolchain have no version that satisfies every one of them. The error
   names each requester and the version it resolved. Eigen 3.4.1 required
