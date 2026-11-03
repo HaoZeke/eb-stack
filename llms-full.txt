@@ -4193,11 +4193,11 @@ The two `fetch-prs.sh` examples produce the JSON accepted by
 named in its comment:
 
 ```bash
-EB_STACK=/path/to/eb-stack
-(cd /path/to/software-layer && \
+EB_STACK=$PWD
+(cd "$EB_EESSI_SOFTWARE_LAYER" && \
   "$EB_STACK/examples/eessi-pr-overlap/fetch-prs.sh" \
     EESSI/software-layer 2026.06 /tmp/open-layer)
-(cd /path/to/easybuild-easyconfigs && \
+(cd "$EB_EASYCONFIGS_DEVELOP" && \
   "$EB_STACK/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
     easybuilders/easybuild-easyconfigs /tmp/open-easyconfigs)
 
