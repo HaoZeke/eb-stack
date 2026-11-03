@@ -1205,7 +1205,8 @@ impl StackGapRun {
 /// each gap. Writes `gap.tsv`, one TSV per route, `roots.txt` (the recipes
 /// on the generation, the input of `stack batch --roots-file`), and
 /// `bump-sources.txt` (the newest recipe on any toolchain for each name
-/// without one).
+/// without one), and `version-change.tsv` (old module versions moved to the
+/// target EESSI version, gone, or kept site-only).
 pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
     use std::collections::{BTreeMap, BTreeSet};
     if args.site.is_empty() && args.older.is_empty() {
@@ -1214,26 +1215,31 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
     if args.installed.is_empty() {
         return Err(usage("pass at least one --installed target tree"));
     }
-    let mut site = BTreeSet::new();
+    let mut site_inventory = crate::gap::ModuleInventory::new();
     for path in &args.site {
-        site.extend(
-            crate::gap::names_from_module_source(path)
+        merge_module_inventory(
+            &mut site_inventory,
+            crate::gap::inventory_from_module_source(path)
                 .with_context(|| format!("--site {}", path.display()))?,
         );
     }
     for path in &args.older {
-        site.extend(
-            crate::gap::names_from_module_source(path)
+        merge_module_inventory(
+            &mut site_inventory,
+            crate::gap::inventory_from_module_source(path)
                 .with_context(|| format!("--older {}", path.display()))?,
         );
     }
-    let mut stack = BTreeSet::new();
+    let site: BTreeSet<String> = site_inventory.keys().cloned().collect();
+    let mut stack_inventory = crate::gap::ModuleInventory::new();
     for path in &args.installed {
-        stack.extend(
-            crate::gap::names_from_module_source(path)
+        merge_module_inventory(
+            &mut stack_inventory,
+            crate::gap::inventory_from_module_source(path)
                 .with_context(|| format!("--installed {}", path.display()))?,
         );
     }
+    let stack: BTreeSet<String> = stack_inventory.keys().cloned().collect();
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter = FilterDeps::parse(&filter_specs)
         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
@@ -1313,6 +1319,11 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
         &args.out_dir.join("gap.tsv"),
         &crate::gap::render_tsv(&rows),
     )?;
+    let version_changes = crate::gap::version_changes(&rows, &site_inventory, &stack_inventory);
+    crate::write_text(
+        &args.out_dir.join("version-change.tsv"),
+        &crate::gap::render_version_changes(&version_changes),
+    )?;
     for (route, filename) in crate::gap::ROUTE_FILES {
         let subset: Vec<_> = rows
             .iter()
@@ -1345,6 +1356,15 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
         rows,
         out_dir: args.out_dir.clone(),
     })
+}
+
+fn merge_module_inventory(
+    into: &mut crate::gap::ModuleInventory,
+    from: crate::gap::ModuleInventory,
+) {
+    for (name, versions) in from {
+        into.entry(name).or_default().extend(versions);
+    }
 }
 
 /// Arguments for `stack batch`.

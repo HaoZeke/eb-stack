@@ -32,12 +32,23 @@ fn a_line_the_baseline_provides_exits_1_and_an_allow_keeps_it() {
     let stderr = String::from_utf8_lossy(&failed.stderr);
     assert_eq!(failed.status.code(), Some(1), "{stdout}{stderr}");
     assert!(
-        stdout.contains("provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW "),
+        stdout.contains(
+            "provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4"
+        ),
         "{stdout}"
     );
-    assert!(stdout.contains("name=Python "), "{stdout}");
-    assert!(stdout.contains("name=GROMACS "), "{stdout}");
-    assert!(stdout.contains("unparsed not-a-version.eb "), "{stdout}");
+    assert!(
+        stdout.contains("name=Python list=tests/provided_fixtures/site.list line=5"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("name=GROMACS list=tests/provided_fixtures/site.list line=3"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("unparsed not-a-version.eb list=tests/provided_fixtures/site.list line=7"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("VASP"), "{stdout}");
     assert!(
         stderr.contains("3 build-list lines name software the baseline already provides"),

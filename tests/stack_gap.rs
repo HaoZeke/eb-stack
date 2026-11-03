@@ -97,6 +97,59 @@ fn routes_are_written_one_file_per_set() {
 }
 
 #[test]
+fn route_fixture_has_one_row_for_every_route() {
+    let out = tempfile::tempdir().expect("temp");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(root())
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "stack",
+            "gap",
+            "--site",
+            "tests/gap_routes/one-per-route.txt",
+            "--installed",
+            "tests/gap_routes/installed.txt",
+            "--easyconfigs",
+            "tests/gap_routes/easyconfigs",
+            "--generation",
+            "2026.1",
+            "--exclude-file",
+            "tests/gap_routes/site-only.tsv",
+            "--filter-deps",
+            "zlib",
+            "--open-layer",
+            "tests/gap_routes/open-layer.json",
+            "--open-easyconfigs",
+            "tests/gap_routes/open-easyconfigs.json",
+            "--out-dir",
+        ])
+        .arg(out.path())
+        .output()
+        .expect("stack gap");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.contains(
+            "site=7 in-stack=1 filtered=1 open-layer=1 recipe=1 open-easyconfigs=1 no-recipe=1 excluded=1"
+        ),
+        "{stdout}"
+    );
+    for name in [
+        "in-stack.tsv",
+        "site-only.tsv",
+        "filtered.tsv",
+        "open-layer.tsv",
+        "recipe.tsv",
+        "open-easyconfigs.tsv",
+        "bump.tsv",
+    ] {
+        let text = std::fs::read_to_string(out.path().join(name)).unwrap();
+        assert_eq!(text.lines().count(), 2, "{name}:\n{text}");
+    }
+}
+
+#[test]
 fn live_module_trees_union_the_site_an_older_eessi_and_both_target_dirs() {
     let out = tempfile::tempdir().expect("temp");
     let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
@@ -159,4 +212,27 @@ fn live_module_trees_union_the_site_an_older_eessi_and_both_target_dirs() {
     );
     assert!(gap.contains("QuantumESPRESSO\tno-recipe\t"), "{gap}");
     assert!(!gap.contains("software-layer#1600"), "{gap}");
+    let changes = std::fs::read_to_string(out.path().join("version-change.tsv")).unwrap();
+    assert!(
+        changes.starts_with("name\told_version\teessi_version\tstatus\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("CUDA\t12.6.0\t12.6.0\tmoved\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("FFTW\t3.3.10\t3.3.10\tmoved\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("LAMMPS\t2023.0\t-\tgone\n")
+            && changes.contains("LAMMPS\t2024.0\t-\tgone\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("MATLAB\t2024b\t-\tsite-only\n")
+            && changes.contains("code-server\t4.96.2\t-\tsite-only\n"),
+        "{changes}"
+    );
 }

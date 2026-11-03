@@ -677,7 +677,10 @@ version counts. The command writes ~gap.tsv~, one TSV per
 route (~site-only.tsv~ for ~excluded~, ~bump.tsv~ for ~no-recipe~, and
 ~in-stack.tsv~, ~filtered.tsv~, ~open-layer.tsv~, ~recipe.tsv~,
 ~open-easyconfigs.tsv~), ~roots.txt~ for ~stack batch --roots-file~ (the
-~recipe~ rows only), and ~bump-sources.txt~ for ~package bump --latest~.
+~recipe~ rows only), ~bump-sources.txt~ for ~package bump --latest~, and
+~version-change.tsv~. The last file has one row per old module version:
+~moved~ names the target EESSI version, ~site-only~ is an ~excluded~
+name, and every other missing route is ~gone~ until it lands.
 
 ~stack provided~ reads each ~--build-list~ (a Jenkins list or one
 easyconfig path per line; ~#~ comments are skipped) and fails when a
@@ -694,7 +697,7 @@ path, not left as site layer. ~--licensed~ and ~--licensed-file~ warn
 for group-restricted names; ~data/site-licensed.txt~ is that list for
 VASP, MATLAB, ANSYS, ORCA, and Gurobi. With neither flag there is no
 warning. ~--strict~ makes a remaining warning exit 1. Stdout lists each
-hit as ~provided <file> name=<Name> list=<path>~ and ends with
+hit as ~provided <file> name=<Name> list=<path> line=<N>~ and ends with
 ~hits= unparsed= allowed= provided= toolchain= hooks= family= licensed=~.
 ~--format~ is ~text~ by default, ~github~ for workflow commands, or
 ~json~. ~--json~ is the same as ~--format json~. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]

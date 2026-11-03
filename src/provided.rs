@@ -19,6 +19,7 @@ use crate::easystack::filename_toolchain;
 use crate::gap::{names_from_listing, software_name};
 use crate::hierarchy::known_hierarchy;
 use crate::jenkins::parse_build_list;
+use crate::shard::parse_lines;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -437,16 +438,12 @@ struct Entry {
 }
 
 fn entries(text: &str) -> Vec<Entry> {
-    text.lines()
-        .enumerate()
-        .filter_map(|(index, raw)| {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                return None;
-            }
-            let line = parse_build_list(trimmed).into_iter().next()?;
+    parse_lines(text)
+        .into_iter()
+        .filter_map(|shard_line| {
+            let line = parse_build_list(&shard_line.text).into_iter().next()?;
             Some(Entry {
-                line: index + 1,
+                line: shard_line.number,
                 file: line.file,
                 flags: line.flags,
             })
@@ -636,12 +633,15 @@ fn render_text(report: &ProvidedReport) -> String {
     let mut out = String::new();
     for hit in &report.hits {
         out.push_str(&format!(
-            "provided {} name={} list={}\n",
-            hit.file, hit.name, hit.list
+            "provided {} name={} list={} line={}\n",
+            hit.file, hit.name, hit.list, hit.line
         ));
     }
     for line in &report.unparsed {
-        out.push_str(&format!("unparsed {} list={}\n", line.file, line.list));
+        out.push_str(&format!(
+            "unparsed {} list={} line={}\n",
+            line.file, line.list, line.line
+        ));
     }
     for note in report
         .toolchain

@@ -53,6 +53,12 @@ pub struct OpenCarry {
     pub label: String,
 }
 
+/// Module names and the versions the live listing exposes.
+///
+/// A name with an empty set came from a bare module name, so its version is
+/// unknown rather than absent from the inventory.
+pub type ModuleInventory = BTreeMap<String, BTreeSet<String>>;
+
 /// The lists [`gap`] reads.
 pub struct GapInput<'a> {
     /// Site package names.
@@ -100,11 +106,19 @@ pub fn names_from_listing(text: &str) -> BTreeSet<String> {
 /// not. A file is `module -t avail`, `module spider -t`, or the same
 /// `Name/version` lines as [`names_from_listing`].
 pub fn names_from_module_source(path: &Path) -> Result<BTreeSet<String>> {
+    Ok(inventory_from_module_source(path)?.into_keys().collect())
+}
+
+/// Module names and versions from a listing file or an Lmod module tree.
+///
+/// Versions are kept as Lmod spells them, including any toolchain suffix.
+/// Bare names have an empty version set.
+pub fn inventory_from_module_source(path: &Path) -> Result<ModuleInventory> {
     if path.is_dir() {
-        names_from_module_tree(path).with_context(|| path.display().to_string())
+        inventory_from_module_tree(path).with_context(|| path.display().to_string())
     } else {
         let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
-        Ok(names_from_live_listing(&text))
+        Ok(inventory_from_live_listing(&text))
     }
 }
 
@@ -113,24 +127,35 @@ pub fn names_from_module_source(path: &Path) -> Result<BTreeSet<String>> {
 /// Path headers, `(default)`, and a `Name: Name/version, ...` spider line
 /// are read. A plain `Name/version` or bare name is unchanged.
 pub fn names_from_live_listing(text: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+    inventory_from_live_listing(text).into_keys().collect()
+}
+
+/// Module names and versions in `module -t avail` or `module spider -t`
+/// output.
+pub fn inventory_from_live_listing(text: &str) -> ModuleInventory {
+    let mut inventory = ModuleInventory::new();
     for line in text.lines() {
         for module in live_module_tokens(line) {
-            let Some(name) = module.split('/').next() else {
+            let mut parts = module.splitn(2, '/');
+            let Some(name) = parts.next() else {
                 continue;
             };
-            if !name.is_empty() {
-                names.insert(name.to_string());
+            if name.is_empty() {
+                continue;
+            }
+            let versions = inventory.entry(name.to_string()).or_default();
+            if let Some(version) = parts.next().filter(|version| !version.is_empty()) {
+                versions.insert(version.to_string());
             }
         }
     }
-    names
+    inventory
 }
 
-fn names_from_module_tree(root: &Path) -> std::io::Result<BTreeSet<String>> {
-    let mut names = BTreeSet::new();
-    walk_module_tree(root, &mut names)?;
-    Ok(names)
+fn inventory_from_module_tree(root: &Path) -> std::io::Result<ModuleInventory> {
+    let mut inventory = ModuleInventory::new();
+    walk_module_tree(root, &mut inventory)?;
+    Ok(inventory)
 }
 
 /// One tab-separated file per route `stack gap` writes, besides `gap.tsv`.
@@ -318,6 +343,93 @@ pub fn render_tsv(rows: &[GapRow]) -> String {
     out
 }
 
+/// One previous-stack module version and where users find it in the new
+/// stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VersionChangeRow {
+    /// EasyBuild software name.
+    pub name: String,
+    /// Version in the site or older-EESSI inventory. `None` for a bare name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_version: Option<String>,
+    /// Version in the target EESSI inventory. Multiple target versions are
+    /// comma-separated. Set only for `moved`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eessi_version: Option<String>,
+    /// `moved`, `gone`, or `site-only`.
+    pub status: String,
+}
+
+fn inventory_versions<'a>(
+    inventory: &'a ModuleInventory,
+    name: &str,
+) -> Option<&'a BTreeSet<String>> {
+    inventory.get(name).or_else(|| {
+        inventory
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, versions)| versions)
+    })
+}
+
+/// Turn gap routes into the user-facing version change table.
+///
+/// An `in-stack` module moved to EESSI, an `excluded` module remains
+/// site-only, and every other route is gone from the opened stack until that
+/// route lands. One row is written per old module version; a bare old name
+/// still contributes one row with no version.
+pub fn version_changes(
+    rows: &[GapRow],
+    old: &ModuleInventory,
+    eessi: &ModuleInventory,
+) -> Vec<VersionChangeRow> {
+    let mut changes = Vec::new();
+    for row in rows {
+        let status = match row.route.as_str() {
+            "in-stack" => "moved",
+            "excluded" => "site-only",
+            _ => "gone",
+        };
+        let eessi_version = (status == "moved")
+            .then(|| inventory_versions(eessi, &row.name))
+            .flatten()
+            .filter(|versions| !versions.is_empty())
+            .map(|versions| versions.iter().cloned().collect::<Vec<_>>().join(","));
+        let old_versions = inventory_versions(old, &row.name);
+        if let Some(versions) = old_versions.filter(|versions| !versions.is_empty()) {
+            changes.extend(versions.iter().map(|version| VersionChangeRow {
+                name: row.name.clone(),
+                old_version: Some(version.clone()),
+                eessi_version: eessi_version.clone(),
+                status: status.to_string(),
+            }));
+        } else {
+            changes.push(VersionChangeRow {
+                name: row.name.clone(),
+                old_version: None,
+                eessi_version,
+                status: status.to_string(),
+            });
+        }
+    }
+    changes
+}
+
+/// A tab-separated version change table with a header line.
+pub fn render_version_changes(rows: &[VersionChangeRow]) -> String {
+    let mut out = String::from("name\told_version\teessi_version\tstatus\n");
+    for row in rows {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\n",
+            row.name,
+            row.old_version.as_deref().unwrap_or("-"),
+            row.eessi_version.as_deref().unwrap_or("-"),
+            row.status
+        ));
+    }
+    out
+}
+
 /// The package name an easyconfig filename names.
 ///
 /// `hwloc-CUDA-2.11.2-GCCcore-15.2.0.eb` is `hwloc-CUDA`. A path contributes
@@ -388,7 +500,7 @@ pub fn carries_from_layer_version(
     out
 }
 
-fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result<()> {
+fn walk_module_tree(dir: &Path, inventory: &mut ModuleInventory) -> std::io::Result<()> {
     let entries = std::fs::read_dir(dir).map_err(|error| io_at(dir, error))?;
     for entry in entries {
         let entry = entry.map_err(|error| io_at(dir, error))?;
@@ -406,7 +518,7 @@ fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result
                 Err(_) => continue,
             }
         } else if file_type.is_dir() {
-            walk_module_tree(&path, names)?;
+            walk_module_tree(&path, inventory)?;
             continue;
         }
         if !is_module_file(&file_name) {
@@ -423,7 +535,10 @@ fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result
         if stem.is_empty() || stem == "default" {
             continue;
         }
-        names.insert(software.to_string());
+        inventory
+            .entry(software.to_string())
+            .or_default()
+            .insert(stem.to_string());
     }
     Ok(())
 }
@@ -866,6 +981,35 @@ Where:
                 "LAMMPS".to_string(),
             ])
         );
+        let inventory = inventory_from_live_listing(text);
+        assert_eq!(
+            inventory["zlib"],
+            BTreeSet::from(["1.2.13".to_string(), "1.3.1".to_string()])
+        );
+        assert_eq!(inventory["GCCcore"], BTreeSet::from(["14.2.0".to_string()]));
+        assert!(inventory["LAMMPS"].is_empty());
+    }
+
+    #[test]
+    fn version_changes_name_moved_gone_and_site_only_rows() {
+        let old = inventory_from_live_listing(
+            "FFTW/3.3.10-gompi-2025b\nLAMMPS/2024.0-foss-2025b\nMATLAB/2024b\n",
+        );
+        let eessi = inventory_from_live_listing("FFTW/3.3.10-gompi-2026.1\n");
+        let rows = vec![
+            row("FFTW", "in-stack", None, None, None),
+            row("LAMMPS", "open-layer", None, None, None),
+            row("MATLAB", "excluded", None, None, None),
+        ];
+        assert_eq!(
+            render_version_changes(&version_changes(&rows, &old, &eessi)),
+            "\
+name\told_version\teessi_version\tstatus
+FFTW\t3.3.10-gompi-2025b\t3.3.10-gompi-2026.1\tmoved
+LAMMPS\t2024.0-foss-2025b\t-\tgone
+MATLAB\t2024b\t-\tsite-only
+"
+        );
     }
 
     #[test]
@@ -883,7 +1027,10 @@ Where:
         let binutils = root.path().join("Compiler/GCCcore/13.2.0/binutils");
         std::fs::create_dir_all(&binutils).unwrap();
         std::fs::write(binutils.join("2.42.lua"), "").unwrap();
-        let names = names_from_module_tree(root.path()).unwrap();
+        let names: BTreeSet<String> = inventory_from_module_tree(root.path())
+            .unwrap()
+            .into_keys()
+            .collect();
         assert_eq!(
             names,
             BTreeSet::from([

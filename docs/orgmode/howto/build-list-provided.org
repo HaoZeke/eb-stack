@@ -29,10 +29,10 @@ eb-stack stack provided \
 That command printed:
 
 #+begin_example
-provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list
-provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list
-provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list
-unparsed not-a-version.eb list=tests/provided_fixtures/site.list
+provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list line=3
+provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4
+provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list line=5
+unparsed not-a-version.eb list=tests/provided_fixtures/site.list line=7
 toolchain fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list line=5 uses=foss-2025b; a site-layer line on EESSI 2026.06 must use a 2026.1 toolchain or GCCcore-15.2.0 below it (GCCcore-15.2.0, GCC-15.2.0, gfbf-2026.1, gompi-2026.1, foss-2026.1)
 hooks FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4 sets=--hooks=/sw/hooks/site.py; which replaces EESSI's hooks
 hits=3 unparsed=1 allowed=0 provided=3 toolchain=1 hooks=1 family=0 licensed=0

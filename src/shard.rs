@@ -267,9 +267,9 @@ pub fn plan(
     }
 }
 
-/// Read a weights file: `module<TAB>seconds` per line, `#` comments and blank
-/// lines skipped. A fractional value rounds up to whole seconds. A later line
-/// for the same module replaces an earlier one.
+/// Read a weights file: `module`, a tab, then `seconds` per line. `#` comments
+/// and blank lines are skipped. A fractional value rounds up to whole seconds.
+/// A later line for the same module replaces an earlier one.
 pub fn parse_weights(text: &str) -> Result<BTreeMap<String, u64>, String> {
     let mut out = BTreeMap::new();
     for (i, raw) in text.lines().enumerate() {
