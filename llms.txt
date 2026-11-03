@@ -43,6 +43,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md): What it does: stack sections reads a Jenkins build list and writes it again under the #### Title #### headers of a previous list.
 - [Write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md): What it does: stack easystack writes a stack lock as the YAML eb --easystack reads.
 - [Read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md): What it does: three recipe commands answer questions EasyBuild decides before it builds.
+- [Report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md): What it does: package latest reads each easyconfig's source_urls and asks that backend for versions.
 
 ## Reference
 

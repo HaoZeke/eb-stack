@@ -121,7 +121,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md),
     [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md),
     [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md),
-    [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md).
+    [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md),
+    [report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5494,6 +5495,55 @@ GCCcore, GCC, gfbf, and gompi to foss, most minimal subtoolchain first.
 `--export` adds the synthetic GCC-family rule. The plain document has
 no `synthetic` key. `eb_recipe_easyblock`, `eb_recipe_templates`, and
 `eb_recipe_hierarchy` are the same commands. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Report the newest stable upstream release
+
+What it does: `package latest` reads each easyconfig's `source_urls` and
+asks that backend for versions. PyPI, GitHub, GitLab, the Comprehensive
+R Archive Network (CRAN), crates.io, and an HTTP directory listing are
+the backends. Every listed version is kept, or dropped with a reason: a
+draft, a pre-release, a yanked release, or a per-package override.
+`data/upstream-overrides.toml` is the override file the binary carries.
+`--overrides` files apply after it.
+
+Why you'd use it: `package bump --latest` moves a recipe to the version
+this command picks. Run the report first when you want to see what was
+dropped.
+
+# A directory that lists no version
+
+`tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb`
+points `source_urls` at `https://example.org/`, which is not a file
+listing of zlib tarballs.
+
+```bash
+eb-stack package latest \
+  --source tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb
+```
+
+That command printed:
+
+```
+name=zlib current=1.3.1 newest=- state=unknown backend=directory:https://example.org/ reason="the backend listed no version of the recipe's source file"
+```
+
+Read the decision line left to right. `current` is the recipe version.
+`newest` is the newest version that was kept, or `-` when none was.
+`state` is `current` (the recipe is already that version), `behind`,
+`pinned` (an override names the version to keep), or `unknown`. The
+`reason` is why no version was chosen.
+
+A backend that does list versions adds one indented line per version,
+`kept` or `dropped (<reason>)`. A pre-release is dropped. `--json`
+prints the same rows as one array. GitHub requests send `GITHUB_TOKEN`
+or `GH_TOKEN` when it is set.
+
+A recipe whose `source_urls` name PyPI, such as
+`tests/sbom_recorded/rebuild/easybuild/easyconfigs/w/wrapt/wrapt-2.2.1-GCCcore-15.2.0.eb`,
+uses the PyPI backend. That command queries the network, and the newest
+stable release moves, so the page does not freeze a version number from
+one run. `eb_package_latest` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary

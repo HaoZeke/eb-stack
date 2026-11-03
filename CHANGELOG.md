@@ -71,6 +71,8 @@ All notable changes to this project are documented here.
 - How to write a stack lock as the YAML `eb --easystack` reads.
 - How to read the easyblock class, the template values, and the
   toolchain hierarchy EasyBuild derives.
+- How to report the newest stable upstream release of an EasyBuild
+  recipe, and why a listed version was kept or dropped.
 
 ## 0.4.0 - 2026-11-01
 
