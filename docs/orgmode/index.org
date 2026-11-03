@@ -85,6 +85,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
    *Regroup a Jenkins build list under the previous sections?* → :doc:`howto/stack-sections`
 
+   *Write the YAML eb --easystack reads?* → :doc:`howto/stack-easystack`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -178,6 +180,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/stack-shard
    howto/stack-batch
    howto/stack-sections
+   howto/stack-easystack
 
 .. toctree::
    :maxdepth: 2
@@ -336,7 +339,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/bot-classify.org][read an EESSI bot FAILURE]],
     [[file:howto/stack-shard.org][split a Jenkins build list into shards]],
     [[file:howto/stack-batch.org][plan software-layer pull requests that do not overlap]],
-    [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]].
+    [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]],
+    [[file:howto/stack-easystack.org][write an easystack from a stack lock]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],

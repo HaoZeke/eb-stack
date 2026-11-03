@@ -1,0 +1,58 @@
+#+TITLE: Write an easystack from a stack lock
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack easystack~ writes a stack lock as the YAML
+~eb --easystack~ reads. Entries are easyconfig filenames. ~--option~
+attaches per-file ~eb~ options, spelled without the leading dashes.
+~--eessi-version~ writes the European Environment for Scientific
+Software Installations (EESSI) software-layer layout instead of one
+file: one easystack per generation, ~001-system~ for the system
+toolchain, and ~accel/nvidia/~ for CUDA builds.
+
+Why you'd use it: ~stack solve~ writes a lock. The software layer and
+~eb --easystack~ do not read that lock. This command is the file they
+do read.
+
+* One lock, one file
+
+~tests/provided_fixtures/baseline.lock.json~ selects GROMACS 2025.2 on
+foss/2026.1.
+
+#+begin_src bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --out /tmp/stack.yml
+#+end_src
+
+That command printed:
+
+#+begin_example
+easystack=/tmp/stack.yml entries=1 of=1
+#+end_example
+
+~/tmp/stack.yml~ is:
+
+#+begin_example
+easyconfigs:
+- GROMACS-2025.2-foss-2026.1.eb
+#+end_example
+
+~entries~ counts filenames in the YAML. ~of~ is the number of packages
+in the lock. A package whose lock entry names no ~.eb~ file is left
+out: EasyBuild cannot build a file that was never on disk.
+
+A file with options is a one-key mapping. Repeat ~--option~ as
+~<file.eb>:<option>=<value>~:
+
+#+begin_src bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --option GROMACS-2025.2-foss-2026.1.eb:accept-eula-for=GROMACS \
+  --out /tmp/stack-option.yml
+#+end_src
+
+~--eessi-version~ needs ~--easybuild-version~, ~--generation~, and
+~--out-dir~. A recipe on another generation's toolchain is an error.
+~eb_stack_easystack~ is the same command. See
+[[file:../reference/cli.org][the CLI reference]] and
+[[file:../reference/formats.org][the easystack format]].

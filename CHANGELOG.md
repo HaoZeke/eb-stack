@@ -68,6 +68,7 @@ All notable changes to this project are documented here.
   including the second-version warning a batch records.
 - How to regroup a Jenkins build list under the section headers of a
   previous list.
+- How to write a stack lock as the YAML `eb --easystack` reads.
 
 ## 0.4.0 - 2026-11-01
 

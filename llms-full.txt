@@ -119,7 +119,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md),
     [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md),
     [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md),
-    [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md).
+    [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md),
+    [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5350,6 +5351,64 @@ The default unfiled title is `New in this generation`. The comment
 block before the first entry stays on top. OpenMPI keeps
 `--hooks=/sw/h.py`. `eb_stack_sections` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Write an easystack from a stack lock
+
+What it does: `stack easystack` writes a stack lock as the YAML
+`eb --easystack` reads. Entries are easyconfig filenames. `--option`
+attaches per-file `eb` options, spelled without the leading dashes.
+`--eessi-version` writes the European Environment for Scientific
+Software Installations (EESSI) software-layer layout instead of one
+file: one easystack per generation, `001-system` for the system
+toolchain, and `accel/nvidia/` for CUDA builds.
+
+Why you'd use it: `stack solve` writes a lock. The software layer and
+`eb --easystack` do not read that lock. This command is the file they
+do read.
+
+# One lock, one file
+
+`tests/provided_fixtures/baseline.lock.json` selects GROMACS 2025.2 on
+foss/2026.1.
+
+```bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --out /tmp/stack.yml
+```
+
+That command printed:
+
+```
+easystack=/tmp/stack.yml entries=1 of=1
+```
+
+`/tmp/stack.yml` is:
+
+```
+easyconfigs:
+- GROMACS-2025.2-foss-2026.1.eb
+```
+
+`entries` counts filenames in the YAML. `of` is the number of packages
+in the lock. A package whose lock entry names no `.eb` file is left
+out: EasyBuild cannot build a file that was never on disk.
+
+A file with options is a one-key mapping. Repeat `--option` as
+`<file.eb>:<option>=<value>`:
+
+```bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --option GROMACS-2025.2-foss-2026.1.eb:accept-eula-for=GROMACS \
+  --out /tmp/stack-option.yml
+```
+
+`--eessi-version` needs `--easybuild-version`, `--generation`, and
+`--out-dir`. A recipe on another generation's toolchain is an error.
+`eb_stack_easystack` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md) and
+[the easystack format](https://eb-stack.rgoswami.me/../reference/formats.html.md).
 
 # Glossary
 
