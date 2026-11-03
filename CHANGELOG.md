@@ -66,6 +66,8 @@ All notable changes to this project are documented here.
   same time, with the shared dependencies in a prelude.
 - How to plan software-layer pull requests whose builds do not overlap,
   including the second-version warning a batch records.
+- How to regroup a Jenkins build list under the section headers of a
+  previous list.
 
 ## 0.4.0 - 2026-11-01
 

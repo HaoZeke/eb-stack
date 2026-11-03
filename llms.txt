@@ -40,6 +40,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md): What it does: stack bot-classify reads what an EESSI software-layer bot job left behind and says which kind of FAILURE it was: a real failure, ERROR-only noise, an empty tarball, or infra.
 - [Split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md): What it does: stack shard takes one Jenkins build list for one node type and splits it into shards that can build at the same time.
 - [Plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md): What it does: stack batch plans European Environment for Scientific Software Installations (EESSI) software-layer pull requests whose builds do not overlap.
+- [Regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md): What it does: stack sections reads a Jenkins build list and writes it again under the #### Title #### headers of a previous list.
 
 ## Reference
 

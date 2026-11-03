@@ -118,7 +118,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
     [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md),
     [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md),
-    [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md).
+    [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md),
+    [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5298,6 +5299,56 @@ inputs give the same digest. `--roots-file` reads the `roots.txt` that
 `stack gap` writes. An entry the architecture cannot build exits 1 and
 writes nothing. `eb_stack_batch` is the same command. See
 [the second-version check](https://eb-stack.rgoswami.me/generation-lint.html.md) and
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Regroup a Jenkins build list under the previous sections
+
+What it does: `stack sections` reads a Jenkins build list and writes it
+again under the `#### Title ####` headers of a previous list. Each
+entry keeps its flags and whether it is commented out. A name no
+previous section files goes under `--unfiled`.
+
+Why you'd use it: a solved build list is one flat file. The site's
+previous list already files each package under MPI, Chemistry, and the
+other headings the operators read. The regrouped list is that order.
+
+# Regroup the recorded lists
+
+`tests/jenkins_sections/previous.list` has MPI and Chemistry.
+`tests/jenkins_sections/next.list` is the next generation, with CP2K
+commented out and not named by either previous section.
+
+```bash
+eb-stack stack sections tests/jenkins_sections/next.list \
+  --from tests/jenkins_sections/previous.list \
+  --out /tmp/grouped.list
+```
+
+That command printed:
+
+```
+list=/tmp/grouped.list sections=3 of=3
+```
+
+`/tmp/grouped.list` is:
+
+```
+# next generation
+
+#### MPI ####
+# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py
+
+#### Chemistry ####
+# GROMACS-2025.0-foss-2025b.eb
+
+#### New in this generation ####
+# CP2K-2026.1-foss-2025b.eb
+```
+
+`of=3` is the previous list's two sections plus the unfiled header.
+The default unfiled title is `New in this generation`. The comment
+block before the first entry stays on top. OpenMPI keeps
+`--hooks=/sw/h.py`. `eb_stack_sections` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary

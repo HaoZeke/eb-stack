@@ -1,0 +1,50 @@
+#+TITLE: Regroup a Jenkins build list under the previous sections
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack sections~ reads a Jenkins build list and writes it
+again under the ~#### Title ####~ headers of a previous list. Each
+entry keeps its flags and whether it is commented out. A name no
+previous section files goes under ~--unfiled~.
+
+Why you'd use it: a solved build list is one flat file. The site's
+previous list already files each package under MPI, Chemistry, and the
+other headings the operators read. The regrouped list is that order.
+
+* Regroup the recorded lists
+
+~tests/jenkins_sections/previous.list~ has MPI and Chemistry.
+~tests/jenkins_sections/next.list~ is the next generation, with CP2K
+commented out and not named by either previous section.
+
+#+begin_src bash
+eb-stack stack sections tests/jenkins_sections/next.list \
+  --from tests/jenkins_sections/previous.list \
+  --out /tmp/grouped.list
+#+end_src
+
+That command printed:
+
+#+begin_example
+list=/tmp/grouped.list sections=3 of=3
+#+end_example
+
+~/tmp/grouped.list~ is:
+
+#+begin_example
+# next generation
+
+#### MPI ####
+# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py
+
+#### Chemistry ####
+# GROMACS-2025.0-foss-2025b.eb
+
+#### New in this generation ####
+# CP2K-2026.1-foss-2025b.eb
+#+end_example
+
+~of=3~ is the previous list's two sections plus the unfiled header.
+The default unfiled title is ~New in this generation~. The comment
+block before the first entry stays on top. OpenMPI keeps
+~--hooks=/sw/h.py~. ~eb_stack_sections~ is the same command. See
+[[file:../reference/cli.org][the CLI reference]].

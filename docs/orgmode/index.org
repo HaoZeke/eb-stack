@@ -83,6 +83,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
    *Plan software-layer pull requests that do not overlap?* → :doc:`howto/stack-batch`
 
+   *Regroup a Jenkins build list under the previous sections?* → :doc:`howto/stack-sections`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -175,6 +177,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/bot-classify
    howto/stack-shard
    howto/stack-batch
+   howto/stack-sections
 
 .. toctree::
    :maxdepth: 2
@@ -332,7 +335,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/oom-profile.org][warn before a bot job runs out of memory]].
     [[file:howto/bot-classify.org][read an EESSI bot FAILURE]],
     [[file:howto/stack-shard.org][split a Jenkins build list into shards]],
-    [[file:howto/stack-batch.org][plan software-layer pull requests that do not overlap]].
+    [[file:howto/stack-batch.org][plan software-layer pull requests that do not overlap]],
+    [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],
