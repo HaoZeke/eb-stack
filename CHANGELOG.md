@@ -69,6 +69,8 @@ All notable changes to this project are documented here.
 - How to regroup a Jenkins build list under the section headers of a
   previous list.
 - How to write a stack lock as the YAML `eb --easystack` reads.
+- How to read the easyblock class, the template values, and the
+  toolchain hierarchy EasyBuild derives.
 
 ## 0.4.0 - 2026-11-01
 

@@ -1,0 +1,85 @@
+#+TITLE: Read the easyblock, templates, and hierarchy
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: three recipe commands answer questions EasyBuild decides
+before it builds. ~recipe easyblock~ prints the class name derived from
+a software name. ~recipe templates~ prints the template constants, or
+the values ~--name~ and ~--version~ resolve. ~recipe hierarchy~ prints
+the known toolchain hierarchies as JSON.
+
+Why you'd use it: a recipe that sets no ~easyblock~ is claiming the
+derived class exists. A template such as ~%(version_major_minor)s~ is a
+value, not a string to guess. A dependency's toolchain has to be a
+member of the parent's hierarchy.
+
+* The derived easyblock
+
+#+begin_src bash
+eb-stack recipe easyblock zlib
+eb-stack recipe easyblock GROMACS
+eb-stack recipe easyblock -- c++
+#+end_src
+
+Those commands printed:
+
+#+begin_example
+EB_zlib
+EB_GROMACS
+EB_c_plus__plus_
+#+end_example
+
+The third name is passed after ~--~ because it starts with punctuation.
+~--charmap~ prints the substitution table as JSON instead of one class
+name. The prefix is ~EB_~ and the table has 33 entries. The recorded
+table is ~tests/recipe_command_fixtures/easyblock-charmap.json~.
+
+* Resolved templates
+
+~--name~ and ~--version~ together print the values the derived-key
+rules produce. The toolchain in that pair is ~system~.
+
+#+begin_src bash
+eb-stack recipe templates --name zlib --version 1.3.1
+#+end_src
+
+That command printed:
+
+#+begin_example
+{
+  "arch": "x86_64",
+  "bitbucket_account": "zlib",
+  "github_account": "zlib",
+  "name": "zlib",
+  "nameletter": "z",
+  "nameletterlower": "z",
+  "namelower": "zlib",
+  "toolchain_name": "system",
+  "toolchain_version": "",
+  "version": "1.3.1",
+  "version_major": "1",
+  "version_major_minor": "1.3",
+  "version_major_minor_patch": "1.3.1",
+  "version_minor": "3",
+  "version_minor_patch": "3.1",
+  "version_patch": "1",
+  "versionsuffix": ""
+}
+#+end_example
+
+~--export~ prints the constant table and the derived-key rules instead
+of one resolved pair. ~arch~ follows the machine that runs the command.
+
+* Known hierarchies
+
+#+begin_src bash
+eb-stack recipe hierarchy
+#+end_src
+
+The document is the generations in
+~tests/recipe_command_fixtures/hierarchy.json~. The first parent is
+foss/2023b, and its members run from the system toolchain through
+GCCcore, GCC, gfbf, and gompi to foss, most minimal subtoolchain first.
+~--export~ adds the synthetic GCC-family rule. The plain document has
+no ~synthetic~ key. ~eb_recipe_easyblock~, ~eb_recipe_templates~, and
+~eb_recipe_hierarchy~ are the same commands. See
+[[file:../reference/cli.org][the CLI reference]].

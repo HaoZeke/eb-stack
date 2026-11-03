@@ -87,6 +87,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
    *Write the YAML eb --easystack reads?* → :doc:`howto/stack-easystack`
 
+   *What easyblock, templates, and hierarchy would EasyBuild use?* → :doc:`howto/recipe-identity`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -181,6 +183,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/stack-batch
    howto/stack-sections
    howto/stack-easystack
+   howto/recipe-identity
 
 .. toctree::
    :maxdepth: 2
@@ -340,7 +343,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/stack-shard.org][split a Jenkins build list into shards]],
     [[file:howto/stack-batch.org][plan software-layer pull requests that do not overlap]],
     [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]],
-    [[file:howto/stack-easystack.org][write an easystack from a stack lock]].
+    [[file:howto/stack-easystack.org][write an easystack from a stack lock]],
+    [[file:howto/recipe-identity.org][read the easyblock, templates, and hierarchy]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],

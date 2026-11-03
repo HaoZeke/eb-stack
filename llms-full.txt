@@ -120,7 +120,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md),
     [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md),
     [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md),
-    [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md).
+    [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md),
+    [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5409,6 +5410,91 @@ eb-stack stack easystack \
 `eb_stack_easystack` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md) and
 [the easystack format](https://eb-stack.rgoswami.me/../reference/formats.html.md).
+
+# Read the easyblock, templates, and hierarchy
+
+What it does: three recipe commands answer questions EasyBuild decides
+before it builds. `recipe easyblock` prints the class name derived from
+a software name. `recipe templates` prints the template constants, or
+the values `--name` and `--version` resolve. `recipe hierarchy` prints
+the known toolchain hierarchies as JSON.
+
+Why you'd use it: a recipe that sets no `easyblock` is claiming the
+derived class exists. A template such as `%(version_major_minor)s` is a
+value, not a string to guess. A dependency's toolchain has to be a
+member of the parent's hierarchy.
+
+# The derived easyblock
+
+```bash
+eb-stack recipe easyblock zlib
+eb-stack recipe easyblock GROMACS
+eb-stack recipe easyblock -- c++
+```
+
+Those commands printed:
+
+```
+EB_zlib
+EB_GROMACS
+EB_c_plus__plus_
+```
+
+The third name is passed after `--` because it starts with punctuation.
+`--charmap` prints the substitution table as JSON instead of one class
+name. The prefix is `EB_` and the table has 33 entries. The recorded
+table is `tests/recipe_command_fixtures/easyblock-charmap.json`.
+
+# Resolved templates
+
+`--name` and `--version` together print the values the derived-key
+rules produce. The toolchain in that pair is `system`.
+
+```bash
+eb-stack recipe templates --name zlib --version 1.3.1
+```
+
+That command printed:
+
+```
+{
+  "arch": "x86_64",
+  "bitbucket_account": "zlib",
+  "github_account": "zlib",
+  "name": "zlib",
+  "nameletter": "z",
+  "nameletterlower": "z",
+  "namelower": "zlib",
+  "toolchain_name": "system",
+  "toolchain_version": "",
+  "version": "1.3.1",
+  "version_major": "1",
+  "version_major_minor": "1.3",
+  "version_major_minor_patch": "1.3.1",
+  "version_minor": "3",
+  "version_minor_patch": "3.1",
+  "version_patch": "1",
+  "versionsuffix": ""
+}
+```
+
+`--export` prints the constant table and the derived-key rules instead
+of one resolved pair. `arch` follows the machine that runs the command.
+
+# Known hierarchies
+
+```bash
+eb-stack recipe hierarchy
+```
+
+The document is the generations in
+`tests/recipe_command_fixtures/hierarchy.json`. The first parent is
+foss/2023b, and its members run from the system toolchain through
+GCCcore, GCC, gfbf, and gompi to foss, most minimal subtoolchain first.
+`--export` adds the synthetic GCC-family rule. The plain document has
+no `synthetic` key. `eb_recipe_easyblock`, `eb_recipe_templates`, and
+`eb_recipe_hierarchy` are the same commands. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary
 
