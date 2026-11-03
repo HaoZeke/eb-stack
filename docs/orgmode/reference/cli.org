@@ -38,13 +38,12 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
 | ~stack order~ | Sequence every pinned build a set of roots needs |
-| ~stack gap~ | Classify site modules the stack lacks and name the recipe that closes each |
+| ~stack gap~ | Route each site module the stack lacks, name the recipe that closes it, and write one TSV per route |
 | ~stack batch~ | Plan software-layer pull requests whose builds do not overlap |
 | ~stack shard~ | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies |
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
-| ~stack gap~ | Route each site module the stack lacks, and write one TSV per route |
 | ~stack provided~ | Fail when a build list names software a baseline already provides |
 | ~stack shadow~ | Report a site-layer recipe that shadows an EESSI base-stack module |
 | ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
@@ -60,7 +59,8 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~component-reach~ | List who carries a component in one generation and close their rebuild set |
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
-| ~campaign finding ...~ | Claim and resolve typed build findings |
+| ~campaign finding claim~ | Claim an open finding for one worker |
+| ~campaign finding resolve~ | Resolve a claimed finding with an action, evidence, and the paths it changed |
 | ~mcp [--workspace]~ | Serve each CLI workflow over stdio, including ~pr-overlap~, ~rebuild-set~, ~component-reach~, and ~easyblock-reach~, with recipe file tools rooted at ~--workspace~ |
 | ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
@@ -543,13 +543,17 @@ eb-stack stack known-failures \
   [--strict]
 
 eb-stack stack oom \
-  (--easystack EASYSTACK.yml... | --node CORES:MEMORY_MIB[:TARGET]...) \
   [--arch x86_64/amd/zen4]... \
+  [--easystack EASYSTACK.yml]... \
   [--easyconfigs TREE]... \
   [--installed INSTALLED.txt] \
   [--profile BUILD-MEMORY.toml] \
   [--resources BOT-RESOURCES.toml] \
-  [--job-memory JOB-MEMORY.toml]
+  [--node CORES:MEMORY_MIB[:TARGET]]... \
+  [--job-memory JOB-MEMORY.toml | --mib-per-job JOB-MEMORY.toml] \
+  [--hooks eb_hooks.py] \
+  [--parallel N] \
+  [--max-parallel N]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -1113,6 +1117,21 @@ others, and exits 0. ~--json~ prints the same report as JSON. See
 [[file:../howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]].
 
 ** ~stack oom~
+
+#+begin_src bash
+eb-stack stack oom \
+  [--arch x86_64/amd/zen4]... \
+  [--easystack EASYSTACK.yml]... \
+  [--easyconfigs TREE]... \
+  [--installed INSTALLED.txt] \
+  [--profile BUILD-MEMORY.toml] \
+  [--resources BOT-RESOURCES.toml] \
+  [--node CORES:MEMORY_MIB[:TARGET]]... \
+  [--job-memory JOB-MEMORY.toml | --mib-per-job JOB-MEMORY.toml] \
+  [--hooks eb_hooks.py] \
+  [--parallel N] \
+  [--max-parallel N]
+#+end_src
 
 What it does: estimate the peak memory of every build in a plan on each
 EESSI bot node, at the parallel level the bot job gives it, and warn

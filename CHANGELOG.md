@@ -151,6 +151,13 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The command map lists `stack gap` once: it routes each site module the
+  stack lacks, names the recipe that closes it, and writes one TSV per
+  route. `campaign finding claim` and `campaign finding resolve` each
+  have a row. `stack oom` has a usage block for `--arch`,
+  `--easystack`, `--easyconfigs`, `--installed`, `--profile`,
+  `--resources`, `--node`, `--job-memory` (alias `--mib-per-job`),
+  `--hooks`, `--parallel`, and `--max-parallel`.
 - How to split one Jenkins build list into shards that build at the
   same time, with the shared dependencies in a prelude.
 - How to plan software-layer pull requests whose builds do not overlap,

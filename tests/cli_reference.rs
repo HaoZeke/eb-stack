@@ -238,3 +238,74 @@ fn the_cli_reference_names_every_help_flag() {
         );
     }
 }
+
+/// The command map has one row per command, and `stack oom` has a usage block.
+#[test]
+fn the_command_map_and_oom_synopsis_match_the_cli() {
+    let reference = std::fs::read_to_string("docs/orgmode/reference/cli.org").expect("cli.org");
+    let map = reference
+        .split_once("* Command map\n")
+        .expect("command map")
+        .1
+        .split_once("\n* Package commands\n")
+        .expect("package commands")
+        .0;
+    let gap_rows = map
+        .lines()
+        .filter(|line| line.starts_with("| ~stack gap~ |"))
+        .count();
+    assert_eq!(
+        gap_rows, 1,
+        "command map lists stack gap {gap_rows} times:\n{map}"
+    );
+    assert!(
+        map.contains("| ~campaign finding claim~ |"),
+        "command map has no campaign finding claim row"
+    );
+    assert!(
+        map.contains("| ~campaign finding resolve~ |"),
+        "command map has no campaign finding resolve row"
+    );
+    assert!(
+        !map.contains("~campaign finding ...~"),
+        "command map still folds claim and resolve into one row"
+    );
+
+    let oom = reference
+        .split_once("** ~stack oom~\n")
+        .expect("stack oom section")
+        .1
+        .split_once("\n** ~stack bot-classify~\n")
+        .expect("bot-classify section")
+        .0;
+    let synopsis = oom
+        .split_once("#+begin_src bash\n")
+        .expect("oom usage block")
+        .1
+        .split_once("#+end_src")
+        .expect("oom usage block end")
+        .0;
+    assert!(
+        synopsis.starts_with("eb-stack stack oom"),
+        "oom usage block does not start with the command:\n{synopsis}"
+    );
+    for flag in [
+        "--arch",
+        "--easystack",
+        "--easyconfigs",
+        "--installed",
+        "--profile",
+        "--resources",
+        "--node",
+        "--job-memory",
+        "--mib-per-job",
+        "--hooks",
+        "--parallel",
+        "--max-parallel",
+    ] {
+        assert!(
+            token_is_named(synopsis, flag),
+            "stack oom usage block does not name {flag}"
+        );
+    }
+}
