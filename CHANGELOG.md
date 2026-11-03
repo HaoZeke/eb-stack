@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
 - `stack provided` includes the one-based build-list line on every
   `provided` and `unparsed` finding in its text report, as it already did for
   hook, toolchain, family-lock, and licensed findings.
+- `scripts/dump-module-trees.sh` captures the live site, older EESSI, and
+  target EESSI `module -t avail` inventories in isolated, purged shells for
+  `stack gap`.
 - `stack shard` splits one Jenkins build list into shards that can
   build at the same time. A line's set is its closure over
   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod

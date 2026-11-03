@@ -20,6 +20,55 @@ A toolchain whose version is the generation counts as on it, so
 generation in ~data/eessi-generations.toml~, such as
 ~llvm-compilers-21.1.8~.
 
+* Capture the live inventories
+
+Run the helper from a shell where the ~module~ command is initialized.
+Its four arguments are the output directory, the site meta-module, the
+older EESSI module, and the target EESSI module. Use ~-~ for the site
+argument when the base module path is the live site tree.
+
+#+begin_src bash
+scripts/dump-module-trees.sh \
+  /tmp/module-dumps - EESSI/2025.06 EESSI/2026.06
+#+end_src
+
+Each inventory is captured in a separately purged subshell, so loading
+one EESSI version cannot add paths to the next dump. The files are
+~/tmp/module-dumps/site.txt~, ~eessi-older.txt~, and
+~eessi-target.txt~. Pass them as ~--site~, ~--older~, and
+~--installed~, respectively. They are the raw ~module -t avail~
+output; ~stack gap~ ignores path headers and default markers.
+
+* Read the open-pull-request inventories
+
+The two ~fetch-prs.sh~ examples produce the JSON accepted by
+~--open-layer~ and ~--open-easyconfigs~. Run each script in the clone
+named in its comment:
+
+#+begin_src bash
+EB_STACK=/path/to/eb-stack
+(cd /path/to/software-layer && \
+  "$EB_STACK/examples/eessi-pr-overlap/fetch-prs.sh" \
+    EESSI/software-layer 2026.06 /tmp/open-layer)
+(cd /path/to/easybuild-easyconfigs && \
+  "$EB_STACK/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
+    easybuilders/easybuild-easyconfigs /tmp/open-easyconfigs)
+
+layer_args=()
+for file in /tmp/open-layer/prs/*.json; do
+  layer_args+=(--open-layer "$file")
+done
+easyconfig_args=()
+for file in /tmp/open-easyconfigs/prs/*.json; do
+  easyconfig_args+=(--open-easyconfigs "$file")
+done
+#+end_src
+
+Add ~"${layer_args[@]}"~ and ~"${easyconfig_args[@]}"~ to the
+~stack gap~ command. The fetch scripts only read pull requests. A
+closed pull request disappears from their rewritten ~prs/~ directory
+on the next run.
+
 * Run the fixture
 
 The nine names are in ~tests/gap_routes/site.txt~. The easyconfig tree
