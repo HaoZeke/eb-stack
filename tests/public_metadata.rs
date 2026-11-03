@@ -592,4 +592,19 @@ fn discovery_metadata_uses_real_index_terms() {
     ] {
         assert!(readme.contains(needle), "README must point at {needle}");
     }
+
+    let index = std::fs::read_to_string(root.join("docs/orgmode/index.org")).expect("read index");
+    for needle in [
+        "llms.txt",
+        "llms-full.txt",
+        "AGENTS.md",
+        "server.json",
+        "skills/",
+        "reference/mcp.org",
+    ] {
+        assert!(
+            index.contains(needle),
+            "manual index must point at {needle}"
+        );
+    }
 }

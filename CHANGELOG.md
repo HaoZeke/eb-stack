@@ -158,6 +158,9 @@ All notable changes to this project are documented here.
   `--easystack`, `--easyconfigs`, `--installed`, `--profile`,
   `--resources`, `--node`, `--job-memory` (alias `--mib-per-job`),
   `--hooks`, `--parallel`, and `--max-parallel`.
+- The manual index links `llms.txt`, `llms-full.txt`, `AGENTS.md`, the
+  skills directory, and `server.json`, the same discovery files the
+  README names. Client setup stays on the Model Context Protocol page.
 - How to split one Jenkins build list into shards that build at the
   same time, with the shared dependencies in a prelude.
 - How to plan software-layer pull requests whose builds do not overlap,
