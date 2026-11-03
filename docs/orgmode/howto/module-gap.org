@@ -123,6 +123,14 @@ Each route also has its own file: ~in-stack.tsv~, ~site-only.tsv~,
 and ~bump.tsv~. An ~open-layer~ match is the easystack line the pull
 request adds, not a dependency that line would build.
 
+~version-change.tsv~ is the user migration table. It keeps the module
+versions exactly as the live dumps spell them, including a toolchain
+suffix. An ~in-stack~ name is ~moved~ and names the target EESSI
+version. An ~excluded~ name is ~site-only~. Every other route is
+~gone~ from the opened stack until that route lands. A name with two
+old versions has two rows; multiple target versions are comma-separated.
+The columns are ~name~, ~old_version~, ~eessi_version~, and ~status~.
+
 ~eb_stack_gap~ writes the same files. ~open_layer~ and
 ~open_easyconfigs~ are arrays of the same pull-request JSON
 ~pr-overlap --pr~ reads.

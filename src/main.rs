@@ -1136,7 +1136,8 @@ enum StackCommand {
     /// this generation), or `excluded`. A directory is an Lmod tree. A file
     /// is `module -t avail`, `module spider -t`, or `Name/version`. Writes
     /// `gap.tsv`, one TSV per route, `roots.txt` for `stack batch
-    /// --roots-file`, and `bump-sources.txt`.
+    /// --roots-file`, `bump-sources.txt`, and `version-change.tsv` with old
+    /// versions moved to EESSI, gone, or kept site-only.
     #[command(
         after_long_help = "Examples:\n  eb-stack stack gap --site tests/rebuild_set_fixtures/installed.txt --installed tests/pr_overlap_layer/installed.txt --easyconfigs tests/rebuild_set_fixtures/release --generation 2026.1 --out-dir gap\n\nThose paths are files in this repository. A missing --site file exits 1 and names the path."
     )]

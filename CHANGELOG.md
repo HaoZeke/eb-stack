@@ -12,6 +12,10 @@ All notable changes to this project are documented here.
 - `scripts/dump-module-trees.sh` captures the live site, older EESSI, and
   target EESSI `module -t avail` inventories in isolated, purged shells for
   `stack gap`.
+- `stack gap` writes `version-change.tsv`, one row per version in the site
+  and older-EESSI inventories. A module in the target is `moved` and names
+  its EESSI version; an excluded module is `site-only`; every other missing
+  route is `gone` until it lands.
 - `stack shard` splits one Jenkins build list into shards that can
   build at the same time. A line's set is its closure over
   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod

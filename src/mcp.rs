@@ -380,7 +380,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_gap",
-            "Classify every package in site and older module trees against a target stack, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). A path may be an Lmod directory or module -t avail / module spider -t text. installed repeats for a CPU tree and an accelerator tree. eessi_version keeps open software-layer easystacks of that version. Writes gap.tsv, one TSV per route, roots.txt and bump-sources.txt under out_dir.",
+            "Classify every package in site and older module trees against a target stack, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). A path may be an Lmod directory or module -t avail / module spider -t text. installed repeats for a CPU tree and an accelerator tree. eessi_version keeps open software-layer easystacks of that version. Writes gap.tsv, one TSV per route, roots.txt, bump-sources.txt, and version-change.tsv (old versions moved to EESSI, gone, or site-only) under out_dir.",
             &[
                 ("installed", "array"),
                 ("easyconfigs", "array"),

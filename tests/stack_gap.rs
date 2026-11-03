@@ -212,4 +212,27 @@ fn live_module_trees_union_the_site_an_older_eessi_and_both_target_dirs() {
     );
     assert!(gap.contains("QuantumESPRESSO\tno-recipe\t"), "{gap}");
     assert!(!gap.contains("software-layer#1600"), "{gap}");
+    let changes = std::fs::read_to_string(out.path().join("version-change.tsv")).unwrap();
+    assert!(
+        changes.starts_with("name\told_version\teessi_version\tstatus\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("CUDA\t12.6.0\t12.6.0\tmoved\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("FFTW\t3.3.10\t3.3.10\tmoved\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("LAMMPS\t2023.0\t-\tgone\n")
+            && changes.contains("LAMMPS\t2024.0\t-\tgone\n"),
+        "{changes}"
+    );
+    assert!(
+        changes.contains("MATLAB\t2024b\t-\tsite-only\n")
+            && changes.contains("code-server\t4.96.2\t-\tsite-only\n"),
+        "{changes}"
+    );
 }
