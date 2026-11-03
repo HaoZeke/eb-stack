@@ -989,7 +989,7 @@ table. ~reverse=0~ again, for the same reason as the CMakeMake run.
 
 * The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 50 tools. ~tools/list~ prints
+The Model Context Protocol (MCP) catalog has 51 tools. ~tools/list~ prints
 their names:
 
 #+begin_src bash
@@ -1027,6 +1027,7 @@ eb_stack_easystack
 eb_package_latest
 eb_stack_gap
 eb_stack_provided
+eb_stack_shadow
 eb_stack_batch
 eb_stack_shard
 eb_stack_arch
@@ -1051,7 +1052,7 @@ eb_easyblock_reach
 eb_repro_summary
 #+end_src
 
-That is 50 tools.
+That is 51 tools.
 ~eb_stack_sbom~ writes the CycloneDX file ~stack sbom~ writes.
 Its ~tools/list~ description reads: "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names. With backport_list, also write the modules whose reach class justifies a backport."
 ~eb_stack_sbom~ reads the Cbc lock:

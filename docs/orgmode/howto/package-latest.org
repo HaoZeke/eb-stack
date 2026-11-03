@@ -1,0 +1,49 @@
+#+TITLE: Report the newest stable upstream release
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~package latest~ reads each easyconfig's ~source_urls~ and
+asks that backend for versions. PyPI, GitHub, GitLab, the Comprehensive
+R Archive Network (CRAN), crates.io, and an HTTP directory listing are
+the backends. Every listed version is kept, or dropped with a reason: a
+draft, a pre-release, a yanked release, or a per-package override.
+~data/upstream-overrides.toml~ is the override file the binary carries.
+~--overrides~ files apply after it.
+
+Why you'd use it: ~package bump --latest~ moves a recipe to the version
+this command picks. Run the report first when you want to see what was
+dropped.
+
+* A directory that lists no version
+
+~tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb~
+points ~source_urls~ at ~https://example.org/~, which is not a file
+listing of zlib tarballs.
+
+#+begin_src bash
+eb-stack package latest \
+  --source tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb
+#+end_src
+
+That command printed:
+
+#+begin_example
+name=zlib current=1.3.1 newest=- state=unknown backend=directory:https://example.org/ reason="the backend listed no version of the recipe's source file"
+#+end_example
+
+Read the decision line left to right. ~current~ is the recipe version.
+~newest~ is the newest version that was kept, or ~-~ when none was.
+~state~ is ~current~ (the recipe is already that version), ~behind~,
+~pinned~ (an override names the version to keep), or ~unknown~. The
+~reason~ is why no version was chosen.
+
+A backend that does list versions adds one indented line per version,
+~kept~ or ~dropped (<reason>)~. A pre-release is dropped. ~--json~
+prints the same rows as one array. GitHub requests send ~GITHUB_TOKEN~
+or ~GH_TOKEN~ when it is set.
+
+A recipe whose ~source_urls~ name PyPI, such as
+~tests/sbom_recorded/rebuild/easybuild/easyconfigs/w/wrapt/wrapt-2.2.1-GCCcore-15.2.0.eb~,
+uses the PyPI backend. That command queries the network, and the newest
+stable release moves, so the page does not freeze a version number from
+one run. ~eb_package_latest~ is the same command. See
+[[file:../reference/cli.org][the CLI reference]].

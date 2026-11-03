@@ -116,7 +116,15 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
-    [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md).
+    [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md),
+    [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md),
+    [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md),
+    [regroup a Jenkins build list under the previous sections](https://eb-stack.rgoswami.me/howto/stack-sections.html.md),
+    [write an easystack from a stack lock](https://eb-stack.rgoswami.me/howto/stack-easystack.html.md),
+    [read the easyblock, templates, and hierarchy](https://eb-stack.rgoswami.me/howto/recipe-identity.html.md),
+    [report the newest stable upstream release](https://eb-stack.rgoswami.me/howto/package-latest.html.md),
+    [read the reproduction scoreboard](https://eb-stack.rgoswami.me/howto/repro-summary.html.md),
+    [report a site recipe that shadows an EESSI module](https://eb-stack.rgoswami.me/howto/site-layer-shadow.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5181,6 +5189,535 @@ text, the jobs and the counts.
 - A job that is still running has no `finished` row and is
   `unclassified`.
 
+# Split a Jenkins build list into shards
+
+What it does: `stack shard` takes one Jenkins build list for one node
+type and splits it into shards that can build at the same time. A
+line's set is its closure over `--easyconfigs` minus the modules that
+are already installed. Two lines share a shard only when one line's
+easyconfig is in the other's set. Every other module that two or more
+shards need goes to `prelude.list`, which builds first.
+
+Why you'd use it: a site build list for one CPU target is too long for
+one job, and a naive split rebuilds HDF5 in every shard. The prelude
+holds the shared dependencies once.
+
+# Split the fixture wave
+
+`tests/stack_shard_fixtures/wave1.list` is four lines: OpenFOAM,
+ParaView, PETSc, and Hypre. PETSc depends on Hypre, so those two lines
+share a shard and Hypre is first. OpenFOAM and ParaView both need HDF5
+and Szip; OpenFOAM and PETSc both need MathLib. Those shared modules
+are not lines of their own, so they go to the prelude. zlib is
+installed through the module tree and CMake through the installed
+list, so neither is built.
+
+```bash
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/wave1.list \
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \
+  --installed tests/stack_shard_fixtures/installed.txt \
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \
+  --shards 4 \
+  --generated-at 2026-11-03T00:00:00Z \
+  --out-dir /tmp/shards
+```
+
+That command printed:
+
+```
+shards=3 prelude=3 lines=4
+```
+
+`/tmp/shards/prelude.list` is the shared dependencies, in dependency
+order:
+
+```
+Szip-2.1.1-GCCcore-15.2.0.eb
+HDF5-1.14.6-GCCcore-15.2.0.eb
+MathLib-1.0-GCCcore-15.2.0.eb
+```
+
+The three shard files keep the input lines verbatim. Hypre is a line
+PETSc needs, so it is first in that shard:
+
+```
+Hypre-2.33.0-GCCcore-15.2.0.eb
+PETSc-3.23.0-GCCcore-15.2.0.eb --include-easyblocks=/sw/easyblocks/petsc.py
+```
+
+```
+ParaView-6.0.0-GCCcore-15.2.0.eb
+```
+
+```
+OpenFOAM-13-GCCcore-15.2.0.eb --hooks=/sw/hooks/openfoam.py
+```
+
+`--shards 4` is an upper bound. Three groups exist, so three shard
+files are written. `plan.json` records each line's closure, the shard
+weights, and a SHA-256 of the inputs. `--generated-at` fixes the time
+in that file. `--weights` is `Name/VersionFull` or the easyconfig
+filename, a tab, then seconds. A module the file does not list weighs
+`--default-weight`, which is 1. Build the prelude, then the shards.
+
+A line whose easyconfig is not on the robot path exits 1 and writes
+nothing. `eb_stack_shard` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Plan software-layer pull requests that do not overlap
+
+What it does: `stack batch` plans European Environment for Scientific
+Software Installations (EESSI) software-layer pull requests whose builds
+do not overlap. A root's set is its closure over the robot path minus
+the installed modules, the same set `pr-overlap` computes for one
+easystack line. Roots whose sets meet go in one pull request. A root
+whose set meets an open pull request waits for that pull request. The
+rest are packed `--size` roots per pull request.
+
+Why you'd use it: `stack gap` writes `roots.txt` for the recipes the
+generation can already build. Those roots should not all land in one
+pull request, and two pull requests must not build the same module.
+
+# One root beside an installed version
+
+`tests/batch_versions_fixtures` has GROMACS 2025.4 installed and a
+recipe for GROMACS 2026.2 on foss/2026.1, generation 2026.1 of EESSI
+2026.06. One root is one batch. The second version in that generation
+is a warning, not a failed plan.
+
+```bash
+eb-stack stack batch \
+  --root GROMACS-2026.2-foss-2026.1.eb \
+  --easyconfigs tests/batch_versions_fixtures/easyconfigs \
+  --installed tests/batch_versions_fixtures/installed-gromacs-2025.txt \
+  --eessi-version 2026.06 \
+  --easybuild-version 5.4.1 \
+  --generation 2026.1 \
+  --generated-at 2026-10-30T00:00:00Z \
+  --out-dir /tmp/batches
+```
+
+That command printed:
+
+```
+batches=1 roots=1 waits=0 unresolved=0 deployed=0 digest=cd1b5856e678c2d8fbd7bc563a861edf706a9afe7cece55596aaa892a235b080 out=/tmp/batches
+```
+
+`/tmp/batches/plan.md` names the batch and the warning:
+
+```
+## batch-01-gromacs
+
+{2026.06}[foss/2026.1] GROMACS 2026.2
+
+1 module(s) to build.
+
+1 second-version warning(s); `pr-body.md` has the details.
+```
+
+The batch directory holds the EESSI easystacks, a lock, a CycloneDX
+software bill of materials, `reproduce.sh`, `batch.json`, and
+`pr-body.md`. The pull-request body includes:
+
+```
+Second versions in one generation, from `eb-stack stack generation`:
+
+GROMACS has 2 versions in generation 2026.1: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2026.1.eb); pass --allow-versions GROMACS@2026.1 to accept
+```
+
+`--allow-versions GROMACS@2026.1` accepts that pair.
+`--generated-at` fixes the time written into the plan, so the same
+inputs give the same digest. `--roots-file` reads the `roots.txt` that
+`stack gap` writes. An entry the architecture cannot build exits 1 and
+writes nothing. `eb_stack_batch` is the same command. See
+[the second-version check](https://eb-stack.rgoswami.me/generation-lint.html.md) and
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Regroup a Jenkins build list under the previous sections
+
+What it does: `stack sections` reads a Jenkins build list and writes it
+again under the `#### Title ####` headers of a previous list. Each
+entry keeps its flags and whether it is commented out. A name no
+previous section files goes under `--unfiled`.
+
+Why you'd use it: a solved build list is one flat file. The site's
+previous list already files each package under MPI, Chemistry, and the
+other headings the operators read. The regrouped list is that order.
+
+# Regroup the recorded lists
+
+`tests/jenkins_sections/previous.list` has MPI and Chemistry.
+`tests/jenkins_sections/next.list` is the next generation, with CP2K
+commented out and not named by either previous section.
+
+```bash
+eb-stack stack sections tests/jenkins_sections/next.list \
+  --from tests/jenkins_sections/previous.list \
+  --out /tmp/grouped.list
+```
+
+That command printed:
+
+```
+list=/tmp/grouped.list sections=3 of=3
+```
+
+`/tmp/grouped.list` is:
+
+```
+# next generation
+
+#### MPI ####
+# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py
+
+#### Chemistry ####
+# GROMACS-2025.0-foss-2025b.eb
+
+#### New in this generation ####
+# CP2K-2026.1-foss-2025b.eb
+```
+
+`of=3` is the previous list's two sections plus the unfiled header.
+The default unfiled title is `New in this generation`. The comment
+block before the first entry stays on top. OpenMPI keeps
+`--hooks=/sw/h.py`. `eb_stack_sections` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Write an easystack from a stack lock
+
+What it does: `stack easystack` writes a stack lock as the YAML
+`eb --easystack` reads. Entries are easyconfig filenames. `--option`
+attaches per-file `eb` options, spelled without the leading dashes.
+`--eessi-version` writes the European Environment for Scientific
+Software Installations (EESSI) software-layer layout instead of one
+file: one easystack per generation, `001-system` for the system
+toolchain, and `accel/nvidia/` for CUDA builds.
+
+Why you'd use it: `stack solve` writes a lock. The software layer and
+`eb --easystack` do not read that lock. This command is the file they
+do read.
+
+# One lock, one file
+
+`tests/provided_fixtures/baseline.lock.json` selects GROMACS 2025.2 on
+foss/2026.1.
+
+```bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --out /tmp/stack.yml
+```
+
+That command printed:
+
+```
+easystack=/tmp/stack.yml entries=1 of=1
+```
+
+`/tmp/stack.yml` is:
+
+```
+easyconfigs:
+- GROMACS-2025.2-foss-2026.1.eb
+```
+
+`entries` counts filenames in the YAML. `of` is the number of packages
+in the lock. A package whose lock entry names no `.eb` file is left
+out: EasyBuild cannot build a file that was never on disk.
+
+A file with options is a one-key mapping. Repeat `--option` as
+`<file.eb>:<option>=<value>`:
+
+```bash
+eb-stack stack easystack \
+  --lock tests/provided_fixtures/baseline.lock.json \
+  --option GROMACS-2025.2-foss-2026.1.eb:accept-eula-for=GROMACS \
+  --out /tmp/stack-option.yml
+```
+
+`--eessi-version` needs `--easybuild-version`, `--generation`, and
+`--out-dir`. A recipe on another generation's toolchain is an error.
+`eb_stack_easystack` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md) and
+[the easystack format](https://eb-stack.rgoswami.me/../reference/formats.html.md).
+
+# Read the easyblock, templates, and hierarchy
+
+What it does: three recipe commands answer questions EasyBuild decides
+before it builds. `recipe easyblock` prints the class name derived from
+a software name. `recipe templates` prints the template constants, or
+the values `--name` and `--version` resolve. `recipe hierarchy` prints
+the known toolchain hierarchies as JSON.
+
+Why you'd use it: a recipe that sets no `easyblock` is claiming the
+derived class exists. A template such as `%(version_major_minor)s` is a
+value, not a string to guess. A dependency's toolchain has to be a
+member of the parent's hierarchy.
+
+# The derived easyblock
+
+```bash
+eb-stack recipe easyblock zlib
+eb-stack recipe easyblock GROMACS
+eb-stack recipe easyblock -- c++
+```
+
+Those commands printed:
+
+```
+EB_zlib
+EB_GROMACS
+EB_c_plus__plus_
+```
+
+The third name is passed after `--` because it starts with punctuation.
+`--charmap` prints the substitution table as JSON instead of one class
+name. The prefix is `EB_` and the table has 33 entries. The recorded
+table is `tests/recipe_command_fixtures/easyblock-charmap.json`.
+
+# Resolved templates
+
+`--name` and `--version` together print the values the derived-key
+rules produce. The toolchain in that pair is `system`.
+
+```bash
+eb-stack recipe templates --name zlib --version 1.3.1
+```
+
+That command printed:
+
+```
+{
+  "arch": "x86_64",
+  "bitbucket_account": "zlib",
+  "github_account": "zlib",
+  "name": "zlib",
+  "nameletter": "z",
+  "nameletterlower": "z",
+  "namelower": "zlib",
+  "toolchain_name": "system",
+  "toolchain_version": "",
+  "version": "1.3.1",
+  "version_major": "1",
+  "version_major_minor": "1.3",
+  "version_major_minor_patch": "1.3.1",
+  "version_minor": "3",
+  "version_minor_patch": "3.1",
+  "version_patch": "1",
+  "versionsuffix": ""
+}
+```
+
+`--export` prints the constant table and the derived-key rules instead
+of one resolved pair. `arch` follows the machine that runs the command.
+
+# Known hierarchies
+
+```bash
+eb-stack recipe hierarchy
+```
+
+The document is the generations in
+`tests/recipe_command_fixtures/hierarchy.json`. The first parent is
+foss/2023b, and its members run from the system toolchain through
+GCCcore, GCC, gfbf, and gompi to foss, most minimal subtoolchain first.
+`--export` adds the synthetic GCC-family rule. The plain document has
+no `synthetic` key. `eb_recipe_easyblock`, `eb_recipe_templates`, and
+`eb_recipe_hierarchy` are the same commands. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Report the newest stable upstream release
+
+What it does: `package latest` reads each easyconfig's `source_urls` and
+asks that backend for versions. PyPI, GitHub, GitLab, the Comprehensive
+R Archive Network (CRAN), crates.io, and an HTTP directory listing are
+the backends. Every listed version is kept, or dropped with a reason: a
+draft, a pre-release, a yanked release, or a per-package override.
+`data/upstream-overrides.toml` is the override file the binary carries.
+`--overrides` files apply after it.
+
+Why you'd use it: `package bump --latest` moves a recipe to the version
+this command picks. Run the report first when you want to see what was
+dropped.
+
+# A directory that lists no version
+
+`tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb`
+points `source_urls` at `https://example.org/`, which is not a file
+listing of zlib tarballs.
+
+```bash
+eb-stack package latest \
+  --source tests/shadow_fixtures/easyconfigs/z/zlib/zlib-1.3.1-GCCcore-15.2.0.eb
+```
+
+That command printed:
+
+```
+name=zlib current=1.3.1 newest=- state=unknown backend=directory:https://example.org/ reason="the backend listed no version of the recipe's source file"
+```
+
+Read the decision line left to right. `current` is the recipe version.
+`newest` is the newest version that was kept, or `-` when none was.
+`state` is `current` (the recipe is already that version), `behind`,
+`pinned` (an override names the version to keep), or `unknown`. The
+`reason` is why no version was chosen.
+
+A backend that does list versions adds one indented line per version,
+`kept` or `dropped (<reason>)`. A pre-release is dropped. `--json`
+prints the same rows as one array. GitHub requests send `GITHUB_TOKEN`
+or `GH_TOKEN` when it is set.
+
+A recipe whose `source_urls` name PyPI, such as
+`tests/sbom_recorded/rebuild/easybuild/easyconfigs/w/wrapt/wrapt-2.2.1-GCCcore-15.2.0.eb`,
+uses the PyPI backend. That command queries the network, and the newest
+stable release moves, so the page does not freeze a version number from
+one run. `eb_package_latest` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Read the reproduction scoreboard
+
+What it does: `repro summary` reads every `*.json` case score under
+`--scores` and prints the scoreboard. `Score` is `EXACT`, `SEMANTIC`, or
+`MATERIAL`. `Allowance` is how many hand-added lines the case still
+forgives. `Residual` is the raw diff lines left after that allowance.
+`--ratchet` checks those allowance counts against a committed file.
+
+Why you'd use it: the reproduction suite writes one JSON file per case.
+The table is the grind's current position, and the ratchet fails the
+run when an allowance grows.
+
+# Two cases and a ratchet that holds
+
+The two files below are the shape `repro summary` reads. The GROMACS
+case still forgives one line. ScaFaCoS has an empty allowance and a
+semantic diff, so its residual in this file is 0.
+
+```bash
+mkdir -p /tmp/repro-scores
+cat > /tmp/repro-scores/reproduces_gromacs.json <<'EOF'
+{
+  "case": "reproduces_gromacs",
+  "pull_request": null,
+  "source": "source.eb",
+  "target": "target.eb",
+  "score": "EXACT",
+  "allowance": ["    ('pybind11', '2.12.0'),"],
+  "stale_allowance": [],
+  "residual_lines": 0
+}
+EOF
+cat > /tmp/repro-scores/reproduces_scafacos.json <<'EOF'
+{
+  "case": "reproduces_scafacos",
+  "pull_request": null,
+  "source": "source.eb",
+  "target": "target.eb",
+  "score": "SEMANTIC",
+  "allowance": [],
+  "stale_allowance": [],
+  "residual_lines": 0
+}
+EOF
+cat > /tmp/repro-ratchet.json <<'EOF'
+{"note":"example","cases":{"reproduces_gromacs":1,"reproduces_scafacos":0},"total":1}
+EOF
+eb-stack repro summary --scores /tmp/repro-scores --ratchet /tmp/repro-ratchet.json
+```
+
+That command printed:
+
+```
+| Case | PR | Score | Allowance | Residual |
+|---+---+---+---+---|
+| reproduces_gromacs | - | EXACT | 1 | 0 |
+| reproduces_scafacos | - | SEMANTIC | 0 | 0 |
+
+2 cases: 1 EXACT, 1 SEMANTIC, 0 MATERIAL; allowance total 1
+ratchet: 2 cases hold at 1
+```
+
+A pull request number prints as `#N`. A case with none prints `-`.
+`--ratchet` exits nonzero when a case's allowance disagrees with the
+file, when a case is missing, or when `total` is not the sum of
+`cases`. `--json` prints the case records instead of the table. An
+empty `--scores` directory is an error. `eb_repro_summary` is the same
+command. See [reproduction fidelity](https://eb-stack.rgoswami.me/../explanation/fidelity.html.md)
+and [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Report a site recipe that shadows an EESSI module
+
+What it does: `stack shadow` compares site-layer easyconfigs with the
+modules the European Environment for Scientific Software Installations
+(EESSI) base stack already provides. `--base` is loaded by the same
+reader `stack gap` uses for `--installed`: a directory is an Lmod tree,
+and a file is `module -t avail`, `module spider -t`, or `Name/version`.
+The comparison is the recipe's own name and software version. A match
+is `same`. Another recorded version of that name is `different`. A base
+name with no recorded version is `unversioned`. A name the base does
+not have is the site layer and is not reported.
+
+Why you'd use it: a site module path searched before the EESSI path
+hides the base module of the same name. The site layer is supposed to
+be the software EESSI does not install. This check fails when a recipe
+would override one that it does.
+
+# The fixture layer
+
+`tests/shadow_fixtures/easyconfigs` has four recipes. zlib 1.3.1 is the
+version in the base tree (`1.3.1-GCCcore-15.2.0`, the spelling EasyBuild
+uses for an installed module: software version, then `-`, then the
+toolchain). FFTW 3.3.11 is not the base's 3.3.10. `bare.txt` names
+OnlyName and records no version. VASP is absent from the base. The file
+`default` under zlib is not a module version.
+
+```bash
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt
+```
+
+That command printed:
+
+```
+same zlib-1.3.1-GCCcore-15.2.0.eb name=zlib version=1.3.1 base=1.3.1-GCCcore-15.2.0
+different FFTW-3.3.11-gompi-2023a.eb name=FFTW version=3.3.11 base=3.3.10-gompi-2023a
+unversioned OnlyName-1.2-GCCcore-15.2.0.eb name=OnlyName version=1.2 base=-
+same=1 different=1 unversioned=1 recipes=4 base=3
+```
+
+The process exited 1. Standard error was:
+
+```
+error: 3 site-layer recipes shadow a module the EESSI base stack provides
+```
+
+Names match without regard to case. A recipe versionsuffix has to end
+the base module version, so a CUDA variant is not the same version as
+the plain build. `--json` prints `hits`, `same`, `different`,
+`unversioned`, `recipes`, and `base_names`.
+
+# A recipe the base does not provide
+
+```bash
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs/v/VASP/VASP-6.5.1-foss-2026.1.eb \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt
+```
+
+That command printed:
+
+```
+same=0 different=0 unversioned=0 recipes=1 base=3
+```
+
+The process exited 0. A recipe that does not parse exits 1 and names
+the file. `eb_stack_shadow` is the same check. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
 # Glossary
 
 Names shared by the tutorial, the how-to guides, and the reference.
@@ -5314,7 +5851,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with neither `--easystack` nor `--node`. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with neither `--easystack` nor `--node`. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -5343,6 +5880,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack from-commit` | Report `from-commit` pins already contained in an EasyBuild release |
 | `stack gap` | Route each site module the stack lacks, and write one TSV per route |
 | `stack provided` | Fail when a build list names software a baseline already provides |
+| `stack shadow` | Report a site-layer recipe that shadows an EESSI base-stack module |
 | `stack arch` | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | `stack files` | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | `stack generation` | Refuse easystack entries outside their EESSI version's toolchain generations |
@@ -5759,6 +6297,12 @@ eb-stack stack provided \
   [--licensed NAME]... [--licensed-file NAMES.txt] \
   [--format text|github|json] [--json] [--strict]
 
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt \
+  [--json]
+
 eb-stack stack batch \
   (--root FILE.eb... | --roots-file ROOTS.txt) \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
@@ -6015,6 +6559,25 @@ hit as `provided <file> name=<Name> list=<path> line=<N>` and ends with
 `--format` is `text` by default, `github` for workflow commands, or
 `json`. `--json` is the same as `--format json`. See [fail a build list that names software the baseline provides](https://eb-stack.rgoswami.me/../howto/build-list-provided.html.md)
 and [route the modules a stack does not have](https://eb-stack.rgoswami.me/../howto/module-gap.html.md).
+
+`stack shadow` reads each site-layer easyconfig and the EESSI base
+inventory. `--base` is loaded by the same reader as ~stack gap
+--installed`: a directory is an Lmod tree (`Name/version.lua`; `default~
+and `.modulerc.lua` are not modules) and a file is `module -t avail`,
+`module spider -t`, or `Name/version`. Repeated `--base` paths are merged.
+A recipe whose software version equals a base version, or whose base
+version continues past that software version with `-` and the toolchain,
+is `same`. EasyBuild's installed module version is that spelling: the
+software version, then `-` and the toolchain, then the versionsuffix.
+A recipe versionsuffix has to end the base version, so a CUDA variant
+is not the same version as the plain build. Another recorded version of
+the same name is `different`. A base name with an empty version set is
+`unversioned`. A name the base does not have is not reported. Stdout
+lists each shadow as ~<kind> <file> name`<Name> version`<version>
+base`<versions>~ and ends with ~same` different` unversioned` recipes=
+base=`. `--json~ prints the same fields. The command exits 1 when any
+shadow is found. A recipe that does not parse exits 1 and names the file.
+See [report a site recipe that shadows an EESSI module](https://eb-stack.rgoswami.me/../howto/site-layer-shadow.html.md).
 
 `stack batch` plans software-layer pull requests whose builds do not
 overlap. A root's set is its closure over the robot path minus the
@@ -8413,6 +8976,22 @@ easyconfigs:
 
 `stack order --easystack-out` writes the build sequence. `stack easystack`
 writes lock order, which is sorted by package name.
+
+# Site-layer shadow (`stack shadow`)
+
+One line per recipe whose name the `--base` inventory already has, then
+a counts line. `same` is the recipe's software version. `different` is
+another version of that name. `unversioned` is a base name with no
+recorded version. `base` on a hit is the comma-separated module versions
+that decided the kind, or `-` when none were recorded. `--json` prints
+`hits`, `same`, `different`, `unversioned`, `recipes`, and `base_names`.
+
+```text
+same zlib-1.3.1-GCCcore-15.2.0.eb name=zlib version=1.3.1 base=1.3.1-GCCcore-15.2.0
+different FFTW-3.3.11-gompi-2023a.eb name=FFTW version=3.3.11 base=3.3.10-gompi-2023a
+unversioned OnlyName-1.2-GCCcore-15.2.0.eb name=OnlyName version=1.2 base=-
+same=1 different=1 unversioned=1 recipes=4 base=3
+```
 
 # Jenkins sections (`stack sections`)
 
@@ -11086,7 +11665,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 50 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 51 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -11124,6 +11703,7 @@ eb_stack_easystack
 eb_package_latest
 eb_stack_gap
 eb_stack_provided
+eb_stack_shadow
 eb_stack_batch
 eb_stack_shard
 eb_stack_arch
@@ -11148,7 +11728,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 50 tools.
+That is 51 tools.
 `eb_stack_sbom` writes the CycloneDX file `stack sbom` writes.
 Its `tools/list` description reads: "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names. With backport_list, also write the modules whose reach class justifies a backport."
 `eb_stack_sbom` reads the Cbc lock:

@@ -1,0 +1,15 @@
+easyblock = 'MakeCp'
+
+name = 'VASP'
+version = '6.5.1'
+
+homepage = 'https://example.org/vasp'
+description = "Site-only recipe. The EESSI base inventory does not name it."
+
+toolchain = {'name': 'foss', 'version': '2026.1'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'chem'

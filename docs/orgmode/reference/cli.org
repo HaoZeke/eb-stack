@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -46,6 +46,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
 | ~stack gap~ | Route each site module the stack lacks, and write one TSV per route |
 | ~stack provided~ | Fail when a build list names software a baseline already provides |
+| ~stack shadow~ | Report a site-layer recipe that shadows an EESSI base-stack module |
 | ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | ~stack files~ | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | ~stack generation~ | Refuse easystack entries outside their EESSI version's toolchain generations |
@@ -462,6 +463,12 @@ eb-stack stack provided \
   [--licensed NAME]... [--licensed-file NAMES.txt] \
   [--format text|github|json] [--json] [--strict]
 
+eb-stack stack shadow \
+  --easyconfigs tests/shadow_fixtures/easyconfigs \
+  --base tests/shadow_fixtures/base \
+  --base tests/shadow_fixtures/bare.txt \
+  [--json]
+
 eb-stack stack batch \
   (--root FILE.eb... | --roots-file ROOTS.txt) \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
@@ -718,6 +725,25 @@ hit as ~provided <file> name=<Name> list=<path> line=<N>~ and ends with
 ~--format~ is ~text~ by default, ~github~ for workflow commands, or
 ~json~. ~--json~ is the same as ~--format json~. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]
 and [[file:../howto/module-gap.org][route the modules a stack does not have]].
+
+~stack shadow~ reads each site-layer easyconfig and the EESSI base
+inventory. ~--base~ is loaded by the same reader as ~stack gap
+--installed~: a directory is an Lmod tree (~Name/version.lua~; ~default~
+and ~.modulerc.lua~ are not modules) and a file is ~module -t avail~,
+~module spider -t~, or ~Name/version~. Repeated ~--base~ paths are merged.
+A recipe whose software version equals a base version, or whose base
+version continues past that software version with ~-~ and the toolchain,
+is ~same~. EasyBuild's installed module version is that spelling: the
+software version, then ~-~ and the toolchain, then the versionsuffix.
+A recipe versionsuffix has to end the base version, so a CUDA variant
+is not the same version as the plain build. Another recorded version of
+the same name is ~different~. A base name with an empty version set is
+~unversioned~. A name the base does not have is not reported. Stdout
+lists each shadow as ~<kind> <file> name=<Name> version=<version>
+base=<versions>~ and ends with ~same= different= unversioned= recipes=
+base=~. ~--json~ prints the same fields. The command exits 1 when any
+shadow is found. A recipe that does not parse exits 1 and names the file.
+See [[file:../howto/site-layer-shadow.org][report a site recipe that shadows an EESSI module]].
 
 ~stack batch~ plans software-layer pull requests whose builds do not
 overlap. A root's set is its closure over the robot path minus the

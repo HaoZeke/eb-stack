@@ -420,6 +420,12 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_shadow",
+            "Report site-layer recipes that shadow a module the EESSI base stack already provides, as `stack shadow` does. base is an Lmod tree or a module listing, loaded the same way `stack gap` loads installed. A recipe whose software version is already in that inventory is same; another version of a base name is different; a base name with no recorded version is unversioned. A name the base does not have is not reported. A shadow, or a recipe that does not parse, is a tool error.",
+            &[("easyconfigs", "array_min1"), ("base", "array_min1")],
+            &[("json", "boolean")],
+        ),
+        tool_with_optional(
             "eb_stack_batch",
             "Plan software-layer pull requests whose builds do not overlap, as `stack batch` does. Each batch directory gets the EESSI easystacks, a lock, a CycloneDX SBOM, reproduce.sh, batch.json and a pull-request body.",
             &[
@@ -829,6 +835,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_package_latest" => package_latest_tool(arguments),
         "eb_stack_gap" => stack_gap_tool(arguments),
         "eb_stack_provided" => stack_provided_tool(arguments),
+        "eb_stack_shadow" => stack_shadow_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_shard" => stack_shard_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
@@ -3082,6 +3089,26 @@ fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
         "text": run.summary(),
         "out_dir": run.out_dir,
         "rows": run.rows.len(),
+    }))
+}
+
+fn stack_shadow_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::shadow::run(&crate::shadow::ShadowRequest {
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        base: path_array(arguments, "base")?,
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    if let Some(message) = report.failure() {
+        return Err(format!("{}\n{message}", report.stdout));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "same": report.count(crate::shadow::SHADOW_SAME),
+        "different": report.count(crate::shadow::SHADOW_DIFFERENT),
+        "unversioned": report.count(crate::shadow::SHADOW_UNVERSIONED),
+        "recipes": report.recipes,
+        "base": report.base_names,
     }))
 }
 

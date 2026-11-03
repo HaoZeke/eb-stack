@@ -1256,6 +1256,31 @@ enum StackCommand {
         #[arg(long)]
         strict: bool,
     },
+    /// Report site-layer recipes that shadow a module the EESSI base stack provides.
+    ///
+    /// `--base` is an Lmod tree or a module listing, loaded the same way
+    /// `stack gap` loads `--installed`. A recipe whose software version is
+    /// already in that inventory is `same`. Another version of a base name
+    /// is `different`. A base name with no recorded version is `unversioned`.
+    /// A name the base does not have is the site layer and is not reported.
+    /// Exits 1 when any recipe shadows. A recipe that does not parse exits 1
+    /// and names the file.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack shadow --easyconfigs tests/shadow_fixtures/easyconfigs --base tests/shadow_fixtures/base --base tests/shadow_fixtures/bare.txt"
+    )]
+    Shadow {
+        /// Site-layer easyconfig tree, or one `.eb` file. Repeatable.
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// EESSI base module tree or listing. A directory is walked. A file
+        /// is `module -t avail`, `module spider -t`, or `Name/version`.
+        /// Repeatable.
+        #[arg(long, required = true)]
+        base: Vec<PathBuf>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Plan software-layer pull requests whose builds do not overlap.
     ///
     /// Each root's new-module set is its closure over the robot path minus the
@@ -2953,6 +2978,22 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 json,
                 format: format.to_lib(),
                 strict,
+            })?;
+            print!("{}", report.stdout);
+            if let Some(message) = report.failure() {
+                bail!(message);
+            }
+            Ok(())
+        }
+        StackCommand::Shadow {
+            easyconfigs,
+            base,
+            json,
+        } => {
+            let report = eb_stack::shadow::run(&eb_stack::shadow::ShadowRequest {
+                easyconfigs,
+                base,
+                json,
             })?;
             print!("{}", report.stdout);
             if let Some(message) = report.failure() {

@@ -20,6 +20,14 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack shadow` reports a site-layer recipe that shadows a module the
+  EESSI base stack already provides. `--base` is an Lmod tree or a module
+  listing, loaded with the same inventory reader as `stack gap`. The same
+  software version is `same`, another version of that name is `different`,
+  and a base name with no recorded version is `unversioned`. A name the
+  base does not have is not reported. The command exits 1 when any recipe
+  shadows, or when a recipe does not parse. `eb_stack_shadow` is the same
+  check.
 - `stack provided` includes the one-based build-list line on every
   `provided` and `unparsed` finding in its text report, as it already did for
   hook, toolchain, family-lock, and licensed findings.
@@ -65,6 +73,23 @@ All notable changes to this project are documented here.
   records the closures, the shard weights and a SHA-256 of the inputs.
   A line that cannot be resolved exits 1 and writes nothing.
   `eb_stack_shard` is the same command over MCP.
+
+### Documentation
+
+- How to split one Jenkins build list into shards that build at the
+  same time, with the shared dependencies in a prelude.
+- How to plan software-layer pull requests whose builds do not overlap,
+  including the second-version warning a batch records.
+- How to regroup a Jenkins build list under the section headers of a
+  previous list.
+- How to write a stack lock as the YAML `eb --easystack` reads.
+- How to read the easyblock class, the template values, and the
+  toolchain hierarchy EasyBuild derives.
+- How to report the newest stable upstream release of an EasyBuild
+  recipe, and why a listed version was kept or dropped.
+- How to read the reproduction scoreboard and hold it to a ratchet file.
+- How to report a site-layer recipe that shadows a module the EESSI
+  base stack already provides.
 
 ## 0.4.0 - 2026-11-01
 
