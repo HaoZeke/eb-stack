@@ -12,10 +12,22 @@
 //! So a node here is a whole module, name and version and toolchain and
 //! versionsuffix together, the way a functional deployment model keys a
 //! package by its full identity and lets several coexist
-//! (doi:10.1017/s0956796810000195). Two versions of binutils, or Perl at
-//! GCCcore and at SYSTEM, are simply two nodes. Nothing has to be reconciled,
-//! because EasyBuild installs them side by side as different modules, which is
-//! what makes them co-installable in the sense of doi:10.1145/2522920.2522927.
+//! (doi:10.1017/s0956796810000195). Two versions of binutils on the system
+//! toolchain, or Perl at GCCcore and at SYSTEM, are two nodes. The package
+//! key in [`crate::resolvo_provider`] gives those the same distinct names
+//! `stack solve` uses, because EasyBuild installs them side by side
+//! (doi:10.1145/2522920.2522927). A build-only tool such as CMake is the same
+//! kind of node: EasyBuild loads it only while the recipe that names it builds.
+//!
+//! A runtime dependency does not coexist that way. `stack solve` keeps one
+//! version of that name at one toolchain, and it rejects a closure where no
+//! candidate satisfies every such requirement. Eigen 3.4.1 required by one
+//! recipe and Eigen 5.0.0 required by another is that closure. [`build_order`]
+//! refuses it before an order is written, and the error names each requester
+//! and the version it resolved. The order does not repin a recipe. Choosing
+//! which pin to keep would be the policy decision this module leaves to the
+//! solver, and an exact pin the other recipe does not accept has no version
+//! the solver can keep.
 //!
 //! What remains is a choice function for requirements that admit more than one
 //! candidate, and a topological sort. Both are deterministic, so the same tree
@@ -188,6 +200,32 @@ pub enum OrderError {
     /// component is named, not just the edge that happened to close it, since
     /// a bootstrap chain is broken by choosing where to cut the whole loop.
     Cycle(Vec<ModuleKey>),
+    /// Runtime requirements of one name at one toolchain disagree, and no
+    /// candidate satisfies all of them. `stack solve` rejects that closure.
+    /// The order does not pick a winner.
+    RuntimeVersions(Vec<RuntimeConflict>),
+}
+
+/// One recipe whose runtime dependency resolved to a version in a conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePin {
+    /// The module that stated the requirement.
+    pub requester: ModuleKey,
+    /// The version requirement as the recipe wrote it, such as `==3.4.1`.
+    pub requirement: String,
+    /// The version that requirement resolved to.
+    pub resolved: String,
+}
+
+/// Runtime pins of one name at one toolchain that cannot share a stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeConflict {
+    /// Package name.
+    pub name: String,
+    /// Toolchain label, `foss-2026.1` or `system`.
+    pub toolchain: String,
+    /// Who asked, sorted by requester, then requirement, then resolved version.
+    pub requests: Vec<RuntimePin>,
 }
 
 impl std::fmt::Display for OrderError {
@@ -228,7 +266,39 @@ impl std::fmt::Display for OrderError {
                 let names: Vec<String> = component.iter().map(ToString::to_string).collect();
                 write!(f, "dependency cycle among {}", names.join(", "))
             }
+            Self::RuntimeVersions(conflicts) => {
+                for (index, conflict) in conflicts.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{conflict}")?;
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+impl std::fmt::Display for RuntimeConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} at {} is required at more than one version, and no version satisfies every runtime requirement. stack order does not choose one: stack solve rejects this closure",
+            self.name, self.toolchain
+        )?;
+        for (index, pin) in self.requests.iter().enumerate() {
+            if index == 0 {
+                write!(f, ". ")?;
+            } else {
+                write!(f, "; ")?;
+            }
+            write!(
+                f,
+                "{} requires {} {} (resolved {})",
+                pin.requester, self.name, pin.requirement, pin.resolved
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -991,6 +1061,153 @@ pub fn closure_against_installed(
     }
 }
 
+/// A slot disagrees once the closure selected this many modules for it.
+///
+/// The package key in `resolvo_provider` keeps one runtime version. The
+/// second selected module is the disagreement `stack solve` rejects.
+const MODULES_THAT_DISAGREE: usize = 2;
+
+/// One runtime requirement that resolved into a slot under inspection.
+struct RuntimeAsk<'a> {
+    requester: ModuleKey,
+    recipe: &'a Candidate,
+    dep: &'a DepReq,
+    resolved: String,
+}
+
+/// The version a resolved candidate contributes to an error.
+///
+/// A versionsuffix is part of the module identity, so two builds that share
+/// a version string and differ only there stay distinguishable.
+fn resolved_label(candidate: &Candidate) -> String {
+    match candidate.versionsuffix.as_deref() {
+        Some(suffix) if !suffix.is_empty() => format!("{}{suffix}", candidate.version),
+        _ => candidate.version.clone(),
+    }
+}
+
+/// Refuse a closure whose runtime requirements cannot share one version.
+///
+/// Slots come from the modules the graph selected, using the same package
+/// key as `stack solve`. A system bootstrap pair and a build-only tool carry
+/// the version in that key, so they are not inspected. A runtime slot with
+/// two selected modules is an error when no candidate satisfies every runtime
+/// requirement that resolved into it. A requirement that does admit one
+/// shared version is left alone: each recipe still resolves on its own, and
+/// this function does not rewrite a pin.
+// The error names every requester. That makes it a large Err variant on a
+// path that returns at most once per run, the same trade as [`build_order`].
+#[allow(clippy::result_large_err)]
+fn refuse_disjoint_runtime_versions(
+    graph: &BuildGraph,
+    candidates: &[Candidate],
+    choice: Choice,
+) -> Result<(), OrderError> {
+    let by_module: BTreeMap<ModuleKey, &Candidate> = candidates
+        .iter()
+        .map(|candidate| (ModuleKey::of(candidate), candidate))
+        .collect();
+    let closure: Vec<&Candidate> = graph
+        .node_weights()
+        .filter_map(|key| by_module.get(key).copied())
+        .collect();
+    let slots = crate::resolvo_provider::InstallSlots::from_candidates(closure.iter().copied());
+    let mut groups: BTreeMap<String, BTreeSet<ModuleKey>> = BTreeMap::new();
+    for candidate in &closure {
+        if slots.version_in_key(candidate) {
+            continue;
+        }
+        groups
+            .entry(slots.package_key(candidate))
+            .or_default()
+            .insert(ModuleKey::of(candidate));
+    }
+
+    let by_name = index_by_name(candidates);
+    let mut conflicts = Vec::new();
+    for (slot, members) in &groups {
+        if members.len() < MODULES_THAT_DISAGREE {
+            continue;
+        }
+        let mut asks: Vec<RuntimeAsk<'_>> = Vec::new();
+        for recipe in closure.iter().copied() {
+            for dep in &recipe.dependencies {
+                let Some(picked) = resolve_dep(&by_name, recipe, dep, choice, candidates) else {
+                    continue;
+                };
+                let resolved_key = ModuleKey::of(picked);
+                if !members.contains(&resolved_key) {
+                    continue;
+                }
+                asks.push(RuntimeAsk {
+                    requester: ModuleKey::of(recipe),
+                    recipe,
+                    dep,
+                    resolved: resolved_label(picked),
+                });
+            }
+        }
+        asks.sort_by(|left, right| {
+            left.requester
+                .cmp(&right.requester)
+                .then_with(|| left.dep.version_req.cmp(&right.dep.version_req))
+                .then_with(|| left.resolved.cmp(&right.resolved))
+        });
+        asks.dedup_by(|left, right| {
+            left.requester == right.requester
+                && left.dep.version_req == right.dep.version_req
+                && left.resolved == right.resolved
+        });
+        if asks.is_empty() {
+            continue;
+        }
+        let jointly_satisfiable = candidates.iter().any(|candidate| {
+            !slots.version_in_key(candidate)
+                && slots.package_key(candidate) == *slot
+                && asks.iter().all(|ask| {
+                    satisfies(candidate, ask.dep)
+                        && !within_generation(vec![candidate], ask.recipe, candidates, ask.dep)
+                            .is_empty()
+                })
+        });
+        if jointly_satisfiable {
+            continue;
+        }
+        let Some(first) = members.iter().next() else {
+            continue;
+        };
+        let toolchain = members
+            .iter()
+            .map(|key| key.toolchain.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        conflicts.push(RuntimeConflict {
+            name: first.name.clone(),
+            toolchain,
+            requests: asks
+                .iter()
+                .map(|ask| RuntimePin {
+                    requester: ask.requester.clone(),
+                    requirement: ask.dep.version_req.clone(),
+                    resolved: ask.resolved.clone(),
+                })
+                .collect(),
+        });
+    }
+    conflicts.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.toolchain.cmp(&right.toolchain))
+    });
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(OrderError::RuntimeVersions(conflicts))
+    }
+}
+
 /// What to build, in the order to build it.
 ///
 /// Roots are package names, optionally `name==version`. Every dependency the
@@ -1007,6 +1224,9 @@ pub fn build_order(
     choice: Choice,
 ) -> Result<Vec<Candidate>, OrderError> {
     let graph = build_graph(candidates, roots, choice)?;
+    // Refuse before sorting. A closure `stack solve` cannot install is not
+    // an order, even when the graph itself is acyclic.
+    refuse_disjoint_runtime_versions(&graph, candidates, choice)?;
     let by_key: BTreeMap<ModuleKey, &Candidate> =
         candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
 
@@ -1382,6 +1602,122 @@ mod tests {
         assert!(shown.contains("5.0.0"), "{shown}");
         assert!(shown.contains("LAMMPS"), "{shown}");
         assert!(shown.contains("SciPy-bundle"), "{shown}");
+        assert!(
+            matches!(err, OrderError::RuntimeVersions(_)),
+            "expected a runtime version conflict, got {err}"
+        );
+    }
+
+    /// CMake 3.31.11 and 4.2.1 are the pair in
+    /// `two_recipes_may_build_with_different_versions_of_one_tool`. A
+    /// builddependency is loaded only for the recipe that names it.
+    #[test]
+    fn two_build_only_versions_of_one_tool_both_appear() {
+        let foss = tc("foss", "2026.1");
+        let mut parmetis = candidate("ParMETIS", "4.0.3", foss.clone(), vec![]);
+        parmetis.builddependencies = vec![dep("CMake", "==3.31.11", None)];
+        let mut petsc = candidate(
+            "PETSc",
+            "3.25.0",
+            foss.clone(),
+            vec![dep("ParMETIS", "==4.0.3", None)],
+        );
+        petsc.builddependencies = vec![dep("CMake", "==4.2.1", None)];
+        let all = vec![
+            candidate("CMake", "3.31.11", foss.clone(), vec![]),
+            candidate("CMake", "4.2.1", foss, vec![]),
+            parmetis,
+            petsc,
+        ];
+        let order = build_order(&all, &["PETSc".into()], Choice::Newest)
+            .expect("both CMake builds stay in the order");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|module| module.starts_with("CMake-3.31.11")),
+            "{seq:?}"
+        );
+        assert!(
+            seq.iter().any(|module| module.starts_with("CMake-4.2.1")),
+            "{seq:?}"
+        );
+    }
+
+    /// binutils 2.40 and 2.42 are the system pair in
+    /// `a_generation_can_carry_both_halves_of_a_bootstrap_pair`.
+    #[test]
+    fn a_system_bootstrap_pair_still_orders_both_versions() {
+        let system = tc("system", "system");
+        let all = vec![
+            candidate("binutils", "2.40", system.clone(), vec![]),
+            candidate(
+                "binutils",
+                "2.42",
+                system.clone(),
+                vec![dep("Perl", "==5.38.0", Some(system.clone()))],
+            ),
+            candidate(
+                "Perl",
+                "5.38.0",
+                system.clone(),
+                vec![dep("binutils", "==2.40", Some(system.clone()))],
+            ),
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("binutils", "==2.42", Some(system))],
+            ),
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest)
+            .expect("both binutils builds stay in the order");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|module| module == "binutils-2.40-system"),
+            "{seq:?}"
+        );
+        assert!(
+            seq.iter().any(|module| module == "binutils-2.42-system"),
+            "{seq:?}"
+        );
+    }
+
+    /// An unpinned requirement and an exact pin share a version, so the
+    /// closure is solvable. The order still lists both resolutions and does
+    /// not rewrite the pin.
+    #[test]
+    fn a_shared_version_is_not_repinned() {
+        let foss = tc("foss", "2026.1");
+        let all = vec![
+            candidate("Eigen", "3.4.1", foss.clone(), vec![]),
+            candidate("Eigen", "5.0.0", foss.clone(), vec![]),
+            candidate(
+                "LAMMPS",
+                "2025.07",
+                foss.clone(),
+                vec![dep("Eigen", "", None)],
+            ),
+            candidate(
+                "SciPy-bundle",
+                "2026.06",
+                foss,
+                vec![dep("Eigen", "==3.4.1", None)],
+            ),
+        ];
+        let order = build_order(
+            &all,
+            &["LAMMPS".into(), "SciPy-bundle".into()],
+            Choice::Newest,
+        )
+        .expect("a shared version is not a refusal");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|module| module.starts_with("Eigen-3.4.1")),
+            "{seq:?}"
+        );
+        assert!(
+            seq.iter().any(|module| module.starts_with("Eigen-5.0.0")),
+            "{seq:?}"
+        );
     }
 
     /// The case a stack solve cannot express: two builds of one name, both

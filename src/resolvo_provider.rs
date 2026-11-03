@@ -70,6 +70,122 @@ fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
     }
 }
 
+/// A name is qualified by toolchain once it is carried at this many labels.
+///
+/// One label keeps the plain package name. A second label is a different
+/// module level, which is the case [`package_key`] qualifies.
+const TOOLCHAIN_LEVELS_THAT_QUALIFY: usize = 2;
+
+/// Each system-toolchain version becomes its own package once a name has
+/// this many versions there.
+///
+/// The bootstrap pair [`package_key`] names is two: binutils 2.40 builds the
+/// GCCcore that builds binutils 2.42.
+const SYSTEM_VERSIONS_THAT_SPLIT: usize = 2;
+
+/// Build-dependency versions are split into their own packages once a name
+/// is required at this many versions and runtime references still agree.
+const BUILD_VERSIONS_THAT_SPLIT: usize = 2;
+
+/// Several build-dependency versions stay co-installable only when the
+/// distinct runtime version strings number at most this many.
+///
+/// [`package_key`] admits that split only when every runtime reference asks
+/// for the same version. A second runtime version string keeps one package.
+const MAX_RUNTIME_VERSION_STRINGS_FOR_BUILD_SPLIT: usize = 1;
+
+/// The sets [`package_key`] reads, computed once for a candidate list.
+///
+/// `stack solve` and `stack order` both use these sets, so a closure the
+/// solver cannot install is the same closure the order refuses.
+#[derive(Debug, Clone)]
+pub(crate) struct InstallSlots {
+    /// Names carried at more than one toolchain label.
+    multi_level: HashSet<String>,
+    /// Names with more than one version on the system toolchain.
+    system_multi: HashSet<String>,
+    /// Names whose build-dependency versions may be installed together.
+    build_multi: HashSet<String>,
+}
+
+impl InstallSlots {
+    /// The sets for every candidate the caller will key.
+    pub(crate) fn from_candidates<'a>(candidates: impl IntoIterator<Item = &'a Candidate>) -> Self {
+        let mut levels_of: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut system_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut build_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut runtime_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for candidate in candidates {
+            levels_of
+                .entry(candidate.name.clone())
+                .or_default()
+                .insert(toolchain_label(&candidate.toolchain));
+            if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+                system_versions
+                    .entry(candidate.name.clone())
+                    .or_default()
+                    .insert(candidate.version.clone());
+            }
+            for (deps, seen) in [
+                (&candidate.builddependencies, &mut build_versions),
+                (&candidate.dependencies, &mut runtime_versions),
+            ] {
+                for dep in deps {
+                    let version = dep.version_req.trim_start_matches("==").to_string();
+                    seen.entry(dep.name.clone()).or_default().insert(version);
+                }
+            }
+        }
+        let multi_level = levels_of
+            .into_iter()
+            .filter(|(_, levels)| levels.len() >= TOOLCHAIN_LEVELS_THAT_QUALIFY)
+            .map(|(name, _)| name)
+            .collect();
+        let system_multi = system_versions
+            .into_iter()
+            .filter(|(_, versions)| versions.len() >= SYSTEM_VERSIONS_THAT_SPLIT)
+            .map(|(name, _)| name)
+            .collect();
+        let build_multi = build_versions
+            .into_iter()
+            .filter(|(name, versions)| {
+                versions.len() >= BUILD_VERSIONS_THAT_SPLIT
+                    && runtime_versions.get(name).is_none_or(|versions| {
+                        versions.len() <= MAX_RUNTIME_VERSION_STRINGS_FOR_BUILD_SPLIT
+                    })
+            })
+            .map(|(name, _)| name)
+            .collect();
+        Self {
+            multi_level,
+            system_multi,
+            build_multi,
+        }
+    }
+
+    /// The resolvo package name for one candidate.
+    pub(crate) fn package_key(&self, candidate: &Candidate) -> String {
+        package_key(
+            &candidate.name,
+            &candidate.toolchain,
+            &candidate.version,
+            &self.multi_level,
+            &self.system_multi,
+            &self.build_multi,
+        )
+    }
+
+    /// Whether another version of this candidate is a different package.
+    ///
+    /// True for a system bootstrap pair and for a build-only tool. False for
+    /// a runtime dependency, which keeps one version at one toolchain.
+    pub(crate) fn version_in_key(&self, candidate: &Candidate) -> bool {
+        let name = candidate.name.as_str();
+        let system = crate::hierarchy::is_system_toolchain(&candidate.toolchain);
+        (self.system_multi.contains(name) && system) || (self.build_multi.contains(name) && !system)
+    }
+}
+
 /// The resolvo package name for a candidate.
 ///
 /// Plain for the ordinary case, qualified by toolchain for the names that a
@@ -410,70 +526,11 @@ impl EbProvider {
         // Only names that genuinely appear at several levels are qualified.
         // Everything else keeps its plain name, so the common case reads the
         // same in every message and lock the tool has ever written.
-        let mut levels_of: HashMap<String, BTreeSet<String>> = HashMap::new();
-        for c in candidates.iter() {
-            levels_of
-                .entry(c.name.clone())
-                .or_default()
-                .insert(toolchain_label(&c.toolchain));
-        }
-        let multi_level: HashSet<String> = levels_of
-            .iter()
-            .filter(|(_, levels)| levels.len() > 1)
-            .map(|(name, _)| name.clone())
-            .collect();
-
-        // Names the system level carries at more than one version. These are
-        // the bootstrap pairs, and each version is its own package.
-        let mut system_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
-        for c in candidates.iter() {
-            if crate::hierarchy::is_system_toolchain(&c.toolchain) {
-                system_versions
-                    .entry(c.name.clone())
-                    .or_default()
-                    .insert(c.version.clone());
-            }
-        }
-        let system_multi: HashSet<String> = system_versions
-            .iter()
-            .filter(|(_, versions)| versions.len() > 1)
-            .map(|(name, _)| name.clone())
-            .collect();
-
-        let mut build_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
-        let mut runtime_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
-        for c in candidates.iter() {
-            for (deps, seen) in [
-                (&c.builddependencies, &mut build_versions),
-                (&c.dependencies, &mut runtime_versions),
-            ] {
-                for d in deps {
-                    let version = d.version_req.trim_start_matches("==").to_string();
-                    seen.entry(d.name.clone()).or_default().insert(version);
-                }
-            }
-        }
-        let build_multi: HashSet<String> = build_versions
-            .iter()
-            .filter(|(name, versions)| {
-                versions.len() > 1 && runtime_versions.get(*name).is_none_or(|r| r.len() <= 1)
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
+        let slots = InstallSlots::from_candidates(candidates.iter());
 
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
-            by_name
-                .entry(package_key(
-                    &c.name,
-                    &c.toolchain,
-                    &c.version,
-                    &multi_level,
-                    &system_multi,
-                    &build_multi,
-                ))
-                .or_default()
-                .push(i);
+            by_name.entry(slots.package_key(c)).or_default().push(i);
         }
         // Sort by (version, versionsuffix) so same version with different
         // suffixes get distinct, deterministic ranks rather than colliding.
@@ -704,14 +761,7 @@ impl EbProvider {
 
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for c in candidates.iter() {
-            let key = package_key(
-                &c.name,
-                &c.toolchain,
-                &c.version,
-                &multi_level,
-                &system_multi,
-                &build_multi,
-            );
+            let key = slots.package_key(c);
             let entry = keys_by_name.entry(c.name.clone()).or_default();
             if !entry.contains(&key) {
                 entry.push(key);
