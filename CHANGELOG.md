@@ -73,6 +73,53 @@ All notable changes to this project are documented here.
   records the closures, the shard weights and a SHA-256 of the inputs.
   A line that cannot be resolved exits 1 and writes nothing.
   `eb_stack_shard` is the same command over MCP.
+- `stack oom --hooks FILE` reads `PARALLELISM_LIMITS` from an EESSI
+  `eb_hooks.py` in place of the hook rows of
+  `data/eessi-bot-resources.toml`. The file is parsed as Python and
+  never run. A key may be a module-level string constant such as
+  `CPU_TARGET_A64FX`, and a repeated key keeps its last value. A
+  `divide_by_factor` that is not an integer is a warning that names the
+  file and line (`16 // 2.5` is `6.0`, a float). An op other than
+  `divide_by_factor` or `set_maximum`, a `**` unpacking, or a key that
+  is not a string exits 1 with the line. `eb_stack_oom` takes `hooks`.
+- `stack oom --hooks FILE` warns on a statement that adds to a name and
+  drops the sum, such as `msg+ "..."` in the EESSI `post_ready_hook`:
+  the second half of its log message never prints. The warning names
+  the file, the line, and the function; `msg += "..."` is not reported,
+  and the parallel levels do not change. `eb_stack_oom` returns these
+  as `hook_warnings`.
+- `stack oom --node` prints the memory cap beside the level the hook
+  leaves, for a package with an `mib_per_job`:
+  `min(current, memory_mib // mib_per_job)`, the same quotient as
+  `memory_bytes // (mib_per_job * 2**20)`. It is not raised to 1, so
+  `memory cap 0 (...), not one N MiB job fits` says one compile needs
+  more than the node has. `--mib-per-job FILE` is a visible alias of
+  `--job-memory FILE`. The `memory` column, `limit_by_memory` in place of
+  the hook, is unchanged.
+- `stack oom --parallel N` and `--max-parallel N` model a job that sets
+  EasyBuild's `--parallel` or `--max-parallel`; the bot sets neither.
+  EasyBuild uses `--parallel` in place of the core count, capped at
+  max-parallel and `maxparallel`. The EESSI `post_ready_hook` still
+  applies its op to the node's cores (`det_parallelism()` with no
+  arguments) and keeps the result only when it is lower: with
+  `--parallel 12` on 16 cores libxc gets 16 // 2 = 8, and with
+  `--parallel 4` it stays at 4. The `--node` lines and a warning's
+  `parallel` line name the setting that decided, and say when the
+  hook's result was not lower. 0 for either flag is status 2.
+  `eb_stack_oom` takes `parallel` and `max_parallel`.
+
+### Changed
+
+- `data/build-memory.toml` records software-layer #1772 bot job 221273:
+  libxc 7.0.0 with GCC 15.2.0 ran out of the 32 GiB zen4 job at
+  `make -j 5`, under a libxc divider of 3 in the software-layer-scripts
+  commit the job used. The zen4 figure is now a lower bound of 6.4 GiB
+  per process, 32 over 5, in place of 4.0, 32 over 8. A libxc warning
+  on that node reads `8 x 6.4 GiB = 51.2 GiB` and suggests
+  `maxparallel = 4` in place of 7, a divider of 2.5 (6 processes,
+  38.4 GiB) no longer fits, and the remedy names a reduction of 8, as
+  asked in the review of software-layer-scripts #337
+  (issuecomment-6599147327).
 
 ### Documentation
 
@@ -90,6 +137,15 @@ All notable changes to this project are documented here.
 - How to read the reproduction scoreboard and hold it to a ratchet file.
 - How to report a site-layer recipe that shadows a module the EESSI
   base stack already provides.
+- The out-of-memory how-to checks two forms of libxc's row with
+  `--hooks`: a cap of 8, `(set_maximum, 8)`, the form proposed in the
+  review of software-layer-scripts #337, and a reduction of 8,
+  `(divide_by_factor, 8)`, as asked in the review of #337
+  (issuecomment-6599147327). On the bot's 16-core nodes the cap gives 8,
+  the same as dividing by 2, and pull request 1772 still warns on the
+  32 GiB zen4 node; the reduction gives 2 and fits. A cap does not scale
+  with the node: it gives 8 on 64 cores and on 12. The fixtures are
+  `hooks/set-maximum-8.py` and `hooks/divide-8.py`.
 
 ## 0.4.0 - 2026-11-01
 

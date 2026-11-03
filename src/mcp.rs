@@ -540,7 +540,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_oom",
-            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A divide_by_factor that is not an integer is also a warning: Python's // returns a float (16 // 2.5 is 6.0). node is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET and prints the hook parallelism beside limit_by_memory. Pass easystack or node. A warning is not an error.",
+            "Warn about plan entries likely to run out of memory in an EESSI bot job, as `stack oom` does. Each build's peak comes from the build memory table at the parallel level the job gives it, after the EESSI PARALLELISM_LIMITS and the easyconfig's maxparallel. An estimate that reaches the job's memory is a warning with remedies as text. A divide_by_factor that is not an integer is also a warning: Python's // returns a float (16 // 2.5 is 6.0). hooks is an eb_hooks.py whose PARALLELISM_LIMITS replace the table's hook rows; a statement such as msg+ \"...\" that drops its sum is returned in hook_warnings. node is CORES:MEMORY_MIB or CORES:MEMORY_MIB:TARGET and prints the hook parallelism beside limit_by_memory; for a package with an mib_per_job in job_memory (the CLI's --job-memory or --mib-per-job) it also prints the memory cap min(current, memory // mib_per_job), where 0 means not one job fits. parallel and max_parallel are EasyBuild's --parallel and --max-parallel for the job; the hook applies its op to the node's cores, not to either, and keeps the result only when it is lower. Pass easystack, node, or hooks. A warning is not an error.",
             &[],
             &[
                 ("easystack", "array"),
@@ -551,6 +551,9 @@ fn tool_catalog() -> Vec<Value> {
                 ("resources", "string"),
                 ("node", "array"),
                 ("job_memory", "string"),
+                ("hooks", "string"),
+                ("parallel", "integer"),
+                ("max_parallel", "integer"),
             ],
         ),
         tool_with_optional(
@@ -3416,6 +3419,9 @@ fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
         resources: optional_path(arguments, "resources"),
         nodes: string_array(arguments, "node")?,
         job_memory: optional_path(arguments, "job_memory"),
+        hooks: optional_path(arguments, "hooks"),
+        parallel: optional_u32(arguments, "parallel")?,
+        max_parallel: optional_u32(arguments, "max_parallel")?,
     })
     .map_err(workflow_error)?;
     Ok(json!({
@@ -3440,6 +3446,7 @@ fn stack_oom_tool(arguments: &Value) -> Result<Value, String> {
         "nodes": report.partitions,
         "unknown_arch": report.unknown_arches,
         "factor_warnings": report.factor_warnings,
+        "hook_warnings": report.hook_warnings,
     }))
 }
 
@@ -3934,6 +3941,12 @@ fn optional_u64(arguments: &Value, name: &str) -> Result<Option<u64>, String> {
             .map(Some)
             .ok_or_else(|| format!("argument {name} must be an integer")),
     }
+}
+
+fn optional_u32(arguments: &Value, name: &str) -> Result<Option<u32>, String> {
+    optional_u64(arguments, name)?
+        .map(|value| u32::try_from(value).map_err(|_| format!("argument {name} is too large")))
+        .transpose()
 }
 
 fn u64_array(arguments: &Value, name: &str) -> Result<Vec<u64>, String> {

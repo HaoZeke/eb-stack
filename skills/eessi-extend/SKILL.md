@@ -332,20 +332,35 @@ eb-stack stack oom \
 
 A warning names the entry, the target and node, the parallel level and
 the estimate against the job's memory. The libxc build in software-layer
-#1772 was killed twice on zen4 at 8 processes on 32 GiB. The remedies are
-text only: a `maxparallel` in the recipe, a limit in `PARALLELISM_LIMITS`
-in software-layer-scripts `eb_hooks.py`, or a node with more memory. Put
-the change in the pull request yourself. The command exits 0.
+#1772 was killed on zen4 twice at 8 processes on 32 GiB, and once at 5.
+The remedies are text only: a `maxparallel` in the recipe, a limit in
+`PARALLELISM_LIMITS` in software-layer-scripts `eb_hooks.py`, or a node
+with more memory. Put the change in the pull request yourself. The
+command exits 0.
 
 The hook ops are `divide_by_factor` (`max(1, parallel // factor)`) and
 `set_maximum` (`min(parallel, n)`). A CPU-target key overrides `*`.
-A64FX divides every other build by 4. A divide factor that is not an
+A64FX divides every other build by 4. The op applies to the node's
+cores, not to EasyBuild's `--parallel`, and wins only when lower;
+`--parallel N` and `--max-parallel N` on `stack oom` show a job that
+sets them. A divide factor that is not an
 integer is a warning: `16 // 2.5` is the float `6.0`. Use an integer.
-`eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
+`--hooks software-layer-scripts/eb_hooks.py` reads `PARALLELISM_LIMITS`
+from the file instead of the bundled copy, and the warning names the
+line. `eb_hooks.py` also has a `msg+` where the log line should use `+=`; half
 the message never prints. That is upstream. Do not patch it from here.
+`--hooks` prints it as a warning with the line and `post_ready_hook`.
+A cap does not scale with the node: on the bot's 16-core nodes
+`(set_maximum, 8)` and `(divide_by_factor, 2)` both leave 8, and 2 cores
+of 16 is `(divide_by_factor, 8)`. Before a software-layer pull request
+points `bot/software_layer_scripts_commit` at a scripts change, run
+`stack oom --hooks` on that commit's `eb_hooks.py` with `--node` for the
+bot node, and check that the level is the one asked for.
 
 `eb-stack stack oom --node 16:32768:x86_64/amd/zen4` compares the hook
-with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`.
+with `limit_by_memory`. `data/job-memory.toml` holds `mib_per_job`;
+`--mib-per-job FILE` replaces it, and a package with a number gets the
+memory cap `min(current, memory // mib_per_job)` beside the hook's level.
 libxc is unmeasured. Measure a compile with `scripts/compile_rss.py`
 under `-O2 -ftree-vectorize -march=<target> -fno-math-errno`, and do not
 invent the number. The how-to is `docs/orgmode/howto/oom-profile.org`.

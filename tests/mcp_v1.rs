@@ -3792,3 +3792,115 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         assert!(listed, "CLI subcommand {rendered} has no MCP tool");
     }
 }
+
+#[test]
+fn mcp_stack_oom_reads_an_eb_hooks_py() {
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/hooks/divide-2.5.py")
+        .display()
+        .to_string();
+    let response = call(1, "eb_stack_oom", json!({"hooks": hooks}));
+    let body = &response["result"]["structuredContent"];
+    let warnings = body["factor_warnings"].as_array().expect("factor_warnings");
+    assert_eq!(warnings.len(), 1, "{body}");
+    let warning = warnings[0].as_str().expect("warning text");
+    assert!(
+        warning.starts_with(&format!(
+            "warning: {hooks}:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5"
+        )),
+        "{warning}"
+    );
+    let text = body["text"].as_str().expect("text");
+    assert!(
+        text.starts_with(&format!("hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n")),
+        "{text}"
+    );
+    assert_eq!(body["hook_warnings"], json!([]), "{body}");
+}
+
+#[test]
+fn mcp_stack_oom_returns_the_dropped_msg_sum() {
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/hooks/msg-plus.py")
+        .display()
+        .to_string();
+    let response = call(1, "eb_stack_oom", json!({"hooks": hooks}));
+    let body = &response["result"]["structuredContent"];
+    let warning = format!(
+        "warning: {hooks}:30: msg+ \"to avoid out-of-memory failures during building/testing\" in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends"
+    );
+    assert_eq!(body["hook_warnings"], json!([warning]), "{body}");
+    assert_eq!(body["factor_warnings"], json!([]), "{body}");
+    let text = body["text"].as_str().expect("text");
+    assert!(text.ends_with(&format!("{warning}\n")), "{text}");
+}
+
+#[test]
+fn mcp_stack_oom_prints_the_memory_cap_beside_the_core_cap() {
+    let job_memory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/oom_profile_fixtures/job-memory-fixture.toml")
+        .display()
+        .to_string();
+    let response = call(
+        1,
+        "eb_stack_oom",
+        json!({"node": ["16:4096:x86_64/amd/zen4"], "job_memory": job_memory}),
+    );
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 0 (min(8, 4096 // 8192)), not one 8192 MiB job fits; memory 1 (max(1, min(16, 4096 // 8192)))\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn mcp_stack_oom_takes_easybuild_parallel_and_max_parallel() {
+    let response = call(
+        1,
+        "eb_stack_oom",
+        json!({"node": ["16:32768:x86_64/amd/zen4"], "parallel": 4}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("node 16 cores, 32768 MiB, x86_64/amd/zen4, --parallel 4\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  libxc: current 4 (divide_by_factor on *, max(1, 16 // 2) = 8, then --parallel 4); memory unmeasured\n"),
+        "{text}"
+    );
+
+    let response = call(
+        2,
+        "eb_stack_oom",
+        json!({"node": ["48:30016:aarch64/a64fx"], "max_parallel": 48}),
+    );
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains(
+            "  LLVM: current 24 (divide_by_factor on *, max(1, 48 // 2)); memory unmeasured\n"
+        ),
+        "{text}"
+    );
+
+    let response = call(
+        3,
+        "eb_stack_oom",
+        json!({"node": ["16:32768"], "parallel": 0}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let message = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.contains("--parallel must be a positive integer"),
+        "{message}"
+    );
+}

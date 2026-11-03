@@ -4603,8 +4603,8 @@ The command never edits a recipe or a hook, and it always exits 0.
 Why you'd use it: a bot job that runs out of memory fails late and
 quietly. Software-layer pull request 1772 added
 `libxc-7.0.0-GCC-15.2.0.eb`. The build was killed for lack of memory on
-zen4 twice, at 8 processes on a 32 GiB job, before anyone changed the
-parallel level. The same thing happened to Highway in #1692, to
+zen4 twice at 8 processes on a 32 GiB job, and again at 5 after a hook
+change. The same thing happened to Highway in #1692, to
 hipBLASLt and rocBLAS in #1549, and to PETSc in #1608. Run the check
 before you open the pull request or ask the bot to build.
 
@@ -4616,12 +4616,12 @@ eb-stack stack oom \
 The command prints:
 
 ```
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py divides libxc by 2
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=14 builds=5 nodes=15
 ```
 
@@ -4705,9 +4705,11 @@ bigger node.
 
 The parallel level comes from the hook limits in
 `data/eessi-bot-resources.toml`. Pass `--resources` to try other limits
-or other nodes. Pull request 1608 ran out of memory in the PETSc test
-step on zen5 before software-layer-scripts #298 halved PETSc. With the
-current hooks, PETSc fits:
+or other nodes, or `--hooks` to read the limits from an `eb_hooks.py`
+(see [[*Read the limits from eb_hooks.py][below]]). Pull request 1608
+ran out of memory in the PETSc test step on zen5 before
+software-layer-scripts #298 halved PETSc. With the current hooks, PETSc
+fits:
 
 ```bash
 eb-stack stack oom \
@@ -4759,9 +4761,9 @@ or bot configuration.
   also holds EasyBuild's default maximum parallel level of 16 and the
   `PARALLELISM_LIMITS` table from the EESSI `eb_hooks.py`.
 
-The parallel level is the smallest of these: the node's cores,
-EasyBuild's maximum, the hook limit applied to the cores, and a
-top-level `maxparallel` in the recipe. The hook ops are the ones in
+The parallel level is the smallest of these: the node's cores, or
+`--parallel` in their place; EasyBuild's maximum; the hook limit applied
+to the cores; and a top-level `maxparallel` in the recipe. The hook ops are the ones in
 `eb_hooks.py`. `divide_by_factor(parallel, factor)` is
 `max(1, parallel // factor)`. `set_maximum(parallel, n)` is
 `min(parallel, n)`. A software name uses its limit for the CPU target,
@@ -4789,7 +4791,8 @@ msg+ "to avoid out-of-memory failures during building/testing"
 The second statement adds nothing. `msg + "..."` is an expression, and
 the result is thrown away. The operator that appends is `+=`. The line
 that prints stops after the CPU target. This is upstream `eb_hooks.py`.
-eb-stack does not patch it.
+eb-stack does not patch it. `--hooks` reports it with its line (see
+[[*Read the limits from eb_hooks.py][below]]).
 
 # A divide factor that is not an integer
 
@@ -4808,13 +4811,151 @@ eb-stack stack oom \
 
 ```
 warning: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
-oom=0 fits=1 builds=5 nodes=1
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
+  parallel 6: 16 cores, eb_hooks.py divides libxc by 2.5 (16 // 2.5 is 6.0, a float)
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
+  remedy: no other x86_64/amd/zen4 node in the bot resource table has room for it
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
+oom=1 fits=0 builds=5 nodes=1
 ```
 
-The warning is the float. The estimate then uses 6, so 6 times 4.0 GiB
-is 24 GiB and the 32 GiB zen4 job fits. With the integer divider of 2
-the same build is the warning in the first example. The command still
-exits 0.
+The first warning is the float. The estimate then uses 6, and 6 times
+6.4 GiB is 38.4 GiB, more than the 32 GiB zen4 job. The divider of 3
+ran out at 5 in bot job 221273 of #1772, so 6 does not fit either. The
+fixture has only the AWS zen4 node, so no other node has room. The
+command still exits 0.
+
+# Read the limits from eb_hooks.py
+
+The hook rows in `data/eessi-bot-resources.toml` are a copy of
+`PARALLELISM_LIMITS`. `--hooks` reads that dict from an `eb_hooks.py`
+instead, so a hook change can be checked before it is merged. The file
+is parsed as Python, and nothing in it runs. The fixture
+`hooks/divide-2.5.py` has the layout of the real file and the libxc
+divider of 2.5:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/divide-2.5.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/divide-2.5.py
+warning: tests/oom_profile_fixtures/hooks/divide-2.5.py:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
+  parallel 6: 16 cores, eb_hooks.py divides libxc by 2.5 (16 // 2.5 is 6.0, a float)
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
+oom=1 fits=1 builds=5 nodes=2
+```
+
+The first line says how many rows were read, and from which file. The
+first warning names the line of the `(divide_by_factor, 2.5)` tuple.
+The nodes still come from the bot resource table, so both zen4 nodes are
+checked, and the 180 GiB node has room for 6. With every factor an
+integer there is no `warning:` line:
+
+```bash
+eb-stack stack oom --hooks tests/oom_profile_fixtures/hooks/integers.py
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+```
+
+The libxc and A64FX rows of `integers.py` are the ones in the bot
+resource table, so `--node` (see
+[[*A memory limit instead of a core fraction][below]]) prints the same
+parallel levels with and without it. For the real hooks, pass the file from a software-layer-scripts
+checkout, `--hooks software-layer-scripts/eb_hooks.py`.
+
+A key is a string or a module-level string constant such as
+`CPU_TARGET_A64FX`. A key the dict repeats keeps its last value, as in
+Python. An op other than `divide_by_factor` or `set_maximum`, a `**`
+unpacking, or a key that is not a string stops the command with the
+file and the line: the parallel levels would be wrong without that row.
+
+The same file is checked for a statement that adds to a name and drops
+the sum, such as the `msg+` in `post_ready_hook`. The fixture
+`hooks/msg-plus.py` has that statement:
+
+```bash
+eb-stack stack oom --hooks tests/oom_profile_fixtures/hooks/msg-plus.py
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/msg-plus.py
+warning: tests/oom_profile_fixtures/hooks/msg-plus.py:30: msg+ "to avoid out-of-memory failures during building/testing" in post_ready_hook adds to msg and drops the result, so msg does not change; msg += appends
+```
+
+The warning names the function and the line. It does not change a
+parallel level, and the command still exits 0. `msg += "..."`, as in
+`hooks/msg-plus-equals.py`, appends and is not reported.
+
+# EasyBuild's --parallel and the hook
+
+`post_ready_hook` does not divide the level EasyBuild chose. It calls
+`det_parallelism()` with no arguments, which counts the cores the job
+can use, applies the op to that count, and keeps the result only when
+it is below EasyBuild's level. EasyBuild's level comes from
+`set_parallel`: `--parallel` (`EASYBUILD_PARALLEL`) in place of the
+core count when it is set, capped at the easyconfig's `maxparallel` and
+at `--max-parallel` (`EASYBUILD_MAX_PARALLEL`, 16 by default). The bot
+sets neither. `stack oom --parallel N` and `--max-parallel N` model a
+job that does. `--node CORES:MEMORY_MIB:TARGET` prints the levels for
+one node size:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/integers.py \
+  --parallel 12 \
+  --node 16:32768:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4, --parallel 12
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured
+job memory: libxc 7.0 unmeasured, no mib_per_job
+```
+
+libxc gets 8, which is 16 // 2. Half of `--parallel 12` would be 6.
+With `--parallel 4` the hook's 8 is not lower, so it does not apply:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/integers.py \
+  --parallel 4 \
+  --node 16:32768:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4, --parallel 4
+  libxc: current 4 (divide_by_factor on *, max(1, 16 // 2) = 8, then --parallel 4); memory unmeasured
+job memory: libxc 7.0 unmeasured, no mib_per_job
+```
+
+A divide factor is a fraction of the node, not of `--parallel`:
+`--parallel` above the hook's result does not change it, and
+`--parallel` below it wins. `--parallel` also replaces the core count in
+EasyBuild, so with `--parallel 32 --max-parallel 64` a build with no
+hook row runs at 32 on a 16-core node. With an easystack, the
+`parallel` line of a warning names `--parallel` and the cores the hook
+divided, and says when the hook's result was not lower.
+
+At software-layer-scripts 43df6f4 the hook reads `EESSI_SOFTWARE_SUBDIR`,
+the software name, EasyBuild's level, and `det_parallelism()`. No
+environment variable there caps or overrides `PARALLELISM_LIMITS`.
+EESSI-extend's `EESSI_EASYBUILD_HOOKS_OVERRIDE` replaces the whole hooks
+file; `--hooks` reads such a file.
 
 # A memory limit instead of a core fraction
 
@@ -4890,6 +5031,127 @@ that name. The footer names the rows that are unmeasured. libxc 7.0 is
 the one the table calls out; the other names are absent from the table,
 which is the same as unmeasured.
 
+With a number in the table, the line also prints the memory cap: the
+level the hook leaves, with a memory ceiling on top,
+`min(current, memory_mib // mib_per_job)`. The memory is a whole number
+of MiB, so the quotient is the same as
+`memory_bytes // (mib_per_job * 2**20)`. `--mib-per-job FILE` is the
+same flag as `--job-memory FILE`. The fixture
+`job-memory-fixture.toml` gives libxc 8192 MiB, which is arithmetic and
+not a measurement. With `hooks/integers.py` the report is libxc alone:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/integers.py \
+  --mib-per-job tests/oom_profile_fixtures/job-memory-fixture.toml \
+  --node 16:32768:x86_64/amd/zen4 \
+  --node 16:131072:x86_64/amd/zen4 \
+  --node 16:4096:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 4 (min(8, 32768 // 8192)); memory 4 (max(1, min(16, 32768 // 8192)))
+node 16 cores, 131072 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 8 (min(8, 131072 // 8192)); memory 16 (max(1, min(16, 131072 // 8192)))
+node 16 cores, 4096 MiB, x86_64/amd/zen4
+  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory cap 0 (min(8, 4096 // 8192)), not one 8192 MiB job fits; memory 1 (max(1, min(16, 4096 // 8192)))
+job memory: every package in the table has an mib_per_job
+```
+
+On 32 GiB the memory allows four 8192 MiB jobs and the hook allows 8,
+so the memory cap is 4. On 128 GiB the memory allows 16, and the cap
+stays at the hook's 8; `limit_by_memory` in place of the hook would
+give 16. On 4 GiB not one job fits. `limit_by_memory` still says 1,
+because it never goes below one job. The memory cap is 0: one compile
+already needs more than the node has.
+
+# A cap of 8 or a reduction of 8 for libxc
+
+Two forms of libxc's `'*'` row in `PARALLELISM_LIMITS` have come up in
+the review of software-layer-scripts pull request 337. Each fixture is
+`hooks/integers.py` with that row in place of `(divide_by_factor, 2)`,
+and the A64FX row stays at `(set_maximum, 6)`:
+
+- `hooks/set-maximum-8.py` has a cap of 8, `(set_maximum, 8)`, the form
+  proposed in review.
+- `hooks/divide-8.py` has a reduction of 8, `(divide_by_factor, 8)`, as
+  asked in the review of 337 (issuecomment-6599147327).
+
+Compare node sizes under the cap of 8:
+
+```bash
+eb-stack stack oom \
+  --hooks tests/oom_profile_fixtures/hooks/set-maximum-8.py \
+  --node 16:32768:x86_64/amd/zen4 \
+  --node 48:30016:aarch64/a64fx \
+  --node 64:262144:x86_64/amd/zen4 \
+  --node 12:24576:x86_64/amd/zen4
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/set-maximum-8.py
+parallelism under the current eb_hooks.py limit and under limit_by_memory
+node 16 cores, 32768 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(16, 8)); memory unmeasured
+node 48 cores, 30016 MiB, aarch64/a64fx
+  libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured
+  (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured
+node 64 cores, 262144 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(64, 8)); memory unmeasured
+node 12 cores, 24576 MiB, x86_64/amd/zen4
+  libxc: current 8 (set_maximum on *, min(12, 8)); memory unmeasured
+job memory: libxc 7.0 unmeasured, no mib_per_job
+```
+
+With `hooks/integers.py` the same four nodes give libxc 8, 6, 16 and 6.
+A cap is a number of jobs, so it does not grow with the node: on 64
+cores it gives 8, where `64 // 2` is 32 and max-parallel holds that at
+16. It does not shrink either: on 12 cores it gives 8, where `12 // 2`
+is 6. The two rows agree on 16 and 17 cores. Every node in the bot
+resource table has 16 cores except A64FX, which keeps its own row, so
+on the bot the cap leaves libxc where it is. Pull request 1772 still
+warns on the 32 GiB zen4 node:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/set-maximum-8.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/set-maximum-8.py
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
+  parallel 8: 16 cores, eb_hooks.py caps libxc at 8
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
+oom=1 fits=1 builds=5 nodes=2
+```
+
+The estimate is the one in the first example. Only the `parallel` line
+changes, and it names the cap in place of the divide. The reduction of
+8 in `hooks/divide-8.py` leaves 2 cores on these nodes:
+
+```bash
+eb-stack stack oom \
+  --arch x86_64/amd/zen4 \
+  --hooks tests/oom_profile_fixtures/hooks/divide-8.py \
+  --easystack tests/oom_profile_fixtures/easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/divide-8.py
+oom=0 fits=2 builds=5 nodes=2
+```
+
+`max(1, 16 // 8)` is 2, so libxc fits on both zen4 nodes. On 64 cores
+the same row gives 8.
+
 # Measure the worst compile
 
 `mib_per_job` comes from a compiler launcher, not from a guess.
@@ -4957,9 +5219,15 @@ then.
   steps, test steps that run with a different parallel level, or memory
   that other jobs on the node use. It does not model `ulimit -u`, which
   `det_parallelism` also consults.
-- `limit_by_memory` does not replace the estimate. The estimate follows
-  the hooks that are in `eb_hooks.py`. The `--node` report is the
-  comparison. A package with no measured `mib_per_job` stays
+- `--hooks` reads the `PARALLELISM_LIMITS` literal. It does not run
+  `post_ready_hook`; the rules that pick a row are the ones described
+  under [[*Where the numbers come from][where the numbers come from]].
+  Of the rest of the file it checks only for a statement that drops a
+  sum. Other mistakes in the hooks are not found.
+- `limit_by_memory` and the memory cap do not replace the estimate. The
+  estimate follows the hooks that are in `eb_hooks.py`. The `--node`
+  report is the comparison, and the warnings for an easystack do not
+  print the cap. A package with no measured `mib_per_job` stays
   unmeasured.
 - The MCP tool `eb_stack_oom` returns the same lines and each warning as
   JSON.
@@ -5851,7 +6119,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with neither `--easystack` nor `--node`. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with none of `--easystack`, `--node`, and `--hooks`, or a `--parallel` or `--max-parallel` of 0. A `--hooks` file that is not valid Python, has no module-level `PARALLELISM_LIMITS`, or has a row the model cannot follow is status 1, and the message names the line. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -6936,9 +7204,9 @@ EESSI bot node, at the parallel level the bot job gives it, and warn
 where the estimate reaches the job's memory. Each warning names the
 remedies the maintainers have used. Nothing is changed.
 
-Why you'd use it: software-layer pull request 1772 lost two zen4 bot
-runs to a killed `cc1` while building libxc. The check names that build
-before the first run.
+Why you'd use it: software-layer pull request 1772 lost three zen4 bot
+runs to a killed `cc1` while building libxc, two at 8 processes and one
+at 5. The check names that build before the first run.
 
 ```bash
 eb-stack stack oom \
@@ -6947,12 +7215,12 @@ eb-stack stack oom \
 ```
 
 ```
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py divides libxc by 2
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=1 builds=5 nodes=2
 ```
 
@@ -6977,17 +7245,50 @@ already installed. `--arch` repeats and takes a target or a prefix such
 as `aarch64`. No `--arch` checks every node in the table; a target with
 no node is reported and skipped. `--profile` replaces
 `data/build-memory.toml`. `--resources` replaces
-`data/eessi-bot-resources.toml`. `--job-memory` replaces
-`data/job-memory.toml`, the per-package `mib_per_job` table. A row with
-no number is unmeasured. libxc 7.0 is unmeasured; the peak RSS of its
-worst compile has not been measured, and the table does not guess.
+`data/eessi-bot-resources.toml`. `--job-memory`, also spelled
+`--mib-per-job`, replaces `data/job-memory.toml`, the per-package
+`mib_per_job` table. A row with no number is unmeasured. libxc 7.0 is
+unmeasured; the peak RSS of its worst compile has not been measured,
+and the table does not guess.
 `--node` repeats. Each value is `CORES:MEMORY_MIB` or
 `CORES:MEMORY_MIB:TARGET`, and memory is MiB. It prints the parallelism
 the current hook leaves beside `limit_by_memory(parallel, mib_per_job)`,
-which is `max(1, min(parallel, memory_mib // mib_per_job))`. The memory
+which is `max(1, min(parallel, memory_mib // mib_per_job))`. For a
+package with a number, the memory cap
+`min(current, memory_mib // mib_per_job)` follows the hook's level: the
+core cap with a memory ceiling on top. It is not raised to 1, so
+`memory cap 0` with `not one N MiB job fits` says one compile needs more
+than the node's memory. The memory
 a hook would read on the build machine is the smallest cgroup v2
-`memory.max` on the process's cgroup path, else `MemTotal`. Pass
-`--easystack`, `--node`, or both. The command exits 0 when it warns. See
+`memory.max` on the process's cgroup path, else `MemTotal`.
+
+`--parallel N` and `--max-parallel N` are EasyBuild's settings for the
+job, as `EASYBUILD_PARALLEL` and `EASYBUILD_MAX_PARALLEL` would set them;
+the bot sets neither. EasyBuild uses `--parallel` in place of the core
+count, capped at `--max-parallel` (in place of the table's
+`max_parallel`) and at the easyconfig's `maxparallel`. The hook applies
+its op to the node's cores, not to either setting, and keeps the result
+only when it is lower. `--node` lines then end the hook formula with
+`then --parallel N` or `then max-parallel N` when that setting decided,
+and the node line names `--parallel`. A warning's `parallel` line names
+`--parallel` and the cores the hook divided, and says when the hook's
+result was not below EasyBuild's level. 0 for either flag is status 2.
+
+`--hooks` reads `PARALLELISM_LIMITS` from an EESSI `eb_hooks.py` in
+place of the hook rows of `data/eessi-bot-resources.toml`. The nodes
+and EasyBuild's `max-parallel` still come from the table. The file is
+parsed, not run. A key is a string or a module-level string constant
+such as `CPU_TARGET_A64FX`, and a key the dict repeats keeps its last
+value, as in Python. An op other than `divide_by_factor` or
+`set_maximum`, a `**` unpacking, or a key that is not a string is
+refused with its line: the parallel levels would be wrong without that
+row. The output starts with ~hooks: N PARALLELISM_LIMITS rows from
+FILE`, and a `divide~ that is not an integer is a warning that names the
+file and the line. A statement that adds to a name and drops the sum,
+such as `msg+ "..."` in `post_ready_hook`, is a warning that names the
+file, the line, and the function; `msg += "..."` is not. Pass
+`--easystack`, `--node`, `--hooks`, or a mix.
+The command exits 0 when it warns. See
 [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/../howto/oom-profile.html.md).
 
 ## `stack bot-classify`
@@ -7632,10 +7933,12 @@ needs one `easystack` or `pr`. It returns the same report as
 stdout, and `hits`, one object per line. Warnings are not a tool error
 unless `strict` is true, when a remaining warning is.
 `eb_stack_oom` takes `easystack`, `arch`, `easyconfigs`,
-`installed`, `profile`, `resources`, `node`, and `job_memory`. It needs
-an easystack or a node. It returns the `stack oom` text, one object per
-warning, and `factor_warnings` for a divide factor that is not an
-integer. A warning is not a tool error.
+`installed`, `profile`, `resources`, `node`, `job_memory`, `hooks`,
+`parallel`, and `max_parallel`.
+It needs an easystack, a node, or hooks. It returns the `stack oom`
+text, one object per warning, `factor_warnings` for a divide factor
+that is not an integer, and `hook_warnings` for a dropped sum in the
+`hooks` file. A warning is not a tool error.
 `eb_stack_bot_classify` requires `files`. It returns `text`, the
 `stack bot-classify` stdout, `jobs`, one object per job, and `counts`.
 `eb_stack_batch` takes `arch`, `unsupported`, `known_failures`,

@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -1102,9 +1102,9 @@ EESSI bot node, at the parallel level the bot job gives it, and warn
 where the estimate reaches the job's memory. Each warning names the
 remedies the maintainers have used. Nothing is changed.
 
-Why you'd use it: software-layer pull request 1772 lost two zen4 bot
-runs to a killed ~cc1~ while building libxc. The check names that build
-before the first run.
+Why you'd use it: software-layer pull request 1772 lost three zen4 bot
+runs to a killed ~cc1~ while building libxc, two at 8 processes and one
+at 5. The check names that build before the first run.
 
 #+begin_src bash
 eb-stack stack oom \
@@ -1113,12 +1113,12 @@ eb-stack stack oom \
 #+end_src
 
 #+begin_example
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py divides libxc by 2
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=1 builds=5 nodes=2
 #+end_example
 
@@ -1143,17 +1143,50 @@ already installed. ~--arch~ repeats and takes a target or a prefix such
 as ~aarch64~. No ~--arch~ checks every node in the table; a target with
 no node is reported and skipped. ~--profile~ replaces
 ~data/build-memory.toml~. ~--resources~ replaces
-~data/eessi-bot-resources.toml~. ~--job-memory~ replaces
-~data/job-memory.toml~, the per-package ~mib_per_job~ table. A row with
-no number is unmeasured. libxc 7.0 is unmeasured; the peak RSS of its
-worst compile has not been measured, and the table does not guess.
+~data/eessi-bot-resources.toml~. ~--job-memory~, also spelled
+~--mib-per-job~, replaces ~data/job-memory.toml~, the per-package
+~mib_per_job~ table. A row with no number is unmeasured. libxc 7.0 is
+unmeasured; the peak RSS of its worst compile has not been measured,
+and the table does not guess.
 ~--node~ repeats. Each value is ~CORES:MEMORY_MIB~ or
 ~CORES:MEMORY_MIB:TARGET~, and memory is MiB. It prints the parallelism
 the current hook leaves beside ~limit_by_memory(parallel, mib_per_job)~,
-which is ~max(1, min(parallel, memory_mib // mib_per_job))~. The memory
+which is ~max(1, min(parallel, memory_mib // mib_per_job))~. For a
+package with a number, the memory cap
+~min(current, memory_mib // mib_per_job)~ follows the hook's level: the
+core cap with a memory ceiling on top. It is not raised to 1, so
+~memory cap 0~ with ~not one N MiB job fits~ says one compile needs more
+than the node's memory. The memory
 a hook would read on the build machine is the smallest cgroup v2
-~memory.max~ on the process's cgroup path, else ~MemTotal~. Pass
-~--easystack~, ~--node~, or both. The command exits 0 when it warns. See
+~memory.max~ on the process's cgroup path, else ~MemTotal~.
+
+~--parallel N~ and ~--max-parallel N~ are EasyBuild's settings for the
+job, as ~EASYBUILD_PARALLEL~ and ~EASYBUILD_MAX_PARALLEL~ would set them;
+the bot sets neither. EasyBuild uses ~--parallel~ in place of the core
+count, capped at ~--max-parallel~ (in place of the table's
+~max_parallel~) and at the easyconfig's ~maxparallel~. The hook applies
+its op to the node's cores, not to either setting, and keeps the result
+only when it is lower. ~--node~ lines then end the hook formula with
+~then --parallel N~ or ~then max-parallel N~ when that setting decided,
+and the node line names ~--parallel~. A warning's ~parallel~ line names
+~--parallel~ and the cores the hook divided, and says when the hook's
+result was not below EasyBuild's level. 0 for either flag is status 2.
+
+~--hooks~ reads ~PARALLELISM_LIMITS~ from an EESSI ~eb_hooks.py~ in
+place of the hook rows of ~data/eessi-bot-resources.toml~. The nodes
+and EasyBuild's ~max-parallel~ still come from the table. The file is
+parsed, not run. A key is a string or a module-level string constant
+such as ~CPU_TARGET_A64FX~, and a key the dict repeats keeps its last
+value, as in Python. An op other than ~divide_by_factor~ or
+~set_maximum~, a ~**~ unpacking, or a key that is not a string is
+refused with its line: the parallel levels would be wrong without that
+row. The output starts with ~hooks: N PARALLELISM_LIMITS rows from
+FILE~, and a ~divide~ that is not an integer is a warning that names the
+file and the line. A statement that adds to a name and drops the sum,
+such as ~msg+ "..."~ in ~post_ready_hook~, is a warning that names the
+file, the line, and the function; ~msg += "..."~ is not. Pass
+~--easystack~, ~--node~, ~--hooks~, or a mix.
+The command exits 0 when it warns. See
 [[file:../howto/oom-profile.org][warn before a bot job runs out of memory]].
 
 ** ~stack bot-classify~
@@ -1798,10 +1831,12 @@ needs one ~easystack~ or ~pr~. It returns the same report as
 stdout, and ~hits~, one object per line. Warnings are not a tool error
 unless ~strict~ is true, when a remaining warning is.
 ~eb_stack_oom~ takes ~easystack~, ~arch~, ~easyconfigs~,
-~installed~, ~profile~, ~resources~, ~node~, and ~job_memory~. It needs
-an easystack or a node. It returns the ~stack oom~ text, one object per
-warning, and ~factor_warnings~ for a divide factor that is not an
-integer. A warning is not a tool error.
+~installed~, ~profile~, ~resources~, ~node~, ~job_memory~, ~hooks~,
+~parallel~, and ~max_parallel~.
+It needs an easystack, a node, or hooks. It returns the ~stack oom~
+text, one object per warning, ~factor_warnings~ for a divide factor
+that is not an integer, and ~hook_warnings~ for a dropped sum in the
+~hooks~ file. A warning is not a tool error.
 ~eb_stack_bot_classify~ requires ~files~. It returns ~text~, the
 ~stack bot-classify~ stdout, ~jobs~, one object per job, and ~counts~.
 ~eb_stack_batch~ takes ~arch~, ~unsupported~, ~known_failures~,

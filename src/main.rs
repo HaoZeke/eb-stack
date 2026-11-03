@@ -1541,12 +1541,16 @@ enum StackCommand {
     /// the easyconfig. An estimate that reaches the job's memory in
     /// `data/eessi-bot-resources.toml` is a warning with remedies. A
     /// `divide_by_factor` that is not an integer is a warning too: Python's
-    /// `//` then returns a float (`16 // 2.5` is `6.0`). `--node` prints
-    /// the hook parallelism beside `limit_by_memory` for a core count and
-    /// a memory. The command does not fail on a warning. Pass `--easystack`
-    /// or `--node` (or both).
+    /// `//` then returns a float (`16 // 2.5` is `6.0`). `--hooks` reads
+    /// the limits from an `eb_hooks.py` and also warns on a statement such
+    /// as `msg+ "..."` that drops its sum. `--node` prints the hook
+    /// parallelism beside `limit_by_memory` for a core count and a memory,
+    /// and with an `mib_per_job` the memory cap
+    /// `min(current, memory // mib_per_job)`.
+    /// The command does not fail on a warning. Pass `--easystack`,
+    /// `--node`, `--hooks`, or a mix.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack oom --easystack eessi-2026.06-eb-5.4.0-2026.1.yml\n  eb-stack stack oom --arch x86_64/amd/zen4 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt\n  eb-stack stack oom --node 16:32768:x86_64/amd/zen4 --node 48:30016:aarch64/a64fx"
+        after_long_help = "Examples:\n  eb-stack stack oom --easystack eessi-2026.06-eb-5.4.0-2026.1.yml\n  eb-stack stack oom --arch x86_64/amd/zen4 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt\n  eb-stack stack oom --node 16:32768:x86_64/amd/zen4 --node 48:30016:aarch64/a64fx\n  eb-stack stack oom --hooks software-layer-scripts/eb_hooks.py --node 16:32768:x86_64/amd/zen4"
     )]
     Oom {
         /// CPU target, `x86_64/amd/zen4`, or a prefix such as `aarch64`.
@@ -1554,7 +1558,7 @@ enum StackCommand {
         #[arg(long = "arch")]
         arch: Vec<String>,
         /// Easystack whose entries are the plan. Repeatable. Required
-        /// unless `--node` is passed.
+        /// unless `--node` or `--hooks` is passed.
         #[arg(long)]
         easystack: Vec<PathBuf>,
         /// Robot tree the dependency closure and `maxparallel` are read
@@ -1573,14 +1577,38 @@ enum StackCommand {
         #[arg(long)]
         resources: Option<PathBuf>,
         /// Node size `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET`.
-        /// Repeatable. Memory is MiB. Prints the hook parallelism and
+        /// Repeatable. Memory is MiB. Prints the hook parallelism, its
+        /// memory cap when the package has an `mib_per_job`, and
         /// `limit_by_memory` for each size. With no `--easystack`, this
         /// report is the whole output.
         #[arg(long)]
         node: Vec<String>,
-        /// Replace the bundled per-package `mib_per_job` table.
-        #[arg(long)]
+        /// Replace the bundled per-package `mib_per_job` table,
+        /// `data/job-memory.toml`. For a package with a number, `--node`
+        /// prints the memory cap `min(current, memory // mib_per_job)`
+        /// beside the hook's level.
+        #[arg(long, visible_alias = "mib-per-job")]
         job_memory: Option<PathBuf>,
+        /// EESSI `eb_hooks.py` to read `PARALLELISM_LIMITS` from, in place
+        /// of the hook rows of the bot resource table. The nodes and
+        /// EasyBuild's max-parallel still come from the table. The file is
+        /// parsed, not run. An op other than `divide_by_factor` or
+        /// `set_maximum` is refused with its line. A statement that adds to
+        /// a name and drops the sum, such as `msg+ "..."`, is a warning.
+        #[arg(long)]
+        hooks: Option<PathBuf>,
+        /// EasyBuild's `--parallel` for the job, as `EASYBUILD_PARALLEL`
+        /// would set it. EasyBuild then uses it in place of the cores,
+        /// capped at max-parallel. The hook still applies its op to the
+        /// node's cores and keeps the result only when it is lower. The bot
+        /// sets none.
+        #[arg(long)]
+        parallel: Option<u32>,
+        /// EasyBuild's `--max-parallel` for the job, in place of
+        /// `max_parallel` in the bot resource table, EasyBuild's default.
+        /// The hook does not read it.
+        #[arg(long)]
+        max_parallel: Option<u32>,
     },
     /// Say what an EESSI bot job's FAILURE was: a real failure, ERROR-only
     /// noise, an empty tarball, or infra.
@@ -3265,6 +3293,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             resources,
             node,
             job_memory,
+            hooks,
+            parallel,
+            max_parallel,
         } => {
             let report =
                 eb_stack::oom_profile::run_oom_check(&eb_stack::oom_profile::OomCheckRequest {
@@ -3276,6 +3307,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     resources,
                     nodes: node,
                     job_memory,
+                    hooks,
+                    parallel,
+                    max_parallel,
                 })?;
             print!("{}", report.stdout);
             Ok(())

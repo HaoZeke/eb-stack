@@ -28,18 +28,24 @@ name = "libxc"
 versions = ["7.0"]
 toolchains = ["GCC-15.2"]
 targets = ["x86_64/amd/zen4"]
-per_process_gib = 4.0
+per_process_gib = 6.4
 bound = "lower"
-reason = "cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4"
-remedy = "the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster"
+reason = "cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job"
+remedy = "a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster"
 sources = [
   "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263033",
   "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6440377764",
+  "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6599075713",
+  "https://github.com/EESSI/software-layer-scripts/pull/337#issuecomment-6599147327",
 ]
 
-# 4.0 GiB is 32 GiB over the 8 compilers the hook leaves of 16 cores.
-# aarch64/generic built the same easyconfig at 8 on 29.8 GiB in the same
-# pull request, so the entry is scoped to zen4.
+# 6.4 GiB is 32 GiB over the 5 compilers of job 221273, which ran
+# make -j 5 under a libxc divider of 3 (16 // 3); the two jobs at 8 ran
+# out as well. The review of #337 suspects that a single compile is the
+# bottleneck. These jobs cannot tell that apart from 6.4 GiB each, so
+# the figure stays a lower bound. aarch64/generic built the same
+# easyconfig at 8 on 29.8 GiB in the same pull request, so the entry is
+# scoped to zen4.
 [[entry.observation]]
 easyconfig = "libxc-7.0.0-GCC-15.2.0.eb"
 target = "x86_64/amd/zen4"
@@ -55,6 +61,14 @@ parallel = 8
 memory_gib = 32.0
 outcome = "oom"
 source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6440377764"
+
+[[entry.observation]]
+easyconfig = "libxc-7.0.0-GCC-15.2.0.eb"
+target = "x86_64/amd/zen4"
+parallel = 5
+memory_gib = 32.0
+outcome = "oom"
+source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6599075713"
 
 [[entry]]
 name = "libxc"

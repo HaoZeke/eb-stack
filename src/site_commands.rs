@@ -1716,6 +1716,9 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             resources: args.oom_resources.clone(),
             nodes: Vec::new(),
             job_memory: None,
+            hooks: None,
+            parallel: None,
+            max_parallel: None,
         })?;
         let oom = oom_report.warnings;
         let factor_warnings = oom_report.factor_warnings;
