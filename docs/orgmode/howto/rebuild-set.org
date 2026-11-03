@@ -29,6 +29,12 @@ The command prints:
 changed=2 rows=8 must-rebuild=2 review=2 no-rebuild=4 missing=1 easystacks=2 skipped_easyconfigs=0 out=/tmp/rebuild-out
 #+end_example
 
+~rebuild-set.md~ ends with the reach class of each changed easyconfig.
+~cross-user~ and ~network-facing~ justify a backport.
+~local-only~ and ~not-reachable~ do not.
+~unclassified~ means neither the built-in names nor a ~--reachability~ file names the package.
+zlib and ~Absent-1.0.eb~ on this fixture are ~unclassified~.
+
 * Run it on a mounted stack
 
 From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted.

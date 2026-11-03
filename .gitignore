@@ -41,6 +41,7 @@ docs/source/images/
 
 # Local solve outputs
 stack.lock.json
+!tests/backport_fixtures/stack.lock.json
 stack.cdx.json
 build.list
 stack.diff.md

@@ -349,10 +349,14 @@ impl ComponentReachRun {
             );
         }
         format!(
-            "component={} version={} generation={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
+            "component={} version={} generation={} reach={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
             self.component,
             self.version,
             self.generation,
+            self.document
+                .get("reach")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unclassified"),
             self.carriers,
             self.changed,
             self.must_rebuild,
@@ -769,7 +773,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     } else {
         crate::fix_cost::EvidenceScan::default()
     };
-    let document = rebuild_set::rebuild_set(&rebuild_set::RebuildQuery {
+    let mut document = rebuild_set::rebuild_set(&rebuild_set::RebuildQuery {
         base: robot.base,
         commits: robot.commits,
         easystacks,
@@ -786,6 +790,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         rebuild_set::RebuildError::CheckStaticNeedsPrefix => usage("--check-static needs --prefix"),
         other => anyhow!(other),
     })?;
+    document.reach = crate::findings::reach_for_easyconfigs(&reach, &document.changed);
 
     std::fs::create_dir_all(&args.out_dir)?;
     write_json_pretty(&args.out_dir.join("rebuild-set.json"), &document)?;

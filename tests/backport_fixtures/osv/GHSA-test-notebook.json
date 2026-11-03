@@ -1,0 +1,7 @@
+{
+  "id": "GHSA-test-notebook",
+  "affected": [{
+    "package": {"ecosystem": "PyPI", "name": "notebook", "purl": "pkg:pypi/notebook"},
+    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "7.5.0"}]}]
+  }]
+}

@@ -804,12 +804,40 @@ sed -n '27,29p' /tmp/sbom-demo/rebuild/rebuild-set.md
 | `git-2.52.0-GCCcore-15.2.0.eb` | `git/2.52.0-GCCcore-15.2.0` | changed | must-rebuild | patched easyconfig |
 #+end_src
 
+#+begin_src bash
+grep 'Reach class' -A 2 /tmp/sbom-demo/rebuild/rebuild-set.md
+#+end_src
+
+#+begin_src text
+Reach class of each patched easyconfig. `cross-user` and `network-facing` justify a backport. `local-only` and `not-reachable` do not. `unclassified` is not a judgment.
+
+- `git-2.52.0-GCCcore-15.2.0.eb`: network-facing
+#+end_src
+
 The report has one row: the changed git easyconfig, class must-rebuild.
-The easystack entries do not depend on that git module, so the walk does
-not add a second row. The report also notes each ~from-commit~ pin whose
-tree was not passed and says the release tree was used for that pin.
-~--check-static~ was not passed, and the report says so. Classes follow
-the easyconfig graph only.
+The easystack entries do not depend on that git module, so the walk does not add a second row.
+The report also notes each ~from-commit~ pin whose tree was not passed and says the release tree was used for that pin.
+~--check-static~ was not passed, and the report says so.
+Classes follow the easyconfig graph only. git is ~network-facing~, so this patched easyconfig would justify a backport.
+
+A stack lock has the same classes.
+~stack sbom --backport-list~ reads recorded Open Source Vulnerabilities (OSV) responses and the software bill of materials (SBOM) reverse closure.
+~cross-user~ and ~network-facing~ are the list.
+The fixture lock has cURL (network-facing, blast radius 2 because git depends on it) and notebook (cross-user). zlib is ~local-only~ in the site file, so it is recorded and left off the list.
+
+#+begin_src bash
+eb-stack stack sbom \
+  --lock tests/backport_fixtures/stack.lock.json \
+  --out /tmp/sbom-demo/backport.cdx.json \
+  --backport-list /tmp/sbom-demo/backport.md \
+  --osv-cache tests/backport_fixtures/osv \
+  --reachability tests/backport_fixtures/reach.txt
+#+end_src
+
+#+begin_src text
+sbom=/tmp/sbom-demo/backport.cdx.json components=7 recipes_read=7 recipes_unreadable=0 with_artifact_facts=0
+backport=2 recorded=3 stack=7 out=/tmp/sbom-demo/backport.md
+#+end_src
 
 * A component named by a CVE
 
@@ -832,7 +860,7 @@ eb-stack component-reach \
 #+end_src
 
 #+begin_src text
-component=curl version=>=8,<9 generation=2026.1 carriers=2 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/sbom-demo/component-curl
+component=curl version=>=8,<9 generation=2026.1 reach=network-facing carriers=2 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/sbom-demo/component-curl
 #+end_src
 
 #+begin_src bash
@@ -840,7 +868,7 @@ sed -n '5,16p' /tmp/sbom-demo/component-curl/component-reach.md
 #+end_src
 
 #+begin_src text
-2 carriers. Closure: 1 must-rebuild, 0 review, 1 no-rebuild.
+2 carriers. Reach: `network-facing`. Closure: 1 must-rebuild, 0 review, 1 no-rebuild.
 
 | Easyconfig | Module | Role | Version | Installed |
 |---|---|---|---|---|
@@ -1023,10 +1051,10 @@ eb_easyblock_reach
 eb_repro_summary
 #+end_src
 
-That is 50 tools. ~eb_stack_sbom~ writes the CycloneDX file ~stack sbom~
-writes. Its ~tools/list~ description reads: "Emit CycloneDX from an existing
-stack lock, reading dependency edges and source checksums from the
-easyconfigs the lock names." ~eb_stack_sbom~ reads the Cbc lock:
+That is 50 tools.
+~eb_stack_sbom~ writes the CycloneDX file ~stack sbom~ writes.
+Its ~tools/list~ description reads: "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names. With backport_list, also write the modules whose reach class justifies a backport."
+~eb_stack_sbom~ reads the Cbc lock:
 
 #+begin_src bash
 printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"eb_stack_sbom","arguments":{"lock":"/tmp/sbom-demo/stack.lock.json","out":"/tmp/sbom-demo/mcp-stack.cdx.json"}}}' \

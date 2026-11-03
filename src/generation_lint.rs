@@ -633,6 +633,156 @@ pub fn run_generation_lint(request: &GenerationLintRequest) -> Result<Generation
     Ok(GenerationLintReport { stdout, findings })
 }
 
+/// Warn when a foss solve's site layer is an LLVM-family package.
+///
+/// The LLVM family (`lfoss`, `lompi`, `lfbf`, `llvm-compilers`) is invisible
+/// to a foss solve: the searched universe is the foss hierarchy, so an
+/// easystack entry on `lfoss` drops out of the baseline and the foss build
+/// of the same name is classified added. That added row is what the stack
+/// diff calls the site layer. Keep one lock per
+/// toolchain family. `--baseline-also-toolchain` for that family puts its
+/// hierarchy back in the baseline, and this stays quiet for that family.
+///
+/// `policy` is the solve's toolchain. `also` is `--baseline-also-toolchain`.
+/// `easystack_files` are the easyconfig filenames the baseline easystacks
+/// name. `added` is `(package name, solved easyconfig path)` for each added
+/// row. A solve whose own toolchain is in the LLVM family is that family's
+/// lock, and returns no warnings.
+pub fn llvm_site_layer_warnings(
+    policy: &Toolchain,
+    also: &[Toolchain],
+    easystack_files: &[String],
+    added: &[(String, String)],
+) -> Vec<String> {
+    if crate::easystack::llvm_family_name(&policy.name).is_some() {
+        return Vec::new();
+    }
+    let suppressed: BTreeSet<&str> = also
+        .iter()
+        .filter_map(|tc| crate::easystack::llvm_family_name(&tc.name))
+        .collect();
+    let mut added_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    for (name, path) in added {
+        let entry = added_by_name
+            .entry(name.to_ascii_lowercase())
+            .or_insert_with(|| (name.clone(), BTreeSet::new()));
+        if !path.is_empty() {
+            entry.1.insert(path.clone());
+        }
+    }
+
+    struct Group {
+        name: String,
+        family: &'static str,
+        versions: BTreeSet<String>,
+        files: BTreeSet<String>,
+        from_easystack: bool,
+        solved: BTreeSet<String>,
+    }
+
+    let mut groups: BTreeMap<(String, &'static str), Group> = BTreeMap::new();
+    for file in easystack_files {
+        let Some(split) = filename_toolchain(file) else {
+            continue;
+        };
+        let Some(family) = crate::easystack::llvm_family_name(&split.toolchain) else {
+            continue;
+        };
+        if suppressed.contains(family) {
+            continue;
+        }
+        let Some((display, solved)) = added_by_name.get(&split.name.to_ascii_lowercase()) else {
+            continue;
+        };
+        let key = (split.name.to_ascii_lowercase(), family);
+        let group = groups.entry(key).or_insert_with(|| Group {
+            name: display.clone(),
+            family,
+            versions: BTreeSet::new(),
+            files: BTreeSet::new(),
+            from_easystack: true,
+            solved: solved.clone(),
+        });
+        let base = file.rsplit(['/', '\\']).next().unwrap_or(file.as_str());
+        group.files.insert(base.to_string());
+        if let Some(version) = crate::easystack::llvm_family_version(&split.toolchain, family) {
+            if !version.is_empty() {
+                group.versions.insert(version);
+            }
+        }
+    }
+    for (name, path) in added {
+        if path.is_empty() {
+            continue;
+        }
+        let Some(split) = filename_toolchain(path) else {
+            continue;
+        };
+        let Some(family) = crate::easystack::llvm_family_name(&split.toolchain) else {
+            continue;
+        };
+        if suppressed.contains(family) {
+            continue;
+        }
+        let key = (name.to_ascii_lowercase(), family);
+        if groups.contains_key(&key) {
+            continue;
+        }
+        let group = groups.entry(key).or_insert_with(|| Group {
+            name: name.clone(),
+            family,
+            versions: BTreeSet::new(),
+            files: BTreeSet::new(),
+            from_easystack: false,
+            solved: BTreeSet::new(),
+        });
+        group.solved.insert(path.clone());
+        if let Some(version) = crate::easystack::llvm_family_version(&split.toolchain, family) {
+            if !version.is_empty() {
+                group.versions.insert(version);
+            }
+        }
+    }
+
+    groups
+        .into_values()
+        .map(|group| {
+            let version = if group.versions.len() == 1 {
+                group.versions.iter().next().expect("one version").clone()
+            } else {
+                "<version>".to_string()
+            };
+            let flag = format!("{family}/{version}", family = group.family);
+            if group.from_easystack {
+                let files = group.files.into_iter().collect::<Vec<_>>().join(", ");
+                let solved = if group.solved.is_empty() {
+                    group.name.clone()
+                } else {
+                    format!(
+                        "{name} ({paths})",
+                        name = group.name,
+                        paths = group.solved.into_iter().collect::<Vec<_>>().join(", ")
+                    )
+                };
+                format!(
+                    "{name} ({files}) is the LLVM family ({family}). A {policy} solve cannot reach it, so the site layer includes {solved}. Keep one lock per toolchain family: solve {family} on its own, or pass --baseline-also-toolchain {flag}.",
+                    name = group.name,
+                    family = group.family,
+                    policy = policy.name,
+                )
+            } else {
+                let solved = group.solved.into_iter().collect::<Vec<_>>().join(", ");
+                format!(
+                    "{name} ({solved}) is the LLVM family ({family}). This {policy} solve marked it site layer. Keep one lock per toolchain family: solve {family} on its own, or pass --baseline-also-toolchain {flag}.",
+                    name = group.name,
+                    family = group.family,
+                    policy = policy.name,
+                )
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,6 +1041,100 @@ mod tests {
                 .generation
                 .as_deref(),
             Some("2025b")
+        );
+    }
+
+    fn foss() -> Toolchain {
+        Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        }
+    }
+
+    #[test]
+    fn a_foss_solve_warns_when_an_lfoss_easystack_entry_is_site_layer() {
+        let added = [(
+            "GROMACS".into(),
+            "fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb"
+                .into(),
+        )];
+        let files = ["GROMACS-2025.0-lfoss-2025b.eb".to_string()];
+        let warnings = llvm_site_layer_warnings(&foss(), &[], &files, &added);
+        assert_eq!(
+            warnings,
+            vec![
+                "GROMACS (GROMACS-2025.0-lfoss-2025b.eb) is the LLVM family (lfoss). A foss solve cannot reach it, so the site layer includes GROMACS (fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb). Keep one lock per toolchain family: solve lfoss on its own, or pass --baseline-also-toolchain lfoss/2025b.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn an_also_toolchain_or_an_llvm_policy_suppresses_the_site_layer_warning() {
+        let added = [(
+            "OpenMPI".into(),
+            "easyconfigs/llvm-compilers-21.1.8/OpenMPI-5.0.7-llvm-compilers-21.1.8.eb".into(),
+        )];
+        let files = ["OpenMPI-5.0.7-llvm-compilers-21.1.8.eb".to_string()];
+        let also = [Toolchain {
+            name: "llvm-compilers".into(),
+            version: "21.1.8".into(),
+        }];
+        assert!(llvm_site_layer_warnings(&foss(), &also, &files, &added).is_empty());
+        let lfoss = Toolchain {
+            name: "lfoss".into(),
+            version: "2026.1".into(),
+        };
+        assert!(llvm_site_layer_warnings(&lfoss, &[], &files, &added).is_empty());
+    }
+
+    #[test]
+    fn a_version_bump_and_a_foss_easystack_entry_are_not_site_layer() {
+        let files = [
+            "GROMACS-2024.4-foss-2025b.eb".to_string(),
+            "OpenBLAS-0.3.32-lfoss-2025b.eb".to_string(),
+        ];
+        let added = [(
+            "FFTW".into(),
+            "easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb".into(),
+        )];
+        assert!(llvm_site_layer_warnings(&foss(), &[], &files, &added).is_empty());
+    }
+
+    #[test]
+    fn a_solved_llvm_easyconfig_with_no_easystack_entry_is_site_layer() {
+        let added = [(
+            "OpenBLAS".into(),
+            "easyconfigs/lfbf-2026.1/OpenBLAS-0.3.32-lfbf-2026.1.eb".into(),
+        )];
+        let warnings = llvm_site_layer_warnings(&foss(), &[], &[], &added);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(
+            warnings[0],
+            "OpenBLAS (easyconfigs/lfbf-2026.1/OpenBLAS-0.3.32-lfbf-2026.1.eb) is the LLVM family (lfbf). This foss solve marked it site layer. Keep one lock per toolchain family: solve lfbf on its own, or pass --baseline-also-toolchain lfbf/2026.1."
+        );
+    }
+
+    #[test]
+    fn two_versions_of_one_llvm_family_leave_the_flag_version_unnamed() {
+        let added = [(
+            "OpenBLAS".into(),
+            "easyconfigs/foss-2025b/OpenBLAS-0.3.32-foss-2025b.eb".into(),
+        )];
+        let files = [
+            "OpenBLAS-0.3.32-lfoss-2026.1.eb".to_string(),
+            "OpenBLAS-0.3.30-lfoss-2025b.eb".to_string(),
+        ];
+        let warnings = llvm_site_layer_warnings(&foss(), &[], &files, &added);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains(
+                "OpenBLAS (OpenBLAS-0.3.30-lfoss-2025b.eb, OpenBLAS-0.3.32-lfoss-2026.1.eb) is the LLVM family (lfoss)."
+            ),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("--baseline-also-toolchain lfoss/<version>"),
+            "{warnings:?}"
         );
     }
 }

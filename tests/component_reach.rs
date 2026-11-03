@@ -48,7 +48,8 @@ fn the_cli_writes_toml_json_and_markdown() {
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.join("component-reach.json")).unwrap())
             .unwrap();
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["reach"], "network-facing");
     assert_eq!(json["component"], "curl");
     assert!(json["closure_counts"]["no-rebuild"].as_u64().unwrap() >= 1);
     let toml = std::fs::read_to_string(out.join("component-reach.toml")).unwrap();

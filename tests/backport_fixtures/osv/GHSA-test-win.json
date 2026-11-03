@@ -1,0 +1,7 @@
+{
+  "id": "GHSA-test-win",
+  "affected": [{
+    "package": {"ecosystem": "OSS-Fuzz", "name": "WinOnly", "purl": "pkg:generic/winonly"},
+    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.1"}]}]
+  }]
+}

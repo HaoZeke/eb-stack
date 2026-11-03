@@ -62,6 +62,15 @@ that name is also in the lock. A path that cannot be read contributes
 nothing for that component. ~--sbom-out~ during ~stack solve~ writes the
 same document while the candidate graph is still in memory.
 
+~--backport-list~ writes the locked modules whose reach class justifies a backport.
+Pass ~--cve~ or ~--osv-cache~.
+~--osv-cache~ reads recorded Open Source Vulnerabilities (OSV) responses and does not query the network when ~--cve~ is omitted.
+~--reachability~ adds or replaces a class.
+Blast radius is the module and every locked module that depends on it through a runtime or build edge.
+~cross-user~ and ~network-facing~ are the list.
+~local-only~, ~not-reachable~, and ~unclassified~ are recorded and left off it.
+See [[file:../reference/cli.org][the CLI reference]].
+
 * Order every pinned build
 
 ~stack solve~ picks one version of each name. ~stack order~ keeps every
@@ -80,6 +89,47 @@ eb-stack stack order \
 ~--oldest~ selects the oldest admissible version of an unpinned
 requirement. The hash file is one ~<sha256>  <module>~ line per build.
 See [[file:../reference/cli.org][the CLI reference]].
+
+* One lock per toolchain family
+
+A foss solve only sees the foss hierarchy.
+The LLVM family is ~lfoss~, ~lompi~, ~lfbf~, and ~llvm-compilers~.
+OpenMPI under ~llvm-compilers-21.1.8~ is in that family.
+~data/eessi-generations.toml~ lists ~llvm-compilers-20.1.8~ for generation 2025b and ~llvm-compilers-21.1.8~ for generation 2026.1, because an LLVM release is not a generation name.
+
+An easystack entry such as ~GROMACS-2025.0-lfoss-2025b.eb~ is absent from a foss baseline.
+The foss solve then selects the foss build of the same name, and the stack diff marks that row added.
+Added is the site layer.
+Keep one lock per toolchain family: solve ~lfoss~ on its own.
+Passing ~--baseline-also-toolchain lfoss/2025b~ keeps that family's hierarchy in the foss baseline, and the warning stays quiet for ~lfoss~.
+
+#+begin_src bash
+eb-stack stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --toolchain foss/2025b \
+  --root GROMACS \
+  --baseline-easystack /tmp/lfoss.yml \
+  --lock-out /tmp/foss.lock.json \
+  --stack-diff-out /tmp/foss.diff.md
+#+end_src
+
+~/tmp/lfoss.yml~ has one entry:
+
+#+begin_src yaml
+easyconfigs:
+  - GROMACS-2025.0-lfoss-2025b.eb
+#+end_src
+
+The solve still exits 0.
+Standard error names the unresolved entry.
+It also prints a warning that the added GROMACS row is the LLVM family:
+
+#+begin_src text
+warning: GROMACS (GROMACS-2025.0-lfoss-2025b.eb) is the LLVM family (lfoss). A foss solve cannot reach it, so the site layer includes GROMACS (fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb). Keep one lock per toolchain family: solve lfoss on its own, or pass --baseline-also-toolchain lfoss/2025b.
+#+end_src
+
+The path in that warning is the foss easyconfig the solve selected.
+A package the foss closure only version-bumps stays off this warning.
 
 See [[file:../reference/policy.org][the policy reference]] and
 [[file:../reference/formats.org][the format reference]].

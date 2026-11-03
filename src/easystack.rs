@@ -215,6 +215,57 @@ pub struct EessiLayout {
     pub members: Vec<String>,
 }
 
+/// Toolchain names a foss solve cannot see.
+///
+/// The LLVM family is `lfoss`, `lompi`, `lfbf`, and `llvm-compilers`.
+/// OpenMPI under `llvm-compilers-21.1.8` is in that family. A foss solve's
+/// universe is the foss hierarchy, so a package that exists only on one of
+/// these toolchains is absent from the foss lock and a later diff marks it
+/// site layer. `data/eessi-generations.toml` lists `llvm-compilers-20.1.8`
+/// (generation 2025b) and `llvm-compilers-21.1.8` (generation 2026.1) by
+/// hand, because an LLVM release is not a generation name.
+pub const LLVM_FAMILY: &[&str] = &["lfoss", "lompi", "lfbf", "llvm-compilers"];
+
+/// The LLVM family `label` names, or `None` when it is some other toolchain.
+///
+/// `label` is a toolchain name (`lfoss`) or a `name-version` label whose
+/// version starts with a digit (`llvm-compilers-21.1.8`, `lfoss-2026.1`).
+/// The longest family name wins, so `llvm-compilers` is not cut at a shorter
+/// prefix.
+pub fn llvm_family_name(label: &str) -> Option<&'static str> {
+    LLVM_FAMILY
+        .iter()
+        .copied()
+        .filter(|family| llvm_family_version_rest(label, family).is_some())
+        .max_by_key(|family| family.len())
+}
+
+/// The version after `family` in `label`, when `label` is that family.
+///
+/// `llvm-compilers-21.1.8` and `llvm-compilers` yield `Some("21.1.8")` and
+/// `Some("")`. A label that is only the family name has an empty version.
+pub fn llvm_family_version(label: &str, family: &str) -> Option<String> {
+    let rest = llvm_family_version_rest(label, family)?;
+    Some(rest.to_string())
+}
+
+/// `Some` when `label` is `family` or `family-<version>` with a digit version.
+/// The returned string is the version, empty when `label` is the bare name.
+fn llvm_family_version_rest<'a>(label: &'a str, family: &str) -> Option<&'a str> {
+    if label.eq_ignore_ascii_case(family) {
+        return Some("");
+    }
+    if label.len() <= family.len() || !label[..family.len()].eq_ignore_ascii_case(family) {
+        return None;
+    }
+    let rest = label[family.len()..].strip_prefix('-')?;
+    if rest.starts_with(|c: char| c.is_ascii_digit()) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 /// Toolchain names whose presence in a filename means it is not a system
 /// recipe, followed by the toolchain version up to the next dash.
 static TOOLCHAIN_IN_FILENAME: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -406,6 +457,31 @@ mod tests {
         assert_eq!(split("Julia-1.13.2.eb"), None);
         assert_eq!(split("Maven-3.9.11-Java-21.eb"), None);
         assert_eq!(split("foss-2025b.eb"), None);
+    }
+
+    #[test]
+    fn llvm_family_name_takes_the_longest_family_and_a_digit_version() {
+        assert_eq!(llvm_family_name("lfoss"), Some("lfoss"));
+        assert_eq!(llvm_family_name("LFOSS-2026.1"), Some("lfoss"));
+        assert_eq!(llvm_family_name("lompi-2025b"), Some("lompi"));
+        assert_eq!(llvm_family_name("lfbf"), Some("lfbf"));
+        assert_eq!(
+            llvm_family_name("llvm-compilers-21.1.8"),
+            Some("llvm-compilers")
+        );
+        assert_eq!(
+            llvm_family_version("llvm-compilers-21.1.8", "llvm-compilers").as_deref(),
+            Some("21.1.8")
+        );
+        assert_eq!(
+            llvm_family_version("lfoss-2025b", "lfoss").as_deref(),
+            Some("2025b")
+        );
+        assert_eq!(llvm_family_version("lfoss", "lfoss").as_deref(), Some(""));
+        assert_eq!(llvm_family_name("foss-2025b"), None);
+        assert_eq!(llvm_family_name("GCCcore-15.2.0"), None);
+        assert_eq!(llvm_family_name("lfoss-v2025b"), None);
+        assert_eq!(llvm_family_version("foss-2025b", "lfoss"), None);
     }
 
     #[test]

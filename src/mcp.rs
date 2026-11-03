@@ -343,9 +343,15 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_sbom",
-            "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names.",
+            "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names. With backport_list, also write the modules whose reach class justifies a backport.",
             &[("lock", "string")],
-            &[("out", "string")],
+            &[
+                ("out", "string"),
+                ("backport_list", "string"),
+                ("cve", "array"),
+                ("osv_cache", "string"),
+                ("reachability", "string"),
+            ],
         ),
         tool_with_optional(
             "eb_stack_order",
@@ -2876,6 +2882,17 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
 fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     let lock_path = required_path(arguments, "lock")?;
     let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
+    let backport_list = optional_path(arguments, "backport_list");
+    let cve = string_array(arguments, "cve")?;
+    let osv_cache = optional_path(arguments, "osv_cache");
+    let reachability = optional_path(arguments, "reachability");
+    if backport_list.is_none() && (!cve.is_empty() || osv_cache.is_some() || reachability.is_some())
+    {
+        return Err("--cve, --osv-cache, and --reachability need backport_list".into());
+    }
+    if backport_list.is_some() && cve.is_empty() && osv_cache.is_none() {
+        return Err("backport_list needs cve or osv_cache".into());
+    }
     let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
     let (sbom, stats) = lock_to_cyclonedx_from_recipes(&lock, &lock_path);
     write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
@@ -2884,14 +2901,30 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
-    Ok(json!({
+    let mut body = json!({
         "components": components,
         "lock": lock_path,
         "out": out,
         "recipes_read": stats.recipes_read,
         "recipes_unreadable": stats.recipes_unreadable,
         "with_artifact_facts": stats.with_artifact_facts,
-    }))
+    });
+    if let Some(path) = &backport_list {
+        let document = crate::backport::backport_list(&crate::backport::BackportRequest {
+            lock: &lock,
+            lock_path: &lock_path,
+            cves: &cve,
+            osv_cache: osv_cache.as_deref(),
+            reachability: reachability.as_deref(),
+        })
+        .map_err(|error| error.to_string())?;
+        crate::backport::write_backport(path, &document).map_err(|error| error.to_string())?;
+        body["listed"] = json!(document.listed);
+        body["recorded"] = json!(document.recorded);
+        body["stack"] = json!(document.stack_modules);
+        body["backport_list"] = json!(path);
+    }
+    Ok(body)
 }
 
 fn workflow_error(error: anyhow::Error) -> String {

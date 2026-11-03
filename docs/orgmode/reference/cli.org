@@ -564,6 +564,21 @@ is the component property ~eb_stack:buildDependsOn~. ~stack solve --sbom-out~
 writes that same document, checksums included. The MCP tool
 ~eb_stack_sbom~ writes it too. An unreadable path contributes no edge.
 
+~--backport-list~ writes a markdown list of locked modules whose reach class justifies a backport.
+A path ending in ~.md~ also writes the sibling ~.json~.
+~--cve~ is repeatable and resolves that advisory through Open Source Vulnerabilities (OSV).
+~--osv-cache~ is a directory of recorded responses: ~queries.json~ maps each request URL to a body file.
+Without ~--cve~, every id in that file is resolved, and the command does not query the network.
+~--reachability~ is the same ~name class~ file as ~rebuild-set~.
+The classes are ~cross-user~, ~network-facing~, ~local-only~, and ~not-reachable~.
+A name neither the built-in table nor that file mentions is ~unclassified~.
+Only ~cross-user~ and ~network-facing~ are on the list.
+Blast radius is the module and every locked module that depends on it through a runtime or build edge.
+The command writes the CycloneDX file, then prints ~backport=~, ~recorded=~, ~stack=~, and ~out=~.
+~--cve~, ~--osv-cache~, and ~--reachability~ need ~--backport-list~.
+~--backport-list~ needs ~--cve~ or ~--osv-cache~.
+~eb_stack_sbom~ takes the same arguments as ~backport_list~, ~cve~, ~osv_cache~, and ~reachability~.
+
 ~stack solve~ is the multi-root EasyBuild stack solver. Package-profile stack
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON ~Policy~ schema. The policy file is
@@ -579,26 +594,23 @@ requirement; a builddependency is dashed. A ~.svg~ or ~.png~ path is rendered
 with the Graphviz ~dot~ program. Any other suffix, including ~.dot~, is the
 DOT source. The MCP field ~dot_out~ writes the same file.
 
-The baseline is either a previous generation (~--baseline-easyconfigs~, by
-default the first ~--easyconfigs~ tree) or what a set of easystacks installs
-(~--baseline-easystack~, repeatable). An easystack baseline is every entry
-plus the closure its recipes pin, read from the ~--easyconfigs~ trees and kept
-to the policy toolchain's hierarchy. An entry pinned with ~from-commit~ is read
-from that commit of ~--baseline-commits-from~ when given, and matched by
-filename otherwise. Entries that name no recipe are listed on standard error.
-~--baseline-also-toolchain~ keeps another family's hierarchy in the baseline,
-such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve. ~--filter-deps~ drops each named dependency before the solve, together
-with the subtree under it, using EasyBuild's matching: a bare name,
-~name=version~, or ~name=[low:high]~. ~[~ and ~]~ include a limit, the
-opposite bracket excludes it, and an empty side is open. The last spec for
-a name wins. Pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when solving
-against a European Environment for Scientific Software Installations (EESSI) baseline, or the build list carries modules the compat
-layer already provides.
-Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
-software layer already provides that module, and
-~--build-list-excludes-baseline~ drops those modules (same name, version,
-toolchain and versionsuffix) from the build list, leaving what the site layer
-builds on top in dependency order.
+The baseline is either a previous generation (~--baseline-easyconfigs~, by default the first ~--easyconfigs~ tree) or what a set of easystacks installs (~--baseline-easystack~, repeatable).
+An easystack baseline is every entry plus the closure its recipes pin, read from the ~--easyconfigs~ trees and kept to the policy toolchain's hierarchy.
+An entry pinned with ~from-commit~ is read from that commit of ~--baseline-commits-from~ when given, and matched by filename otherwise.
+Entries that name no recipe are listed on standard error.
+~--baseline-also-toolchain~ keeps another family's hierarchy in the baseline, such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve.
+A foss solve cannot see the LLVM family (~lfoss~, ~lompi~, ~lfbf~, ~llvm-compilers~).
+A baseline easystack can name one of those toolchains.
+If the stack diff then marks that package added, the solve warns on standard error and still exits 0.
+The added row is the site layer because the foss universe dropped the LLVM recipe.
+Keep one lock per toolchain family, or pass ~--baseline-also-toolchain~ for that family so its hierarchy stays in the baseline.
+See [[file:../howto/solve-lock.org][one lock per toolchain family]].
+~--filter-deps~ drops each named dependency before the solve, together with the subtree under it, using EasyBuild's matching: a bare name, ~name=version~, or ~name=[low:high]~.
+~[~ and ~]~ include a limit.
+The opposite bracket excludes it, and an empty side is open.
+The last spec for a name wins.
+Pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when solving against a European Environment for Scientific Software Installations (EESSI) baseline, or the build list carries modules the compat layer already provides.
+Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the software layer already provides that module, and ~--build-list-excludes-baseline~ drops those modules (same name, version, toolchain and versionsuffix) from the build list, leaving what the site layer builds on top in dependency order.
 
 A Jenkins build list is one easyconfig filename per line with optional ~eb~
 flags, ~#~ for comments. ~--roots-from-build-list~ takes the package name of
@@ -1456,10 +1468,12 @@ review. The scan sees dynamic symbols only, so a hidden or inlined static
 link is a false no-rebuild, and a short name shared with another library
 is a false must-rebuild.
 
-The output directory contains ~rebuild-set.json~, ~rebuild-set.md~, and
-~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~. The easystack contains
-class ~must-rebuild~ only, including a dependent that ~--check-static~
-promoted. A second run replaces the ~rebuilds/*.yml~ files.
+The output directory contains ~rebuild-set.json~, ~rebuild-set.md~, and ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~.
+The easystack contains class ~must-rebuild~ only, including a dependent that ~--check-static~ promoted.
+A second run replaces the ~rebuilds/*.yml~ files.
+~rebuild-set.json~ and ~rebuild-set.md~ record the reach class of each patched easyconfig, including a filename listed under ~missing~.
+~--reachability~ replaces or adds names for that map as well as for ~backport.md~.
+~cross-user~ and ~network-facing~ justify a backport.
 
 * ~component-reach~
 
@@ -1482,26 +1496,25 @@ that carries a component, then feeds the recipes that contain it into
 the rebuild closure. See
 [[file:../howto/component-reach.org][which modules carry a component]].
 
-Pass ~--component~ and ~--version~, or ~--purl~, or ~--cve~. ~--version~
-is an exact version, ~*~, or a requirement such as ~>=8,<9~. With
-~--purl~ it replaces the version in the URL. The purl type selects the
-carriers. ~generic~ and ~github~ match the easyconfig name. ~pypi~,
-~cargo~, ~npm~, ~golang~, and ~cran~ match an extension or a bundled
-component of that language, plus a crate for ~cargo~ and a wheel for
-~pypi~. Another type exits 2: the error says that purl type has no
-carrier model. ~pkg:cargo/curl~ does not match the cURL recipe.
-~--cve~ resolves the id through Open Source Vulnerabilities (OSV), follows GitHub Security Advisory (GHSA), RUSTSEC, PYSEC, and
-GO aliases when the Common Vulnerabilities and Exposures (CVE) record has only a git range, and keeps named
-version tags such as ~libXpm-3.5.17~. A GIT range is mapped onto
-release versions: the affected entry's ~versions~ list when it has one,
-and otherwise tags from the upstream repository (~git ls-remote --tags~,
-then ~git merge-base --is-ancestor~ on a blobless fetch). That lookup is
-cached and is skipped when it cannot reach the network, and the range
-then stays under Unresolved ranges. An event that does not parse is
-reported there too. A package whose ranges were all unparsed counts as
-review. Several affected packages are written as one document with
-~kind~ ~cve~. The summary line includes ~changed~, ~must-rebuild~,
-~review~, and ~no-rebuild~.
+Pass ~--component~ and ~--version~, or ~--purl~, or ~--cve~.
+~--version~ is an exact version, ~*~, or a requirement such as ~>=8,<9~.
+With ~--purl~ it replaces the version in the URL.
+The purl type selects the carriers.
+~generic~ and ~github~ match the easyconfig name.
+~pypi~, ~cargo~, ~npm~, ~golang~, and ~cran~ match an extension or a bundled component of that language, plus a crate for ~cargo~ and a wheel for ~pypi~.
+Another type exits 2: the error says that purl type has no carrier model.
+~pkg:cargo/curl~ does not match the cURL recipe.
+~--cve~ resolves the id through Open Source Vulnerabilities (OSV).
+When the Common Vulnerabilities and Exposures (CVE) record has only a git range, it follows GitHub Security Advisory (GHSA), ~RUSTSEC~, ~PYSEC~, and ~GO~ aliases.
+It keeps named version tags such as ~libXpm-3.5.17~.
+A ~GIT~ range is mapped onto release versions: the affected entry's ~versions~ list when it has one, and otherwise tags from the upstream repository (~git ls-remote --tags~, then ~git merge-base --is-ancestor~ on a blobless fetch).
+That lookup is cached and is skipped when it cannot reach the network, and the range then stays under Unresolved ranges.
+An event that does not parse is reported there too.
+A package whose ranges were all unparsed counts as review.
+An advisory that affects more than one package is written as one document with ~kind~ ~cve~.
+The summary line includes ~reach~, ~changed~, ~must-rebuild~, ~review~, and ~no-rebuild~.
+~reach~ is the class of the component name: ~cross-user~, ~network-facing~, ~local-only~, ~not-reachable~, or ~unclassified~.
+A ~--cve~ summary has no single class.
 
 Names match ignoring ASCII letter case, on a whole token. A recipe is in the
 generation when its toolchain version equals ~--generation~, or when the

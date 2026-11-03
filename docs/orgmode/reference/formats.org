@@ -534,13 +534,14 @@ filename carried a version, the file is ~unknown~.
 
 | Field | Meaning |
 |-
-| ~schema_version~ | ~4~ |
+| ~schema_version~ | ~5~ |
 | ~generated_at~ | RFC 3339 timestamp of the run |
 | ~installed_source~ | Label of the installed list |
 | ~prefix~ | Installed prefix passed to ~--prefix~. Omitted when the flag was not passed |
 | ~symbols_checked~ | ~true~ when ~--check-static~ ran |
 | ~easystacks~ | Easystack paths that were read, sorted |
 | ~changed~ | Patched easyconfig filenames, sorted |
+| ~reach~ | Reach class of each filename in ~changed~, including missing ones. ~cross-user~ and ~network-facing~ justify a backport. ~local-only~ and ~not-reachable~ do not. ~unclassified~ means neither the built-in names nor ~--reachability~ names the package |
 | ~missing~ | Changed filenames that are not in the deployed graph |
 | ~unresolved~ | Requirements no easyconfig satisfies, and easystack entries the robot path does not have |
 | ~notes~ | A missing easyblock class, a ~from-commit~ whose tree was not given, or an install directory that was not found. Empty when there is nothing to say |
@@ -554,8 +555,8 @@ when an easystack filename carried one. On a review row, ~changed~ is the
 patched filenames joined by ~, ~. After ~--check-static~, a hit keeps only
 the filenames whose exports were defined.
 
-~rebuild-set.md~ is the same rows as a table, the counts line, the missing
-filenames, and each note as ~- note:~.
+~rebuild-set.md~ is the same rows as a table, the counts line, the missing filenames, and each note as ~- note:~.
+It ends with the reach class of each patched easyconfig.
 
 ** ~findings.json~, ~findings.md~, ~findings.csv~
 
@@ -674,7 +675,7 @@ One run writes ~component-reach.toml~, ~component-reach.json~, and
 
 | Field | Meaning |
 |-
-| ~schema_version~ | ~1~ |
+| ~schema_version~ | ~2~ |
 | ~generated_at~ | RFC 3339 timestamp of the run |
 | ~component~ | Name that was asked for |
 | ~version_req~ | Exact version, ~*~, or a requirement. Empty when the match is only ~versions~ |
@@ -683,6 +684,7 @@ One run writes ~component-reach.toml~, ~component-reach.json~, and
 | ~purl~ | Package URL, when the query was a purl or a resolved CVE |
 | ~ecosystem~ | Ecosystem from the purl or the Open Source Vulnerabilities (OSV) record |
 | ~generation~ | Toolchain generation |
+| ~reach~ | Class of the component name: ~cross-user~, ~network-facing~, ~local-only~, ~not-reachable~, or ~unclassified~ |
 | ~carriers~ | Easyconfigs and modules that carry it |
 | ~changed~ | Filenames that contain it, fed to the closure |
 | ~closure_counts~ | Row counts, keys ~no-rebuild~, ~review~, ~must-rebuild~ |
@@ -700,15 +702,40 @@ compat-layer and installed-only rows), ~module~, and ~installed~ when a
 list was passed.
 
 A ~--cve~ run writes the same three filenames with a different document.
-~kind~ is ~cve~. ~cve~ is the id. ~resolved~ is the packages OSV named
-(~ecosystem~, ~name~, ~purl~, ~version_reqs~, ~versions~). ~results~ is
-one component-reach document per package. ~notes~ contains alias fetches
-that failed. Schema version stays ~1~.
+~kind~ is ~cve~.
+~cve~ is the id.
+~resolved~ is the packages the Open Source Vulnerabilities (OSV) record named (~ecosystem~, ~name~, ~purl~, ~version_reqs~, ~versions~).
+~results~ is one component-reach document per package.
+~notes~ contains alias fetches that failed.
+Schema version stays ~2~.
+Each package document carries its own ~reach~.
 
 A closure row has the rebuild-set fields ~changed~, ~dependent~,
 ~dependent_easyconfig~, ~edge_kind~, ~class~, ~reason~, and ~eb_version~
 when an easystack filename carried one. With no easystack the synthetic
 stack is ~generation-<generation>.yml~ and ~eb_version~ is absent.
 
-~component-reach.md~ is the carrier table, then the closure table, the
-counts line, and each note as ~- note:~.
+~component-reach.md~ is the carrier table, then the closure table, the counts line, and each note as ~- note:~.
+The carriers line names the reach class.
+
+* Backport list (~eb-stack stack sbom --backport-list~)
+
+A path ending in ~.md~ writes that markdown and a sibling ~.json~.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~lock~ | Lock path, as it was passed |
+| ~generation~ | Toolchain label of the lock |
+| ~advisories~ | Advisory ids that were resolved, sorted |
+| ~stack_modules~ | Packages in the lock |
+| ~listed~ | Rows whose reach class justifies a backport |
+| ~recorded~ | Rows left off the list |
+| ~rows~ | One entry per locked module an advisory matched. On-list rows come first |
+| ~notes~ | An advisory names a package the lock lacks, a locked version is outside the range, or a range did not parse |
+
+Each row has ~module~ (~Name/version-toolchain~, plus the versionsuffix when the lock has one), ~name~, ~version~, ~reach~, ~advisory~, ~fixed_in~ (upper bounds from ~<~ clauses; a ~<=~ bound is last-affected and is not a fix), ~blast_radius~, ~blast~ (those module labels, sorted), and ~on_list~.
+Blast radius counts the module and every locked module that depends on it through a runtime or build edge.
+
+The markdown lists each module in a backport section or a recorded section.
+The recorded sentence is: these modules stay off the backport list, and a backport is cross-user or network-facing.

@@ -1,0 +1,12 @@
+{
+  "queries": [
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-curl", "file": "GHSA-test-curl.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-curl-old", "file": "GHSA-test-curl-old.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-missing", "file": "GHSA-test-missing.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-mystery", "file": "GHSA-test-mystery.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-notebook", "file": "GHSA-test-notebook.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-unparsed", "file": "GHSA-test-unparsed.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-win", "file": "GHSA-test-win.json"},
+    {"url": "https://api.osv.dev/v1/vulns/GHSA-test-zlib", "file": "GHSA-test-zlib.json"}
+  ]
+}

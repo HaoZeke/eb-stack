@@ -1,0 +1,7 @@
+{
+  "id": "GHSA-test-mystery",
+  "affected": [{
+    "package": {"ecosystem": "OSS-Fuzz", "name": "Mystery", "purl": "pkg:generic/mystery"},
+    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "2.0"}]}]
+  }]
+}

@@ -19,6 +19,27 @@ All notable changes to this project are documented here.
   and older-EESSI inventories. A module in the target is `moved` and names
   its EESSI version; an excluded module is `site-only`; every other missing
   route is `gone` until it lands.
+- `stack solve` warns on standard error when a foss solve's baseline easystack names an LLVM-family recipe (`lfoss`, `lompi`, `lfbf`, or `llvm-compilers`) and the stack diff marks that package added.
+  The foss universe cannot see that family, so the added row is the site layer by mistake.
+  The solve still exits 0.
+  Keep one lock per toolchain family, or pass `--baseline-also-toolchain` for that family.
+  `llvm-compilers-20.1.8` and `llvm-compilers-21.1.8` are the versions `data/eessi-generations.toml` lists for generations 2025b and 2026.1.
+- `component-reach` and `rebuild-set` record a reach class: `cross-user`, `network-facing`, `local-only`, `not-reachable`, or `unclassified` when no built-in name and no `--reachability` file names the package.
+  `component-reach` uses the built-in names only.
+  `cross-user` and `network-facing` justify a backport.
+  Component-reach schema is 2.
+  Rebuild-set schema is 5.
+  The component-reach summary prints `reach=`.
+  `rebuild-set.md` ends with the class of each patched easyconfig.
+  `--reachability` on `rebuild-set` applies to that map as well as to `backport.md`.
+- `stack sbom --backport-list` writes that list for a stack lock.
+  `--cve` resolves an advisory through Open Source Vulnerabilities (OSV).
+  `--osv-cache` reads recorded responses and, without `--cve`, every id in `queries.json`.
+  `--reachability` is the same `name class` file as `rebuild-set`.
+  Blast radius is the module plus every locked module that depends on it through a runtime or build edge.
+  `local-only`, `not-reachable`, and `unclassified` are recorded and left off the list.
+  A `.md` path also writes the sibling `.json`.
+  `eb_stack_sbom` takes the same optional arguments and reports `listed`, `recorded`, and `stack` when the list is requested.
 - `stack shard` splits one Jenkins build list into shards that can
   build at the same time. A line's set is its closure over
   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod

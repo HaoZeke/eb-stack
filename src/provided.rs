@@ -15,7 +15,7 @@
 
 use crate::cli_parse::usage;
 use crate::domain::{StackLock, Toolchain};
-use crate::easystack::filename_toolchain;
+use crate::easystack::{filename_toolchain, llvm_family_name};
 use crate::gap::{names_from_listing, software_name};
 use crate::hierarchy::known_hierarchy;
 use crate::jenkins::parse_build_list;
@@ -24,9 +24,6 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-
-/// Toolchain names of the LLVM family. A foss solve cannot see them.
-const LLVM_FAMILY: &[&str] = &["lfoss", "lompi", "lfbf", "llvm-compilers"];
 
 /// How `stack provided` prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -558,19 +555,12 @@ fn toolchain_detail(file: &str, families: &[FamilyLock], allowed: &[String]) -> 
 }
 
 fn llvm_suffix(toolchain_name: &str, families: &[FamilyLock]) -> String {
-    if !LLVM_FAMILY
-        .iter()
-        .any(|family| family.eq_ignore_ascii_case(toolchain_name))
-    {
+    if llvm_family_name(toolchain_name).is_none() {
         return String::new();
     }
     let locks: Vec<&FamilyLock> = families
         .iter()
-        .filter(|family| {
-            LLVM_FAMILY
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&family.toolchain_name))
-        })
+        .filter(|family| llvm_family_name(&family.toolchain_name).is_some())
         .collect();
     if locks.is_empty() {
         return format!(" {toolchain_name} is the LLVM family, not a site-layer toolchain");

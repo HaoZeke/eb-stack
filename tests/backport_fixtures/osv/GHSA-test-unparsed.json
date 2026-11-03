@@ -1,0 +1,7 @@
+{
+  "id": "GHSA-test-unparsed",
+  "affected": [{
+    "package": {"ecosystem": "PyPI", "name": "notebook", "purl": "pkg:pypi/notebook"},
+    "ranges": [{"type": "SEMVER", "events": [{"limit": "1"}]}]
+  }]
+}

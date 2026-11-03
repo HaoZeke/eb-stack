@@ -48,7 +48,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
 /// Schema of [`RebuildDocument`]. Bumped when a field changes meaning.
-pub const REBUILD_SET_SCHEMA_VERSION: u32 = 4;
+///
+/// Version 5 adds `reach`, the class of each patched easyconfig.
+pub const REBUILD_SET_SCHEMA_VERSION: u32 = 5;
 
 /// Class for a runtime dependency, direct or through other runtime dependencies.
 pub const CLASS_NO_REBUILD: &str = "no-rebuild";
@@ -179,6 +181,11 @@ pub struct RebuildDocument {
     pub easystacks: Vec<String>,
     /// Patched easyconfig filenames, sorted.
     pub changed: Vec<String>,
+    /// Reach class of each filename in [`Self::changed`], including missing
+    /// ones. `cross-user` and `network-facing` justify a backport.
+    /// `local-only` and `not-reachable` do not. `unclassified` means neither
+    /// the built-in names nor a site file names the package.
+    pub reach: BTreeMap<String, String>,
     /// Changed filenames that are not in the deployed graph.
     pub missing: Vec<String>,
     /// Requirements no easyconfig satisfies, and easystack entries the robot
@@ -321,6 +328,8 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
         .collect();
     easystacks.sort();
     easystacks.dedup();
+    let reach =
+        crate::findings::reach_for_easyconfigs(&crate::findings::ReachTable::builtin(), &changed);
     Ok(RebuildDocument {
         schema_version: REBUILD_SET_SCHEMA_VERSION,
         generated_at: query.generated_at.clone(),
@@ -329,6 +338,7 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
         symbols_checked: query.check_static,
         easystacks,
         changed,
+        reach,
         missing,
         unresolved: unresolved.into_iter().collect(),
         notes: notes.into_iter().collect(),
@@ -415,8 +425,14 @@ pub fn render_markdown(document: &RebuildDocument) -> String {
          inlined static link is reported as no-rebuild. A short name shared with another \
          library is reported as must-rebuild. An empty export set stays in review. Scripts, \
          bytecode, and libraries opened with dlopen are invisible. A static archive shows \
-         that a static link was possible, not that it happened.\n",
+         that a static link was possible, not that it happened.\n\n",
     );
+    out.push_str(
+        "Reach class of each patched easyconfig. `cross-user` and `network-facing` justify a backport. `local-only` and `not-reachable` do not. `unclassified` is not a judgment.\n\n",
+    );
+    for (name, class) in &document.reach {
+        out.push_str(&format!("- `{name}`: {class}\n"));
+    }
     out
 }
 
@@ -1151,6 +1167,16 @@ mod tests {
         assert!(markdown.contains("`zlib-1.3.1-GCCcore-15.2.0.eb`"));
         assert!(markdown.contains("2 must-rebuild, 2 review, 4 no-rebuild."));
         assert!(markdown.contains("--check-static"));
+        assert!(markdown.contains(
+            "Reach class of each patched easyconfig. `cross-user` and `network-facing` justify a backport."
+        ));
+        assert_eq!(
+            document
+                .reach
+                .get("zlib-1.3.1-GCCcore-15.2.0.eb")
+                .map(String::as_str),
+            Some("unclassified")
+        );
     }
 
     #[test]
