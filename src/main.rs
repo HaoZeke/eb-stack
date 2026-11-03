@@ -1104,10 +1104,11 @@ enum StackCommand {
     },
     /// Order the builds a set of roots needs, as a graph rather than a stack.
     ///
-    /// Unlike `solve`, this does not pick one version per package: it takes
-    /// what the recipes pin and sequences them, so a generation that carries
-    /// two builds of one name gets both, in an order that respects every
-    /// dependency.
+    /// Two builds of one name stay when EasyBuild installs them side by side:
+    /// different toolchains, a system bootstrap pair, or a build-only tool.
+    /// A runtime dependency has to agree on one version per toolchain. When
+    /// no version satisfies every such requirement, the command exits 1 and
+    /// names each requester and version. It does not repin a recipe.
     #[command(
         after_long_help = "Examples:\n  eb-stack stack order --easyconfigs easyconfigs/ --root 'zlib==1.3.1'"
     )]

@@ -626,10 +626,14 @@ dependencies to ~eb --robot~. ~stack sbom --lock~ re-reads the easyconfigs
 named in the lock and restores their runtime ~dependsOn~ edges.
 
 ~stack order~ sequences the recipes the roots pin, in an order that
-respects every dependency. It keeps every build the recipes pin and
-does not pick one version per name, so a name the generation builds
-twice stays twice and both builds appear; ~stack solve~ picks one
-version of that name, this command does not. ~--root~ repeats, and
+respects every dependency. Two builds of one name stay when EasyBuild
+installs them side by side, which is the same package key ~stack solve~
+uses: another toolchain, a system bootstrap pair, or a build-only tool.
+A runtime dependency has to agree on one version per toolchain. When no
+version satisfies every such requirement the command exits 1, names each
+requester and the version it resolved, and writes no order file. It does
+not repin a recipe. See [[file:../howto/solve-lock.org][Order every pinned build]].
+~--root~ repeats, and
 ~name==version~ pins one build. ~--filter-deps~ drops each named
 dependency before that order is built, together with the subtree under
 it, using the same matching as ~stack solve~; when the flag is absent
@@ -641,8 +645,8 @@ easystack. ~--hashes-out~ writes one line per module,
 ~<sha256>  <module>~, a digest of the easyconfig and of the hashes of
 everything it needs. A module whose recipe could not be read is still
 listed, and the stdout line ~incomplete=~ counts those. Stdout ends
-with ~order=<path> builds=<N>~, and a name with two builds also prints
-~multiple builds of <name>:~.
+with ~order=<path> builds=<N>~, and a name with two co-installable builds
+also prints ~multiple builds of <name>:~.
 
 ~stack easystack~ writes the lock, sorted by package name, as the
 easystack ~eb --easystack~ consumes: ~easyconfigs:~ is a YAML list of

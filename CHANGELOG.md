@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- `stack order` exits 1 when runtime requirements of one name at one
+  toolchain have no version that satisfies every one of them. The error
+  names each requester and the version it resolved. Eigen 3.4.1 required
+  by LAMMPS and Eigen 5.0.0 required by SciPy-bundle, both at
+  `foss-2026.1`, is the closure `stack solve` already rejects. The
+  command writes no order file. It does not repin a recipe: choosing
+  which exact pin to drop would describe a build the easyconfig does
+  not ask for. Two builds of one name stay in the order when EasyBuild
+  installs them side by side: another toolchain, a system bootstrap
+  pair (binutils 2.40 and 2.42), or a build-only tool (CMake 3.31.11
+  and 4.2.1). Those are the same package keys `stack solve` uses.
+
 ### Added
 
 - `stack provided` includes the one-based build-list line on every

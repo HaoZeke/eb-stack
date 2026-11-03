@@ -208,6 +208,7 @@ jobs:
             --test solver_completeness \
             --test stack_files \
             --test stack_order_filter \
+            --test stack_order_version \
             --test source_probe \
             -- --nocapture
 
