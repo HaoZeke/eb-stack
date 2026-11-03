@@ -1,0 +1,2 @@
+# OpenBLAS is already installed. The version is the full module version.
+OpenBLAS/0.3.27-foss-2025b

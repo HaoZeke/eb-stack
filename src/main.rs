@@ -1140,6 +1140,13 @@ enum StackCommand {
         /// reads it.
         #[arg(long, value_delimiter = ',')]
         filter_deps: Vec<String>,
+        /// Installed modules. A file is `module -t avail`, `module spider -t`,
+        /// or `Name/version`. A directory is an Lmod tree, read the same way
+        /// as `stack gap --installed`. The version is the full module version
+        /// (`1.3.1-GCCcore-15.2.0`). A listed module is left out of the order,
+        /// and so are the dependencies that were installed with it. Repeatable.
+        #[arg(long = "installed")]
+        installed: Vec<PathBuf>,
     },
     /// What a site provides that a stack lacks, and the recipe that closes it.
     ///
@@ -2922,6 +2929,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             easystack_out,
             hashes_out,
             filter_deps,
+            installed,
         } => {
             let report =
                 eb_stack::workflows::stack_order(&eb_stack::workflows::StackOrderRequest {
@@ -2932,6 +2940,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     easystack_out,
                     hashes_out,
                     filter_deps,
+                    installed,
                 })?;
             print!("{}", report.stdout);
             Ok(())

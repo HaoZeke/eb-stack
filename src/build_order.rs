@@ -602,6 +602,22 @@ pub fn build_graph(
     roots: &[String],
     choice: Choice,
 ) -> Result<BuildGraph, OrderError> {
+    Ok(build_graph_against_installed(candidates, roots, choice, &|_| false)?.0)
+}
+
+/// The build graph of `roots`, stopping at modules `is_installed` names.
+///
+/// The graph is the one [`build_graph`] would build for everything that
+/// still has to be built. An installed module is not a node: the robot
+/// does not rebuild it, and it does not rebuild what was installed with
+/// it. The set is those modules, in key order.
+#[allow(clippy::result_large_err)]
+pub fn build_graph_against_installed(
+    candidates: &[Candidate],
+    roots: &[String],
+    choice: Choice,
+    is_installed: &dyn Fn(&ModuleKey) -> bool,
+) -> Result<(BuildGraph, BTreeSet<ModuleKey>), OrderError> {
     let mut starts: Vec<ModuleKey> = Vec::new();
     for root in roots {
         let (name, version_req) = match root.split_once("==") {
@@ -643,7 +659,7 @@ pub fn build_graph(
         };
         starts.push(ModuleKey::of(start));
     }
-    graph_from_keys(candidates, &starts, choice)
+    graph_from_keys_against_installed(candidates, &starts, choice, is_installed)
 }
 
 /// The build graph reachable from modules named by their full identity.
@@ -658,8 +674,24 @@ pub fn graph_from_keys(
     starts: &[ModuleKey],
     choice: Choice,
 ) -> Result<BuildGraph, OrderError> {
+    Ok(graph_from_keys_against_installed(candidates, starts, choice, &|_| false)?.0)
+}
+
+/// [`graph_from_keys`], stopping at modules `is_installed` names.
+///
+/// An installed module is not added, and nothing it depends on is walked.
+/// The set is those modules, in key order. A predicate that is never true
+/// builds the same graph as [`graph_from_keys`].
+#[allow(clippy::result_large_err)]
+pub fn graph_from_keys_against_installed(
+    candidates: &[Candidate],
+    starts: &[ModuleKey],
+    choice: Choice,
+    is_installed: &dyn Fn(&ModuleKey) -> bool,
+) -> Result<(BuildGraph, BTreeSet<ModuleKey>), OrderError> {
     let mut graph: BuildGraph = DiGraph::new();
     let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
+    let mut stopped: BTreeSet<ModuleKey> = BTreeSet::new();
     let by_key: BTreeMap<ModuleKey, &Candidate> =
         candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
     let by_name = index_by_name(candidates);
@@ -674,6 +706,10 @@ pub fn graph_from_keys(
     };
     let mut queue: Vec<ModuleKey> = Vec::new();
     for key in starts {
+        if is_installed(key) {
+            stopped.insert(key.clone());
+            continue;
+        }
         node_for(&mut graph, &mut index, key);
         queue.push(key.clone());
     }
@@ -699,9 +735,13 @@ pub fn graph_from_keys(
             }) {
                 let tc_key = ModuleKey::of(tc);
                 if tc_key != key {
-                    let node = node_for(&mut graph, &mut index, &tc_key);
-                    graph.add_edge(node, dependent, Edge::Toolchain);
-                    queue.push(tc_key);
+                    if is_installed(&tc_key) {
+                        stopped.insert(tc_key);
+                    } else {
+                        let node = node_for(&mut graph, &mut index, &tc_key);
+                        graph.add_edge(node, dependent, Edge::Toolchain);
+                        queue.push(tc_key);
+                    }
                 }
             }
         }
@@ -738,12 +778,16 @@ pub fn graph_from_keys(
                 });
             };
             let dep_key = ModuleKey::of(picked);
+            if is_installed(&dep_key) {
+                stopped.insert(dep_key);
+                continue;
+            }
             let node = node_for(&mut graph, &mut index, &dep_key);
             graph.add_edge(node, dependent, kind);
             queue.push(dep_key);
         }
     }
-    Ok(graph)
+    Ok((graph, stopped))
 }
 
 /// The build graph reachable from `starts`, including modules that are already
@@ -1240,9 +1284,42 @@ pub fn build_order(
     roots: &[String],
     choice: Choice,
 ) -> Result<Vec<Candidate>, OrderError> {
-    let graph = build_graph(candidates, roots, choice)?;
+    Ok(build_order_against_installed(candidates, roots, choice, &|_| false)?.order)
+}
+
+/// What still has to be built once modules already on the machine are leaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderAgainstInstalled {
+    /// Modules that are not installed, dependencies first.
+    pub order: Vec<Candidate>,
+    /// Installed modules the walk stopped at, in key order.
+    ///
+    /// A module is here when a root or a dependency resolved to it and the
+    /// predicate said it was installed. Its own dependencies are not walked
+    /// and are not listed.
+    pub installed: Vec<ModuleKey>,
+}
+
+/// [`build_order`] against an installed module list.
+///
+/// `is_installed` is the robot's view of the machine: a module it names is
+/// left out of the order, and so is everything reachable only through it.
+/// Resolution is otherwise the same walk, including the synthetic GCC-family
+/// hierarchy and the refusal of two runtime versions in one toolchain.
+/// A predicate that is never true returns the same order as [`build_order`]
+/// and an empty `installed` list.
+#[allow(clippy::result_large_err)]
+pub fn build_order_against_installed(
+    candidates: &[Candidate],
+    roots: &[String],
+    choice: Choice,
+    is_installed: &dyn Fn(&ModuleKey) -> bool,
+) -> Result<OrderAgainstInstalled, OrderError> {
+    let (graph, stopped) = build_graph_against_installed(candidates, roots, choice, is_installed)?;
     // Refuse before sorting. A closure `stack solve` cannot install is not
-    // an order, even when the graph itself is acyclic.
+    // an order, even when the graph itself is acyclic. Installed modules
+    // are not in the graph, so a disagreement that lives only under one
+    // of them is not a disagreement about what this order builds.
     refuse_disjoint_runtime_versions(&graph, candidates, choice)?;
     let by_key: BTreeMap<ModuleKey, &Candidate> =
         candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
@@ -1258,10 +1335,13 @@ pub fn build_order(
         OrderError::Cycle(guilty.into_iter().map(|n| graph[n].clone()).collect())
     })?;
 
-    Ok(sorted
-        .into_iter()
-        .filter_map(|node| by_key.get(&graph[node]).map(|c| (*c).clone()))
-        .collect())
+    Ok(OrderAgainstInstalled {
+        order: sorted
+            .into_iter()
+            .filter_map(|node| by_key.get(&graph[node]).map(|c| (*c).clone()))
+            .collect(),
+        installed: stopped.into_iter().collect(),
+    })
 }
 
 /// Which edges would break the cycles in a graph, if any.
@@ -2148,5 +2228,110 @@ mod tests {
         assert!(unresolved
             .iter()
             .any(|item| item.requirement.contains("Missing")));
+    }
+
+    /// `recipe hierarchy --export` describes this rule instead of enumerating
+    /// versions: GCC admits system and the same-version GCCcore, and no other
+    /// generation. A version that is not a fixture has to follow that rule or
+    /// the order either fails or pulls an unrelated build.
+    #[test]
+    fn a_gcc_recipe_uses_the_synthetic_gcc_family_hierarchy() {
+        let all = vec![
+            candidate("GCCcore", "9.9.9", tc("system", ""), vec![]),
+            candidate("GCC", "9.9.9", tc("GCCcore", "9.9.9"), vec![]),
+            candidate("Lib", "1.0", tc("GCCcore", "9.9.9"), vec![]),
+            candidate("Lib", "1.0", tc("GCCcore", "8.0.0"), vec![]),
+            candidate("Lib", "1.0", tc("foss", "2026.1"), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("GCC", "9.9.9"),
+                vec![dep("Lib", "==1.0", None)],
+            ),
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let listed = names(&order);
+        assert!(
+            listed.iter().any(|name| name == "Lib-1.0-GCCcore-9.9.9"),
+            "{listed:?}"
+        );
+        assert!(
+            listed
+                .iter()
+                .all(|name| !name.contains("8.0.0") && !name.contains("foss-2026.1")),
+            "{listed:?}"
+        );
+        let at = |needle: &str| {
+            listed
+                .iter()
+                .position(|name| name == needle)
+                .unwrap_or_else(|| panic!("{needle} missing from {listed:?}"))
+        };
+        assert!(at("GCCcore-9.9.9-system") < at("GCC-9.9.9-GCCcore-9.9.9"));
+        assert!(at("GCC-9.9.9-GCCcore-9.9.9") < at("App-1.0-GCC-9.9.9"));
+        assert!(at("Lib-1.0-GCCcore-9.9.9") < at("App-1.0-GCC-9.9.9"));
+    }
+
+    #[test]
+    fn an_installed_module_is_a_leaf_and_its_dependencies_stay_out() {
+        let base = candidate("Base", "1.0", tc("foss", "2026.1"), vec![]);
+        let mid = candidate(
+            "Mid",
+            "1.0",
+            tc("foss", "2026.1"),
+            vec![dep("Base", "==1.0", None)],
+        );
+        let app = candidate(
+            "App",
+            "1.0",
+            tc("foss", "2026.1"),
+            vec![dep("Mid", "==1.0", None), dep("Side", "==1.0", None)],
+        );
+        let side = candidate("Side", "1.0", tc("foss", "2026.1"), vec![]);
+        let all = vec![base, mid, app, side];
+        let installed = |key: &ModuleKey| key.name == "Mid";
+        let report =
+            build_order_against_installed(&all, &["App".into()], Choice::Newest, &installed)
+                .expect("order");
+        let listed = names(&report.order);
+        assert!(
+            listed.iter().any(|name| name.starts_with("Side-"))
+                && listed.iter().any(|name| name.starts_with("App-")),
+            "{listed:?}"
+        );
+        assert!(
+            listed
+                .iter()
+                .all(|name| !name.starts_with("Mid-") && !name.starts_with("Base-")),
+            "{listed:?}"
+        );
+        let side = listed
+            .iter()
+            .position(|name| name.starts_with("Side-"))
+            .unwrap();
+        let app_at = listed
+            .iter()
+            .position(|name| name.starts_with("App-"))
+            .unwrap();
+        assert!(side < app_at, "{listed:?}");
+        assert_eq!(
+            report
+                .installed
+                .iter()
+                .map(|key| key.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Mid"]
+        );
+
+        let root_installed = |key: &ModuleKey| key.name == "App";
+        let empty =
+            build_order_against_installed(&all, &["App".into()], Choice::Newest, &root_installed)
+                .expect("installed root");
+        assert!(empty.order.is_empty(), "{:?}", names(&empty.order));
+        assert_eq!(empty.installed.len(), 1);
+
+        let plain = build_order(&all, &["App".into()], Choice::Newest).expect("plain");
+        assert!(names(&plain).iter().any(|name| name.starts_with("Base-")));
+        assert!(names(&plain).iter().any(|name| name.starts_with("Mid-")));
     }
 }

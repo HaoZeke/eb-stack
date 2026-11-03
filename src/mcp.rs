@@ -355,7 +355,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_order",
-            "Order every pinned build a set of roots needs, and write the same order, easystack, and hash files as `stack order`.",
+            "Order every pinned build a set of roots needs, and write the same order, easystack, and hash files as `stack order`. filter_deps drops dependencies the way --filter-deps does. installed is a module list or an Lmod tree; a module it names is left out of the order, and so are the dependencies that were installed with it.",
             &[("easyconfigs", "array"), ("root", "array")],
             &[
                 ("out", "string"),
@@ -363,6 +363,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("easystack_out", "string"),
                 ("hashes_out", "string"),
                 ("filter_deps", "array"),
+                ("installed", "array"),
             ],
         ),
         tool_with_optional(
@@ -2991,6 +2992,7 @@ fn stack_order_tool(arguments: &Value) -> Result<Value, String> {
         easystack_out: optional_path(arguments, "easystack_out"),
         hashes_out: optional_path(arguments, "hashes_out"),
         filter_deps: filter_dep_specs(arguments)?,
+        installed: optional_paths(arguments, "installed")?,
     })
     .map_err(workflow_error)?;
     let multiple = report
@@ -3012,6 +3014,7 @@ fn stack_order_tool(arguments: &Value) -> Result<Value, String> {
         "multiple": multiple,
         "easystack": report.easystack,
         "hashes": hashes,
+        "installed": report.installed_modules,
     }))
 }
 

@@ -17,7 +17,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Default `--out` for `stack order`.
@@ -126,6 +126,8 @@ pub struct StackOrderRequest {
     ///
     /// Empty means read `EASYBUILD_FILTER_DEPS`.
     pub filter_deps: Vec<String>,
+    /// Installed-module lists or Lmod trees. A module they name is a leaf.
+    pub installed: Vec<PathBuf>,
 }
 
 /// Hash file `stack order --hashes-out` wrote.
@@ -152,6 +154,10 @@ pub struct StackOrderReport {
     pub easystack: Option<PathBuf>,
     /// Hash-file summary when one was written.
     pub hashes: Option<StackOrderHashes>,
+    /// Installed modules the walk stopped at, when `--installed` was given.
+    ///
+    /// `None` when the command was not asked to read an installed list.
+    pub installed_modules: Option<usize>,
 }
 
 /// Order the builds `roots` need and write the files the CLI writes.
@@ -177,8 +183,25 @@ pub fn stack_order(request: &StackOrderRequest) -> Result<StackOrderReport> {
     let mut candidates = parsed.candidates;
     let specs = crate::dep_filter::specs_from_cli_or_env(&request.filter_deps);
     filter_deps(&mut candidates, &specs)?;
-    let order = build_order::build_order(&candidates, &request.roots, choice)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    // `--filter-deps` runs first, so a filtered dependency is gone before
+    // the installed list is consulted and is not counted as a leaf.
+    // The walk that remains uses the same hierarchy as `build_order`,
+    // including the synthetic GCC-family rule `recipe hierarchy --export`
+    // describes.
+    let installed_names = if request.installed.is_empty() {
+        None
+    } else {
+        Some(installed_module_names(&request.installed)?)
+    };
+    let stop = |key: &ModuleKey| {
+        installed_names
+            .as_ref()
+            .is_some_and(|names| names.contains(&build_order::module_name(key)))
+    };
+    let ordered =
+        build_order::build_order_against_installed(&candidates, &request.roots, choice, &stop)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let order = ordered.order;
     std::fs::write(&request.out, build_order::format_order(&order))?;
     let multi = build_order::multi_build_names(&order);
     let multiple: Vec<(String, Vec<String>)> = multi
@@ -207,8 +230,9 @@ pub fn stack_order(request: &StackOrderRequest) -> Result<StackOrderReport> {
     }
 
     let hashes = if let Some(path) = request.hashes_out.as_deref() {
-        let graph = build_order::build_graph(&candidates, &request.roots, choice)
-            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        let (graph, _) =
+            build_order::build_graph_against_installed(&candidates, &request.roots, choice, &stop)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
         let sequence: Vec<ModuleKey> = order.iter().map(ModuleKey::of).collect();
         let recipe_paths: BTreeMap<ModuleKey, String> = order
             .iter()
@@ -238,6 +262,9 @@ pub fn stack_order(request: &StackOrderRequest) -> Result<StackOrderReport> {
         None
     };
 
+    if installed_names.is_some() {
+        stdout.push_str(&format!("installed={}\n", ordered.installed.len()));
+    }
     stdout.push_str(&format!(
         "order={} builds={}\n",
         request.out.display(),
@@ -250,7 +277,26 @@ pub fn stack_order(request: &StackOrderRequest) -> Result<StackOrderReport> {
         multiple,
         easystack: request.easystack_out.clone(),
         hashes,
+        installed_modules: installed_names.as_ref().map(|_| ordered.installed.len()),
     })
+}
+
+/// Module strings an installed list or Lmod tree names, `Name/version`.
+///
+/// The version is the full module version. A bare name has no version and
+/// matches nothing: it does not mark every build of that name installed.
+fn installed_module_names(paths: &[PathBuf]) -> Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for path in paths {
+        let inventory = crate::gap::inventory_from_module_source(path)
+            .with_context(|| format!("--installed {}", path.display()))?;
+        for (name, versions) in inventory {
+            for version in versions {
+                names.insert(format!("{name}/{version}"));
+            }
+        }
+    }
+    Ok(names)
 }
 
 /// Arguments for `stack easystack`.
