@@ -25,7 +25,7 @@ eb-stack component-reach \
 The command prints:
 
 #+begin_example
-component=curl version=>=8,<9 generation=2026.1 carriers=2 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/component-reach
+component=curl version=>=8,<9 generation=2026.1 reach=network-facing carriers=2 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/component-reach
 #+end_example
 
 cURL 8.17.0 is the module. git 2.52.0 depends on that cURL and is the
@@ -50,12 +50,15 @@ eb-stack component-reach \
 The command prints:
 
 #+begin_example
-component=curl version=>=8,<9 generation=2026.1 carriers=23 changed=2 must-rebuild=1 review=106 no-rebuild=16 out=/tmp/component-reach-full
+component=curl version=>=8,<9 generation=2026.1 reach=network-facing carriers=23 changed=2 must-rebuild=1 review=106 no-rebuild=16 out=/tmp/component-reach-full
 #+end_example
 
-The changed files are ~cURL-8.17.0-GCCcore-15.2.0.eb~ and
-~cargo-c-0.10.23-GCCcore-15.2.0.eb~. The must-rebuild row is
-~cURL/8.17.0-GCCcore-15.2.0~, reason ~patched easyconfig~.
+The changed files are ~cURL-8.17.0-GCCcore-15.2.0.eb~ and ~cargo-c-0.10.23-GCCcore-15.2.0.eb~.
+The must-rebuild row is ~cURL/8.17.0-GCCcore-15.2.0~, reason ~patched easyconfig~.
+The summary's ~reach=~ is the class of the component name: ~cross-user~, ~network-facing~, ~local-only~, ~not-reachable~, or ~unclassified~ when the built-in names do not include it.
+~component-reach~ reads no site file.
+~cross-user~ and ~network-facing~ justify a backport.
+cURL is ~network-facing~.
 
 ~--easystack~ and ~--installed~ narrow the walk to a deployed prefix.
 ~--filter-deps~ drops dependency tuples before the closure walk. When

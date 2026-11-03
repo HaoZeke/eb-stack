@@ -1075,7 +1075,7 @@ enum StackCommand {
     Solve(Box<SolveArgs>),
     /// Emit CycloneDX from an existing stack lock.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json"
+        after_long_help = "Examples:\n  eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json\n  eb-stack stack sbom --lock stack.lock.json --backport-list backport.md --osv-cache osv/ --reachability reach.txt"
     )]
     Sbom {
         /// Stack lock JSON written by `stack solve`.
@@ -1084,6 +1084,23 @@ enum StackCommand {
         /// CycloneDX file to write. A single file, so this is `--out` rather than `--out-dir`.
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
+        /// Markdown backport list for this lock. A path ending in `.md` also
+        /// writes the sibling `.json`.
+        #[arg(long)]
+        backport_list: Option<PathBuf>,
+        /// Advisory id to resolve through OSV. Repeatable. Needs `--backport-list`.
+        #[arg(long)]
+        cve: Vec<String>,
+        /// Directory of recorded OSV responses (`queries.json` and the bodies
+        /// it names). Needs `--backport-list`. Without `--cve`, every id in
+        /// that file is resolved.
+        #[arg(long)]
+        osv_cache: Option<PathBuf>,
+        /// Site reachability file, one `name class` per line. Needs
+        /// `--backport-list`. The classes are `cross-user`, `network-facing`,
+        /// `local-only`, and `not-reachable`.
+        #[arg(long)]
+        reachability: Option<PathBuf>,
     },
     /// Order the builds a set of roots needs, as a graph rather than a stack.
     ///
@@ -3292,7 +3309,24 @@ fn run_stack(command: StackCommand) -> Result<()> {
             }
             Ok(())
         }
-        StackCommand::Sbom { lock, out } => {
+        StackCommand::Sbom {
+            lock,
+            out,
+            backport_list,
+            cve,
+            osv_cache,
+            reachability,
+        } => {
+            if backport_list.is_none()
+                && (!cve.is_empty() || osv_cache.is_some() || reachability.is_some())
+            {
+                return Err(usage(
+                    "--cve, --osv-cache, and --reachability need --backport-list",
+                ));
+            }
+            if backport_list.is_some() && cve.is_empty() && osv_cache.is_none() {
+                return Err(usage("--backport-list needs --cve or --osv-cache"));
+            }
             let loaded: StackLock = load_lock_file(&lock)?;
             let (sbom, stats) = eb_stack::lock_to_cyclonedx_from_recipes(&loaded, &lock);
             write_json_pretty(&out, &sbom)?;
@@ -3304,6 +3338,24 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 stats.recipes_unreadable,
                 stats.with_artifact_facts
             );
+            if let Some(path) = &backport_list {
+                let document =
+                    eb_stack::backport::backport_list(&eb_stack::backport::BackportRequest {
+                        lock: &loaded,
+                        lock_path: &lock,
+                        cves: &cve,
+                        osv_cache: osv_cache.as_deref(),
+                        reachability: reachability.as_deref(),
+                    })?;
+                eb_stack::backport::write_backport(path, &document)?;
+                println!(
+                    "backport={} recorded={} stack={} out={}",
+                    document.listed,
+                    document.recorded,
+                    document.stack_modules,
+                    path.display()
+                );
+            }
             Ok(())
         }
     }

@@ -62,6 +62,15 @@ that name is also in the lock. A path that cannot be read contributes
 nothing for that component. ~--sbom-out~ during ~stack solve~ writes the
 same document while the candidate graph is still in memory.
 
+~--backport-list~ writes the locked modules whose reach class justifies a backport.
+Pass ~--cve~ or ~--osv-cache~.
+~--osv-cache~ reads recorded Open Source Vulnerabilities (OSV) responses and does not query the network when ~--cve~ is omitted.
+~--reachability~ adds or replaces a class.
+Blast radius is the module and every locked module that depends on it through a runtime or build edge.
+~cross-user~ and ~network-facing~ are the list.
+~local-only~, ~not-reachable~, and ~unclassified~ are recorded and left off it.
+See [[file:../reference/cli.org][the CLI reference]].
+
 * Order every pinned build
 
 ~stack solve~ picks one version of each name. ~stack order~ keeps every

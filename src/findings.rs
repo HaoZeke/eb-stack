@@ -233,6 +233,28 @@ impl ReachTable {
     }
 }
 
+/// Reach class of each easyconfig filename.
+///
+/// The name is the toolchain split, then the same fallback as
+/// [`crate::gap::software_name`]. The class is [`ReachTable::class_of`] on
+/// that name. Filenames stay in the order `files` gives them only as map
+/// keys; a [`std::collections::BTreeMap`] sorts them.
+pub fn reach_for_easyconfigs(table: &ReachTable, files: &[String]) -> BTreeMap<String, String> {
+    files
+        .iter()
+        .map(|file| {
+            let owned = crate::gap::software_name(file).unwrap_or_else(|| {
+                file.rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(file.as_str())
+                    .to_string()
+            });
+            let class = table.class_of(&owned, &[owned.as_str()]);
+            (file.clone(), class)
+        })
+        .collect()
+}
+
 fn parse_reachability(text: &str) -> Result<BTreeMap<String, String>, ReachabilityError> {
     let mut site = BTreeMap::new();
     for (index, raw) in text.lines().enumerate() {
@@ -1778,6 +1800,7 @@ Medium,\"GHSA-a,b\",\"py \"\"x\"\"\",2.0,2.1,not-fixed,PyApp/1.0-GCCcore-15.2.0\
                 must_rebuild: 0,
             },
             rows,
+            reach: BTreeMap::new(),
         }
     }
 

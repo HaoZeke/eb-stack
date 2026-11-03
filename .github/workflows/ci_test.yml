@@ -160,6 +160,7 @@ jobs:
           cargo test --locked \
             --test arch_known_failures \
             --test arch_unsupported \
+            --test backport_list \
             --test baseline_easystack \
             --test batch_versions \
             --test bot_classify \

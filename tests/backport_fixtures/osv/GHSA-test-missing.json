@@ -1,0 +1,7 @@
+{
+  "id": "GHSA-test-missing",
+  "affected": [{
+    "package": {"ecosystem": "PyPI", "name": "jupyter_server", "purl": "pkg:pypi/jupyter-server"},
+    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "2.20.0"}]}]
+  }]
+}

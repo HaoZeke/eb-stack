@@ -43,13 +43,15 @@ Flags and exit status stay in the [[file:cli.org][command-line reference]].
   ~stack.lock.json~ for a whole stack. A ~preferred~ pin may fall back
   inside the solver. A ~locked~ pin may not.
 
-- reachability :: Four checks, not one word. Host reachability is whether
-  a target's SSH, rsync, or staging path answers; a failure is a
-  ~transport~ finding. ~component-reach~ lists modules in one generation
-  that carry a named component. ~easyblock-reach~ lists easyconfigs that
-  use a changed class. ~stack arch --probe-sources~ reports ~unreachable~
-  when no probed architecture family can fetch a source, and
-  ~arch-missing~ when another family can.
+- reachability :: Four checks, not one word.
+  Host reachability is whether a target's SSH, rsync, or staging path answers; a failure is a ~transport~ finding.
+  ~component-reach~ lists modules in one generation that carry a named component.
+  ~easyblock-reach~ lists easyconfigs that use a changed class.
+  ~stack arch --probe-sources~ reports ~unreachable~ when no probed architecture family can fetch a source, and ~arch-missing~ when another family can.
+  A security finding's class is ~cross-user~, ~network-facing~, ~local-only~, or ~not-reachable~.
+  ~component-reach~ and ~rebuild-set~ record that class.
+  ~unclassified~ means neither the built-in names nor a ~--reachability~ file names the package.
+  Only ~cross-user~ and ~network-facing~ justify a backport.
 
 - Resolvo :: The conflict-driven clause learning (CDCL) Boolean
   satisfiability (SAT) solver

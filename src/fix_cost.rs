@@ -1457,6 +1457,7 @@ mod tests {
                 review: 0,
                 must_rebuild: 0,
             },
+            reach: std::collections::BTreeMap::new(),
             rows,
         }
     }

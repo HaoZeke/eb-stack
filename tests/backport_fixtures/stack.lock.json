@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "toolchain": {
+    "name": "GCCcore",
+    "version": "15.2.0"
+  },
+  "generation_label": "GCCcore-15.2.0",
+  "packages": [
+    {
+      "name": "App",
+      "version": "1.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/App-1.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "Mystery",
+      "version": "1.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/Mystery-1.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "WinOnly",
+      "version": "1.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/WinOnly-1.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "cURL",
+      "version": "8.17.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/cURL-8.17.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "git",
+      "version": "2.52.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/git-2.52.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "notebook",
+      "version": "7.4.0",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/notebook-7.4.0-GCCcore-15.2.0.eb"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "toolchain": {
+        "name": "GCCcore",
+        "version": "15.2.0"
+      },
+      "easyconfig_path": "eb/zlib-1.3.1-GCCcore-15.2.0.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo",
+    "engine_version": "test",
+    "timestamp": "2026-11-01T00:00:00Z",
+    "criteria": []
+  }
+}

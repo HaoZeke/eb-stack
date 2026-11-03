@@ -15,7 +15,11 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 
 /// Schema of [`ReachDocument`].
-pub const COMPONENT_REACH_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 adds `reach`: `cross-user`, `network-facing`, `local-only`,
+/// `not-reachable`, or `unclassified` when the built-in names do not include
+/// the component. `component-reach` reads no site file.
+pub const COMPONENT_REACH_SCHEMA_VERSION: u32 = 2;
 
 /// One run. `version_req` is an exact version, `*`, or a requirement.
 pub struct ReachQuery<'a> {
@@ -93,6 +97,12 @@ pub struct ReachDocument {
     pub ecosystem: Option<String>,
     /// Toolchain generation.
     pub generation: String,
+    /// Reach class of the component name.
+    ///
+    /// `cross-user` and `network-facing` justify a backport. `local-only`
+    /// and `not-reachable` do not. `unclassified` means the built-in names
+    /// do not include this component.
+    pub reach: String,
     /// Who carries it.
     pub carriers: Vec<Carrier>,
     /// Recipes that contain the component, fed to the closure.
@@ -201,6 +211,8 @@ pub fn component_reach(query: &ReachQuery<'_>) -> ReachDocument {
         closure_counts.review = 1;
     }
     notes.extend(extra);
+    let reach =
+        crate::findings::ReachTable::builtin().class_of(query.component, &[query.component]);
     let mut version_reqs = Vec::new();
     if !query.version_req.is_empty() {
         version_reqs.push(query.version_req.to_string());
@@ -220,6 +232,7 @@ pub fn component_reach(query: &ReachQuery<'_>) -> ReachDocument {
         purl: query.purl.map(str::to_string),
         ecosystem: query.ecosystem.map(str::to_string),
         generation: query.generation.to_string(),
+        reach,
         carriers,
         changed,
         closure_counts,
@@ -242,11 +255,12 @@ pub fn render_markdown(document: &ReachDocument) -> String {
         "*".to_string()
     };
     out.push_str(&format!(
-        "Computed {} for `{}` `{requirement}` in generation `{}`.\n\n{} carriers. Closure: {} must-rebuild, {} review, {} no-rebuild.\n\n",
+        "Computed {} for `{}` `{requirement}` in generation `{}`.\n\n{} carriers. Reach: `{}`. Closure: {} must-rebuild, {} review, {} no-rebuild.\n\n",
         document.generated_at,
         document.component,
         document.generation,
         document.carriers.len(),
+        document.reach,
         document.closure_counts.must_rebuild,
         document.closure_counts.review,
         document.closure_counts.no_rebuild
@@ -1170,7 +1184,11 @@ mod tests {
             .any(|row| row.dependent.starts_with("git/") && row.class == "no-rebuild"));
         let rendered = to_toml(&curl).unwrap();
         assert!(rendered.starts_with(HEADER));
+        assert_eq!(curl.reach, "network-facing");
+        assert!(render_markdown(&curl).contains("Reach: `network-facing`"));
         assert!(render_markdown(&curl).contains("no-rebuild"));
+        assert_eq!(run("jupyterlab").reach, "cross-user");
+        assert_eq!(run("zlib").reach, "unclassified");
         assert!(run("urllib3")
             .carriers
             .iter()
