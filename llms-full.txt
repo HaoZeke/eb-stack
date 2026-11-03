@@ -157,6 +157,20 @@ Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/e
 
   MIT License. See [LICENSE](https://github.com/HaoZeke/eb-stack/blob/main/LICENSE) in the repository.
 
+# Discovery
+
+  [llms.txt](https://github.com/HaoZeke/eb-stack/blob/main/llms.txt) indexes
+  this manual.
+  [llms-full.txt](https://github.com/HaoZeke/eb-stack/blob/main/llms-full.txt)
+  repeats every page in one file.
+  [AGENTS.md](https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md) lists
+  the build, test, lint, and docs commands. The skills for inspect, plan,
+  bump, a stack SBOM, pull-request overlap, and the stdio server are under
+  [skills/](https://github.com/HaoZeke/eb-stack/tree/main/skills). The Model
+  Context Protocol manifest is
+  [server.json](https://github.com/HaoZeke/eb-stack/blob/main/server.json).
+  Client configuration is the [server page](https://eb-stack.rgoswami.me/reference/mcp.html.md).
+
 # Build these docs
 
 ```bash
