@@ -3747,6 +3747,52 @@ fn mcp_repro_summary_matches_the_cli() {
 }
 
 #[test]
+fn mcp_org_lists_a_tool_per_cli_command() {
+    let page = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/orgmode/reference/mcp.org"),
+    )
+    .expect("read mcp.org");
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let names = listed["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    let mut commands = 0;
+    for leaf in cli_leaves() {
+        if leaf.as_slice() == ["mcp"] {
+            continue;
+        }
+        commands += 1;
+        let tool = format!("eb_{}", leaf.join("_").replace('-', "_"));
+        assert!(
+            names.contains(&tool.as_str()),
+            "CLI subcommand {} has no MCP tool",
+            leaf.join(" ")
+        );
+        assert!(
+            page.contains(&format!("~{tool}~")),
+            "docs/orgmode/reference/mcp.org does not list {tool} for {}",
+            leaf.join(" ")
+        );
+    }
+    assert!(commands > 0, "help listed no CLI commands");
+    for name in &names {
+        assert!(
+            page.contains(&format!("~{name}~")),
+            "docs/orgmode/reference/mcp.org does not list tool {name}"
+        );
+    }
+}
+
+#[test]
 fn every_cli_subcommand_has_an_mcp_tool() {
     let mapped = [
         ("eb_package_inspect", &["package", "inspect"][..]),

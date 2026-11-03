@@ -88,7 +88,71 @@ absolute path there.
 
 * Tools
 
-~tools/list~ returns the workflows of ~package~, ~recipe~, ~stack~,
-~target~, ~campaign~, and ~repro~, plus ~pr-overlap~, ~rebuild-set~,
-~component-reach~, and ~easyblock-reach~. ~eb_build_test~ runs only
-when ~EB_STACK_ALLOW_BUILD=1~.
+The catalog has 51 tools. ~tools/list~ returns one tool for each CLI
+command in the table, and the recipe and easyblock tools that have no
+command. ~mcp~ publishes that catalog and has no tool of its own. Each
+command's tool calls the same runner as that command. The ~text~ field
+of a successful result is that command's stdout. Each argument is a
+name in the schema ~tools/list~ returns. The
+[[file:cli.org][CLI reference]] records the flags.
+
+| Command | Tool |
+|-
+| ~package inspect~ | ~eb_package_inspect~ |
+| ~package plan~ | ~eb_package_plan~ |
+| ~package bump~ | ~eb_package_bump~ |
+| ~package latest~ | ~eb_package_latest~ |
+| ~recipe easyblock~ | ~eb_recipe_easyblock~ |
+| ~recipe templates~ | ~eb_recipe_templates~ |
+| ~recipe hierarchy~ | ~eb_recipe_hierarchy~ |
+| ~recipe check~ | ~eb_recipe_check~ |
+| ~recipe lint~ | ~eb_recipe_lint~ |
+| ~recipe format~ | ~eb_recipe_format~ |
+| ~stack solve~ | ~eb_stack_solve~ |
+| ~stack sbom~ | ~eb_stack_sbom~ |
+| ~stack order~ | ~eb_stack_order~ |
+| ~stack gap~ | ~eb_stack_gap~ |
+| ~stack provided~ | ~eb_stack_provided~ |
+| ~stack shadow~ | ~eb_stack_shadow~ |
+| ~stack batch~ | ~eb_stack_batch~ |
+| ~stack shard~ | ~eb_stack_shard~ |
+| ~stack easystack~ | ~eb_stack_easystack~ |
+| ~stack sections~ | ~eb_stack_sections~ |
+| ~stack from-commit~ | ~eb_stack_from_commit~ |
+| ~stack arch~ | ~eb_stack_arch~ |
+| ~stack files~ | ~eb_stack_files~ |
+| ~stack generation~ | ~eb_stack_generation~ |
+| ~stack cuda-cc~ | ~eb_stack_cuda_cc~ |
+| ~stack known-failures~ | ~eb_stack_known_failures~ |
+| ~stack oom~ | ~eb_stack_oom~ |
+| ~stack bot-classify~ | ~eb_stack_bot_classify~ |
+| ~target list~ | ~eb_target_list~ |
+| ~target doctor~ | ~eb_target_doctor~ |
+| ~campaign run~ | ~eb_campaign_run~ |
+| ~campaign status~ | ~eb_campaign_status~ |
+| ~campaign finding claim~ | ~eb_campaign_finding_claim~ |
+| ~campaign finding resolve~ | ~eb_campaign_finding_resolve~ |
+| ~repro summary~ | ~eb_repro_summary~ |
+| ~easyblock-reach~ | ~eb_easyblock_reach~ |
+| ~pr-overlap~ | ~eb_pr_overlap~ |
+| ~rebuild-set~ | ~eb_rebuild_set~ |
+| ~component-reach~ | ~eb_component_reach~ |
+
+These tools edit files or run EasyBuild. They are not CLI commands.
+
+| Tool | Role |
+|-
+| ~eb_recipe_read~ | Read one UTF-8 file inside the workspace root |
+| ~eb_recipe_list~ | List one directory inside the workspace root |
+| ~eb_recipe_edit~ | Replace an exact string in a workspace file |
+| ~eb_recipe_apply_suggestion~ | Apply a review suggestion to the lines it is anchored on |
+| ~eb_recipe_diff~ | Show what changed in each recipe since the server first saw it |
+| ~eb_recipe_write~ | Create or overwrite a UTF-8 file inside the workspace root |
+| ~eb_recipe_grep~ | Search workspace files for a literal, or a regular expression |
+| ~eb_dep_versions~ | List easyconfig versions of one dependency in a local tree |
+| ~eb_module_lint~ | Check Python modules that ship with recipes |
+| ~eb_easyblock_dry_run~ | Run ~eb -x~ and return the commands the easyblock generates |
+| ~eb_build_log~ | Read an EasyBuild log by step |
+| ~eb_build_test~ | Run a build |
+
+~eb_build_test~ runs only when ~EB_STACK_ALLOW_BUILD=1~.

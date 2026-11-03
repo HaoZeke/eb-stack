@@ -1768,7 +1768,8 @@ plus sandboxed recipe and easyblock tools:
   (easyblocks; ~eb_build_test~ only with ~EB_STACK_ALLOW_BUILD=1~);
 - ~eb_stack_solve~, ~eb_stack_sbom~, ~eb_stack_order~,
   ~eb_stack_easystack~, ~eb_stack_gap~, ~eb_stack_provided~,
-  ~eb_stack_batch~, ~eb_stack_shard~, ~eb_stack_arch~, ~eb_stack_files~,
+  ~eb_stack_shadow~, ~eb_stack_batch~, ~eb_stack_shard~,
+  ~eb_stack_arch~, ~eb_stack_files~,
   ~eb_stack_generation~, ~eb_stack_cuda_cc~, ~eb_stack_known_failures~,
   ~eb_stack_oom~, ~eb_stack_bot_classify~, ~eb_stack_sections~,
   ~eb_stack_from_commit~;
@@ -1830,8 +1831,10 @@ requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~licensed_file~, ~json~, ~format~, and ~strict~. A hit, an unparsed
 line, a wrong toolchain, a ~--hooks~ flag, or a family-lock name is a
 tool error. A licensed warning is not, unless ~strict~ is true. The
-text is the same report as ~stack provided~. ~eb_stack_arch~ requires
-~easystack~ and takes
+text is the same report as ~stack provided~. ~eb_stack_shadow~
+requires ~easyconfigs~ and ~base~, and takes ~json~. It returns the
+same report as ~stack shadow~. A shadow, or a recipe that does not
+parse, is a tool error. ~eb_stack_arch~ requires ~easystack~ and takes
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
 ~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the
 same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
