@@ -262,8 +262,9 @@ hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/integers.
 #+end_example
 
 The libxc and A64FX rows of ~integers.py~ are the ones in the bot
-resource table, so ~--node~ prints the same parallel levels with and
-without it. For the real hooks, pass the file from a software-layer-scripts
+resource table, so ~--node~ (see
+[[*A memory limit instead of a core fraction][below]]) prints the same
+parallel levels with and without it. For the real hooks, pass the file from a software-layer-scripts
 checkout, ~--hooks software-layer-scripts/eb_hooks.py~.
 
 A key is a string or a module-level string constant such as
@@ -299,7 +300,8 @@ it is below EasyBuild's level. EasyBuild's level comes from
 core count when it is set, capped at the easyconfig's ~maxparallel~ and
 at ~--max-parallel~ (~EASYBUILD_MAX_PARALLEL~, 16 by default). The bot
 sets neither. ~stack oom --parallel N~ and ~--max-parallel N~ model a
-job that does:
+job that does. ~--node CORES:MEMORY_MIB:TARGET~ prints the levels for
+one node size:
 
 #+begin_src bash
 eb-stack stack oom \
