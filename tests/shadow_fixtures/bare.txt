@@ -1,0 +1,2 @@
+# a base name with no version, as module -t avail can print one
+OnlyName

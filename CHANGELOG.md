@@ -6,6 +6,14 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack shadow` reports a site-layer recipe that shadows a module the
+  EESSI base stack already provides. `--base` is an Lmod tree or a module
+  listing, loaded with the same inventory reader as `stack gap`. The same
+  software version is `same`, another version of that name is `different`,
+  and a base name with no recorded version is `unversioned`. A name the
+  base does not have is not reported. The command exits 1 when any recipe
+  shadows, or when a recipe does not parse. `eb_stack_shadow` is the same
+  check.
 - `stack provided` includes the one-based build-list line on every
   `provided` and `unparsed` finding in its text report, as it already did for
   hook, toolchain, family-lock, and licensed findings.

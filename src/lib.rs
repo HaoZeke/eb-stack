@@ -78,6 +78,7 @@ pub mod repro_report;
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
+pub mod shadow;
 pub mod shard;
 pub mod site_commands;
 pub mod source_fetch;

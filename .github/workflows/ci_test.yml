@@ -180,6 +180,7 @@ jobs:
             --test generation_lint \
             --test stack_gap \
             --test stack_provided \
+            --test stack_shadow \
             --test stack_shard \
             --test hierarchy_universe \
             --test jenkins_build_list \

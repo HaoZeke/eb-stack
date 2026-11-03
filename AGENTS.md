@@ -73,7 +73,7 @@ lint findings remain, and do not comment on the PR.
 ```text
 package  inspect | plan | bump
 recipe   easyblock | templates | hierarchy | check | lint | format
-stack    solve | sbom | order | easystack | sections | from-commit | gap | provided | batch | shard | arch | files | generation | cuda-cc | known-failures | oom | bot-classify
+stack    solve | sbom | order | easystack | sections | from-commit | gap | provided | shadow | batch | shard | arch | files | generation | cuda-cc | known-failures | oom | bot-classify
 target   list | doctor
 campaign run | status | finding claim | finding resolve
 repro    summary

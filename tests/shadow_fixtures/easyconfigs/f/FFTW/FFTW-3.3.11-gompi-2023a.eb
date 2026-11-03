@@ -1,0 +1,15 @@
+easyblock = 'ConfigureMake'
+
+name = 'FFTW'
+version = '3.3.11'
+
+homepage = 'https://example.org/fftw'
+description = "Site recipe at a different version from the EESSI module."
+
+toolchain = {'name': 'gompi', 'version': '2023a'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'numlib'

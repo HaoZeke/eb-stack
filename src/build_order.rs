@@ -321,14 +321,22 @@ pub enum Choice {
     Oldest,
 }
 
+/// Between the software version and the toolchain name, and between the
+/// toolchain name and the toolchain version, in an installed module version.
+pub(crate) const MODULE_VERSION_TOOLCHAIN_SEPARATOR: &str = "-";
+
 /// The part of a module name after the `/`: version, then the toolchain unless
 /// it is the system one, then the versionsuffix.
+///
+/// [`installed_module_version`] is the same string. A system toolchain
+/// contributes no toolchain segment.
 fn module_version(candidate: &Candidate) -> String {
+    let sep = MODULE_VERSION_TOOLCHAIN_SEPARATOR;
     let toolchain = if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
         String::new()
     } else {
         format!(
-            "-{}-{}",
+            "{sep}{}{sep}{}",
             candidate.toolchain.name, candidate.toolchain.version
         )
     };
@@ -337,6 +345,15 @@ fn module_version(candidate: &Candidate) -> String {
         candidate.version,
         candidate.versionsuffix.as_deref().unwrap_or("")
     )
+}
+
+/// Module version EasyBuild installs for `candidate`.
+///
+/// The software version, then the toolchain unless it is the system
+/// toolchain, then the versionsuffix. `stack shadow` compares a base-stack
+/// module version with this spelling.
+pub(crate) fn installed_module_version(candidate: &Candidate) -> String {
+    module_version(candidate)
 }
 
 /// Whether a candidate satisfies one stated dependency.
