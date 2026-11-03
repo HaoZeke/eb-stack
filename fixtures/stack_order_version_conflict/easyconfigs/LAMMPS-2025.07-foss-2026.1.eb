@@ -1,0 +1,8 @@
+name = 'LAMMPS'
+version = '2025.07'
+homepage = 'https://www.lammps.org'
+description = "Fixture: runtime dependency on Eigen 3.4.1."
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('Eigen', '3.4.1'),
+]

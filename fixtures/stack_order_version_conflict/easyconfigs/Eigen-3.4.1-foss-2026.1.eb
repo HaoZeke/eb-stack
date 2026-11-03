@@ -1,0 +1,5 @@
+name = 'Eigen'
+version = '3.4.1'
+homepage = 'https://eigen.tuxfamily.org'
+description = "Fixture for two runtime pins of Eigen at one toolchain."
+toolchain = {'name': 'foss', 'version': '2026.1'}

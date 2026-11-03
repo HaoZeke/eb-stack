@@ -1347,6 +1347,43 @@ mod tests {
         assert!(at("Lib") < at("App"), "{seq:?}");
     }
 
+    /// Eigen 3.4.1 and 5.0.0 are the runtime pair in
+    /// `a_runtime_dependency_still_takes_one_version_per_stack`. LAMMPS and
+    /// SciPy-bundle are the two requesters. One toolchain, two exact pins,
+    /// no version satisfies both.
+    #[test]
+    fn two_runtime_versions_of_one_dependency_are_refused() {
+        let foss = tc("foss", "2026.1");
+        let all = vec![
+            candidate("Eigen", "3.4.1", foss.clone(), vec![]),
+            candidate("Eigen", "5.0.0", foss.clone(), vec![]),
+            candidate(
+                "LAMMPS",
+                "2025.07",
+                foss.clone(),
+                vec![dep("Eigen", "==3.4.1", None)],
+            ),
+            candidate(
+                "SciPy-bundle",
+                "2026.06",
+                foss,
+                vec![dep("Eigen", "==5.0.0", None)],
+            ),
+        ];
+        let err = build_order(
+            &all,
+            &["LAMMPS".into(), "SciPy-bundle".into()],
+            Choice::Newest,
+        )
+        .expect_err("two Eigen versions must not be ordered");
+        let shown = err.to_string();
+        assert!(shown.contains("Eigen"), "{shown}");
+        assert!(shown.contains("3.4.1"), "{shown}");
+        assert!(shown.contains("5.0.0"), "{shown}");
+        assert!(shown.contains("LAMMPS"), "{shown}");
+        assert!(shown.contains("SciPy-bundle"), "{shown}");
+    }
+
     /// The case a stack solve cannot express: two builds of one name, both
     /// required, both installed side by side as different modules.
     #[test]

@@ -1,0 +1,8 @@
+name = 'SciPy-bundle'
+version = '2026.06'
+homepage = 'https://scipy.org'
+description = "Fixture: runtime dependency on Eigen 5.0.0."
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('Eigen', '5.0.0'),
+]
