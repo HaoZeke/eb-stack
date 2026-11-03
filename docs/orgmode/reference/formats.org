@@ -217,12 +217,18 @@ solver selection, not a scan of installed software.
 
 * Build order (~stack order --out~)
 
-One easyconfig path per line, in dependency order. A generation that
-builds one name twice lists both paths. ~--oldest~ changes which unpinned
-version is chosen; it does not change the file shape.
+One easyconfig path per line, in dependency order. A name EasyBuild
+installs twice lists both paths: another toolchain, a system bootstrap
+pair, or a build-only tool. ~--oldest~ changes which unpinned version is
+chosen; it does not change the file shape. When runtime requirements of
+one name at one toolchain have no version that satisfies every one of
+them, the command writes no file and exits 1. Standard error names each
+requester and the version it resolved. The file is not a place where a
+pin is rewritten.
 
-Stdout names a repeated build as ~multiple builds of <name>: <ver-tc>, ...~
-and ends with ~order=<path> builds=<N>~.
+Stdout names a co-installable repeated build as
+~multiple builds of <name>: <ver-tc>, ...~ and ends with
+~order=<path> builds=<N>~.
 
 * Input hashes (~--hashes-out~)
 

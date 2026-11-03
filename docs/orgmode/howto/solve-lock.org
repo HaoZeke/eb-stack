@@ -73,9 +73,37 @@ See [[file:../reference/cli.org][the CLI reference]].
 
 * Order every pinned build
 
-~stack solve~ picks one version of each name. ~stack order~ keeps every
-pinned build, and a name can stay twice. ~stack order~ writes the builds
-in dependency order:
+~stack solve~ picks one version of each name. ~stack order~ sequences the
+builds the recipes pin. A name stays twice when EasyBuild installs the
+two builds side by side. That is the same package key ~stack solve~ uses:
+another toolchain (Perl at GCCcore and at SYSTEM), a system bootstrap
+pair (binutils 2.40 and 2.42), or a build-only tool (CMake 3.31.11 and
+4.2.1, loaded only while the recipe that names it builds).
+
+A runtime dependency has to agree on one version per toolchain. When no
+version satisfies every such requirement, ~stack order~ exits 1 and names
+each requester and the version it resolved. It writes no order file. It
+does not repin a recipe. Choosing which exact pin to keep is the decision
+~stack solve~ already rejects, and rewriting the pin would describe a
+build the easyconfig does not ask for. An unpinned requirement that still
+admits the pinned version is not this refusal: each recipe keeps the
+module its own resolution selected.
+
+Eigen 3.4.1 required by LAMMPS and Eigen 5.0.0 required by SciPy-bundle,
+both at ~foss/2026.1~, is that refusal. The fixture is
+~fixtures/stack_order_version_conflict~.
+
+#+begin_src bash
+eb-stack stack order \
+  --easyconfigs fixtures/stack_order_version_conflict/easyconfigs \
+  --root LAMMPS --root SciPy-bundle \
+  --out /tmp/build-order.txt
+#+end_src
+
+Standard error names both requesters. ~stack solve~ of the same roots
+with ~--toolchain foss/2026.1~ reports the same conflict.
+
+~stack order~ writes a successful closure in dependency order:
 
 #+begin_src bash
 eb-stack stack order \
