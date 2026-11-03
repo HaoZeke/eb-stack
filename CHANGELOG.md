@@ -38,6 +38,10 @@ All notable changes to this project are documented here.
   with the synthetic GCC-family rule `recipe hierarchy --export`
   prints. Stdout reports `installed=` as how many modules the walk
   stopped at. `eb_stack_order` takes the same `installed` list.
+- The Model Context Protocol manual lists one tool for every CLI
+  command. `docs/orgmode/reference/mcp.org` names each tool, including
+  the recipe and easyblock tools that have no command. A test fails
+  when a subcommand's tool is absent from that page.
 - `stack shadow` reports a site-layer recipe that shadows a module the
   EESSI base stack already provides. `--base` is an Lmod tree or a module
   listing, loaded with the same inventory reader as `stack gap`. The same

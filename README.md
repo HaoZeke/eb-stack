@@ -402,7 +402,8 @@ for `pr-overlap`, `rebuild-set`, `component-reach`, and `easyblock-reach`.
 `eb-stack mcp --workspace ROOT` (or `EB_STACK_WORKSPACE`) is the root for the
 recipe file tools.
 
-- `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
+- `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`,
+  `eb_package_latest`;
 - `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`,
   `eb_recipe_grep`, `eb_recipe_apply_suggestion`, `eb_recipe_diff`,
   `eb_dep_versions`;
@@ -411,7 +412,11 @@ recipe file tools.
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
-  `eb_stack_easystack`, `eb_stack_sections`, `eb_stack_from_commit`;
+  `eb_stack_easystack`, `eb_stack_gap`, `eb_stack_provided`,
+  `eb_stack_shadow`, `eb_stack_batch`, `eb_stack_shard`,
+  `eb_stack_arch`, `eb_stack_files`, `eb_stack_generation`,
+  `eb_stack_cuda_cc`, `eb_stack_known_failures`, `eb_stack_oom`,
+  `eb_stack_bot_classify`, `eb_stack_sections`, `eb_stack_from_commit`;
 - `eb_component_reach` (same query as `component-reach`, including a purl or a CVE id);
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;

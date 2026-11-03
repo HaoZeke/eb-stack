@@ -73,6 +73,7 @@ PY
 `tools/list` returns the catalog.
 This page does not keep a count.
 Read the names from that response.
+`docs/orgmode/reference/mcp.org` lists one tool for each CLI command.
 The names that mirror the commands above are `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`, `eb_stack_sbom`, and `eb_pr_overlap`.
 Each package tool's input schema requires `toolchain` as `name/version`.
 Inspect and plan also accept `toolchain_version` alone and default the name to `foss`.
