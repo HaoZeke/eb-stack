@@ -1102,9 +1102,9 @@ EESSI bot node, at the parallel level the bot job gives it, and warn
 where the estimate reaches the job's memory. Each warning names the
 remedies the maintainers have used. Nothing is changed.
 
-Why you'd use it: software-layer pull request 1772 lost two zen4 bot
-runs to a killed ~cc1~ while building libxc. The check names that build
-before the first run.
+Why you'd use it: software-layer pull request 1772 lost three zen4 bot
+runs to a killed ~cc1~ while building libxc, two at 8 processes and one
+at 5. The check names that build before the first run.
 
 #+begin_src bash
 eb-stack stack oom \
@@ -1113,12 +1113,12 @@ eb-stack stack oom \
 #+end_src
 
 #+begin_example
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py divides libxc by 2
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=1 builds=5 nodes=2
 #+end_example
 

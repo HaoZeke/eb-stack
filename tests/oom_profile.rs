@@ -1,7 +1,8 @@
 //! Out-of-memory warnings for a plan, from EESSI software-layer bot jobs.
 //!
 //! Each easystack is the lines a real pull request added. The libxc build
-//! in pull request 1772 was killed twice on zen4. Highway in 1692 ran out on
+//! in pull request 1772 was killed on zen4 twice at 8 and once at 5.
+//! Highway in 1692 ran out on
 //! aarch64/generic. hipBLASLt for rocBLAS in 1549 needed about 90 GiB. The
 //! PETSc test step in 1608 ran out on zen5 before the hooks halved it.
 
@@ -35,21 +36,24 @@ fn libxc_from_pr_1772_warns_on_zen4_only() {
     let easystack = arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml");
     let (code, stdout, stderr) = run(&["stack", "oom", "--easystack", &easystack]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
-    let first = "libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)";
+    let first = "libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)";
     assert!(stdout.contains(first), "{stdout}");
     assert!(
         stdout.contains("  parallel 8: 16 cores, eb_hooks.py divides libxc by 2\n"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many\n"),
+        stdout.contains("  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many\n"),
         "{stdout}"
     );
     assert!(
         stdout.contains("  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)\n"),
         "{stdout}"
     );
-    assert!(stdout.contains("divider of 2.5 or 3"), "{stdout}");
+    assert!(
+        stdout.contains("  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster\n"),
+        "{stdout}"
+    );
     // aarch64/generic built the same easyconfig at 8 cores in that pull request.
     assert!(!stdout.contains("on aarch64/generic"), "{stdout}");
     assert_eq!(
@@ -238,9 +242,20 @@ fn a_non_integer_divide_warns_and_the_estimate_uses_six() {
         ),
         "{stdout}"
     );
-    assert!(!stdout.contains("may run out of memory"), "{stdout}");
     assert!(
-        stdout.ends_with("oom=0 fits=1 builds=5 nodes=1\n"),
+        stdout.contains(
+            "libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  parallel 6: 16 cores, eb_hooks.py divides libxc by 2.5 (16 // 2.5 is 6.0, a float)\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("oom=1 fits=0 builds=5 nodes=1\n"),
         "{stdout}"
     );
 }
@@ -259,13 +274,18 @@ fn an_eb_hooks_py_with_a_float_divider_warns_at_its_line() {
         &arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml"),
     ]);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
-    assert_eq!(
-        stdout,
-        format!(
+    assert!(
+        stdout.starts_with(&format!(
             "hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n\
              warning: {hooks}:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.\n\
-             oom=0 fits=2 builds=5 nodes=2\n"
-        )
+             libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB"
+        )),
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("warning:").count(), 1, "{stdout}");
+    assert!(
+        stdout.ends_with("oom=1 fits=1 builds=5 nodes=2\n"),
+        "{stdout}"
     );
 }
 
@@ -731,7 +751,7 @@ fn libxc_from_pr_1772_still_warns_on_zen4_under_a_cap_of_8() {
     assert!(
         stdout.starts_with(&format!(
             "hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n\
-             libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)\n  \
+             libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)\n  \
              parallel 8: 16 cores, eb_hooks.py caps libxc at 8\n"
         )),
         "{stdout}"

@@ -108,6 +108,19 @@ All notable changes to this project are documented here.
   hook's result was not lower. 0 for either flag is status 2.
   `eb_stack_oom` takes `parallel` and `max_parallel`.
 
+### Changed
+
+- `data/build-memory.toml` records software-layer #1772 bot job 221273:
+  libxc 7.0.0 with GCC 15.2.0 ran out of the 32 GiB zen4 job at
+  `make -j 5`, under a libxc divider of 3 in the software-layer-scripts
+  commit the job used. The zen4 figure is now a lower bound of 6.4 GiB
+  per process, 32 over 5, in place of 4.0, 32 over 8. A libxc warning
+  on that node reads `8 x 6.4 GiB = 51.2 GiB` and suggests
+  `maxparallel = 4` in place of 7, a divider of 2.5 (6 processes,
+  38.4 GiB) no longer fits, and the remedy names a reduction of 8, as
+  asked in the review of software-layer-scripts #337
+  (issuecomment-6599147327).
+
 ### Documentation
 
 - How to split one Jenkins build list into shards that build at the

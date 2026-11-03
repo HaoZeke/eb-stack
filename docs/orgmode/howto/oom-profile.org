@@ -10,8 +10,8 @@ The command never edits a recipe or a hook, and it always exits 0.
 Why you'd use it: a bot job that runs out of memory fails late and
 quietly. Software-layer pull request 1772 added
 ~libxc-7.0.0-GCC-15.2.0.eb~. The build was killed for lack of memory on
-zen4 twice, at 8 processes on a 32 GiB job, before anyone changed the
-parallel level. The same thing happened to Highway in #1692, to
+zen4 twice at 8 processes on a 32 GiB job, and again at 5 after a hook
+change. The same thing happened to Highway in #1692, to
 hipBLASLt and rocBLAS in #1549, and to PETSc in #1608. Run the check
 before you open the pull request or ask the bot to build.
 
@@ -23,12 +23,12 @@ eb-stack stack oom \
 The command prints:
 
 #+begin_example
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py divides libxc by 2
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=14 builds=5 nodes=15
 #+end_example
 
@@ -218,13 +218,20 @@ eb-stack stack oom \
 
 #+begin_example
 warning: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
-oom=0 fits=1 builds=5 nodes=1
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
+  parallel 6: 16 cores, eb_hooks.py divides libxc by 2.5 (16 // 2.5 is 6.0, a float)
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
+  remedy: no other x86_64/amd/zen4 node in the bot resource table has room for it
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
+oom=1 fits=0 builds=5 nodes=1
 #+end_example
 
-The warning is the float. The estimate then uses 6, so 6 times 4.0 GiB
-is 24 GiB and the 32 GiB zen4 job fits. With the integer divider of 2
-the same build is the warning in the first example. The command still
-exits 0.
+The first warning is the float. The estimate then uses 6, and 6 times
+6.4 GiB is 38.4 GiB, more than the 32 GiB zen4 job. The divider of 3
+ran out at 5 in bot job 221273 of #1772, so 6 does not fit either. The
+fixture has only the AWS zen4 node, so no other node has room. The
+command still exits 0.
 
 * Read the limits from eb_hooks.py
 
@@ -245,13 +252,20 @@ eb-stack stack oom \
 #+begin_example
 hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/divide-2.5.py
 warning: tests/oom_profile_fixtures/hooks/divide-2.5.py:20: PARALLELISM_LIMITS divide_by_factor for libxc on * uses 2.5, which is not an integer; eb_hooks.py computes max(1, parallel // factor), and 16 // 2.5 is 6.0, a float. Use an integer factor.
-oom=0 fits=2 builds=5 nodes=2
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 6 x 6.4 GiB = 38.4 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
+  parallel 6: 16 cores, eb_hooks.py divides libxc by 2.5 (16 // 2.5 is 6.0, a float)
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
+  remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
+oom=1 fits=1 builds=5 nodes=2
 #+end_example
 
 The first line says how many rows were read, and from which file. The
-warning names the line of the ~(divide_by_factor, 2.5)~ tuple. The nodes
-still come from the bot resource table, so both zen4 nodes are checked.
-With every factor an integer there is no warning:
+first warning names the line of the ~(divide_by_factor, 2.5)~ tuple.
+The nodes still come from the bot resource table, so both zen4 nodes are
+checked, and the 180 GiB node has room for 6. With every factor an
+integer there is no ~warning:~ line:
 
 #+begin_src bash
 eb-stack stack oom --hooks tests/oom_profile_fixtures/hooks/integers.py
@@ -517,12 +531,12 @@ eb-stack stack oom \
 
 #+begin_example
 hooks: 3 PARALLELISM_LIMITS rows from tests/oom_profile_fixtures/hooks/set-maximum-8.py
-libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 4.0 GiB = 32.0 GiB, the job has 32.0 GiB (software-layer #1772)
+libxc-7.0.0-GCC-15.2.0.eb may run out of memory on x86_64/amd/zen4 (eessi-bot-mc-aws amd-zen4): 8 x 6.4 GiB = 51.2 GiB, the job has 32.0 GiB (software-layer #1772, software-layer-scripts #337)
   parallel 8: 16 cores, eb_hooks.py caps libxc at 8
-  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 eight compilers exceed 32 GiB on zen4
-  remedy: maxparallel = 7 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 7 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 4.0 GiB per process is a lower bound, so 7 may still be too many
+  why: cc1 on the generated mgga_x_*.c sources; with GCC 15.2.0 on zen4, 8 and then 5 compilers ran out of a 32 GiB job
+  remedy: maxparallel = 4 in libxc-7.0.0-GCC-15.2.0.eb, or a libxc limit of 4 for x86_64/amd/zen4 in PARALLELISM_LIMITS in software-layer-scripts eb_hooks.py; 6.4 GiB per process is a lower bound, so 4 may still be too many
   remedy: build x86_64/amd/zen4 on a node with more memory: eessi-bot-surf amd-zen4 (16 cores, 180.0 GiB, accel nvidia/cc90)
-  remedy: the maintainers asked for a libxc divider of 2.5 or 3 in eb_hooks.py, which is 6 or 5 cores on the AWS build cluster
+  remedy: a libxc divider of 3 left 5 cores and ran out too; a reduction of 8, as asked in the review of software-layer-scripts #337 (issuecomment-6599147327), is 2 cores on the AWS build cluster
 oom=1 fits=1 builds=5 nodes=2
 #+end_example
 

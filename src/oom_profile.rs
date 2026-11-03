@@ -2128,7 +2128,7 @@ source = "https://github.com/EESSI/software-layer/pull/1772#issuecomment-6420263
             .iter()
             .find(|e| e.name == "libxc" && !e.toolchains.is_empty())
             .unwrap();
-        assert_eq!(fitting_parallel(entry, 8, 32.0), Some(7));
+        assert_eq!(fitting_parallel(entry, 8, 32.0), Some(4));
         let hip = profile
             .entries()
             .iter()

@@ -332,10 +332,11 @@ eb-stack stack oom \
 
 A warning names the entry, the target and node, the parallel level and
 the estimate against the job's memory. The libxc build in software-layer
-#1772 was killed twice on zen4 at 8 processes on 32 GiB. The remedies are
-text only: a `maxparallel` in the recipe, a limit in `PARALLELISM_LIMITS`
-in software-layer-scripts `eb_hooks.py`, or a node with more memory. Put
-the change in the pull request yourself. The command exits 0.
+#1772 was killed on zen4 twice at 8 processes on 32 GiB, and once at 5.
+The remedies are text only: a `maxparallel` in the recipe, a limit in
+`PARALLELISM_LIMITS` in software-layer-scripts `eb_hooks.py`, or a node
+with more memory. Put the change in the pull request yourself. The
+command exits 0.
 
 The hook ops are `divide_by_factor` (`max(1, parallel // factor)`) and
 `set_maximum` (`min(parallel, n)`). A CPU-target key overrides `*`.
