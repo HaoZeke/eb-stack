@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- `stack shard` splits one Jenkins build list into shards that can
+  build at the same time. A line's set is its closure over
+  `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod
+  trees and `--installed` lists. Lines whose own easyconfig another
+  line needs share a shard; any other module two or more shards need
+  goes to `prelude.list`. Groups are packed into at most `--shards`
+  shards by `--weights` seconds, or one per module. `shard-NN.list`
+  keeps the input lines verbatim, dependencies first, and `plan.json`
+  records the closures, the shard weights and a SHA-256 of the inputs.
+  A line that cannot be resolved exits 1 and writes nothing.
+  `eb_stack_shard` is the same command over MCP.
+
 ## 0.4.0 - 2026-11-01
 
 `stack solve` in 0.3.0 took the policy file as `--policy`. The flag is
