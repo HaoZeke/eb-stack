@@ -199,4 +199,40 @@ same source slot resolves to a file that exists on another
 architecture. ~--arch x86_64~ on this fixture probes only the x86_64
 wheel, which the server has, and exits 0.
 
+** Two architectures
+
+What it does: ~--arch x86_64 --arch aarch64 --probe-sources~ probes
+those two families and no other. A target such as ~x86_64/amd/zen4~
+is still the family before the slash. Naming a family and one of its
+targets, ~--arch aarch64 --arch aarch64/neoverse_v1~, probes that
+family once. The order of the flags does not change the report.
+
+Why you'd use it: two bot targets failed the fetch and a third was
+not in the run. The comparison is between the families that were
+named. A family left off the command is not fetched, and it does not
+turn ~arch-missing~ into ~unreachable~ or the other way around.
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch x86_64 \
+  --arch aarch64 \
+  --easystack tests/source_probe_fixtures/easystacks/kaleido.yml \
+  --easyconfigs tests/source_probe_fixtures/easyconfigs \
+  --probe-sources
+#+end_src
+
+On the same copy and server it prints:
+
+#+begin_example
+Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is arch-missing on aarch64: __BASE_URL__/kaleido-0.2.1-manylinux2014-aarch64.whl (attempt 1/3 HEAD=status:404 RANGE=status:404)
+parse_failed=0 unsupported=0 flagged=0 source_unreachable=0 source_arch_missing=1
+#+end_example
+
+How to read it: the x86_64 wheel is on the server, so the aarch64
+wheel is ~arch-missing~. riscv64 is not named and is not probed. The
+same command with ~--arch aarch64 --arch riscv64~ prints both wheels
+as ~unreachable~, with ~source_unreachable=2~ and
+~source_arch_missing=0~, because neither probed family fetched the
+source slot. The x86_64 wheel is not consulted.
+
 See [[file:../reference/cli.org][the command-line reference]].

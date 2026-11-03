@@ -3869,6 +3869,42 @@ same source slot resolves to a file that exists on another
 architecture. `--arch x86_64` on this fixture probes only the x86_64
 wheel, which the server has, and exits 0.
 
+## Two architectures
+
+What it does: `--arch x86_64 --arch aarch64 --probe-sources` probes
+those two families and no other. A target such as `x86_64/amd/zen4`
+is still the family before the slash. Naming a family and one of its
+targets, `--arch aarch64 --arch aarch64/neoverse_v1`, probes that
+family once. The order of the flags does not change the report.
+
+Why you'd use it: two bot targets failed the fetch and a third was
+not in the run. The comparison is between the families that were
+named. A family left off the command is not fetched, and it does not
+turn `arch-missing` into `unreachable` or the other way around.
+
+```bash
+eb-stack stack arch \
+  --arch x86_64 \
+  --arch aarch64 \
+  --easystack tests/source_probe_fixtures/easystacks/kaleido.yml \
+  --easyconfigs tests/source_probe_fixtures/easyconfigs \
+  --probe-sources
+```
+
+On the same copy and server it prints:
+
+```
+Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is arch-missing on aarch64: __BASE_URL__/kaleido-0.2.1-manylinux2014-aarch64.whl (attempt 1/3 HEAD=status:404 RANGE=status:404)
+parse_failed=0 unsupported=0 flagged=0 source_unreachable=0 source_arch_missing=1
+```
+
+How to read it: the x86_64 wheel is on the server, so the aarch64
+wheel is `arch-missing`. riscv64 is not named and is not probed. The
+same command with `--arch aarch64 --arch riscv64` prints both wheels
+as `unreachable`, with `source_unreachable=2` and
+`source_arch_missing=0`, because neither probed family fetched the
+source slot. The x86_64 wheel is not consulted.
+
 See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Find a missing patch before the bot does
@@ -6998,6 +7034,9 @@ fallback, on each family `--arch` names, or on `x86_64`, `aarch64`,
 and `riscv64` with no `--arch`. A source no probed family can fetch is
 `unreachable`. A source another probed family can fetch is
 `arch-missing`, so with one `--arch` a missing source is `unreachable`.
+Two `--arch` values compare only that pair: a miss is `arch-missing`
+when the other named family fetched the same source slot, and
+`unreachable` when neither did.
 `--probe-retries` and `--probe-timeout-s` tune that network check.
 
 [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md)
@@ -7954,7 +7993,8 @@ text is the same report as `stack provided`. `eb_stack_arch` requires
 `probe_sources`, `probe_retries`, and `probe_timeout_s`. It returns the
 same report as `stack arch`, with `parse_failed` and `source_findings`,
 and a hit is a tool error. `probe_sources` probes the families `arch`
-names, as `--arch` does. `eb_stack_files` requires `easystack` and takes
+names, as `--arch` does. Two names are compared only with each other.
+`eb_stack_files` requires `easystack` and takes
 `easyconfigs`, `commit_tree`, `easyconfigs_repo`, `sourcepath`, and
 `path_map`. It returns the same report as `stack files`, and a missing
 file is a tool error. `eb_stack_cuda_cc` requires `easystack` and `easyconfigs`,
