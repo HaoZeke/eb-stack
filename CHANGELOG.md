@@ -15,6 +15,12 @@ All notable changes to this project are documented here.
   under `opaque`. Any other unresolved line is still an error and
   nothing is written. A list with 22 `--from-commit` lines and seven
   site recipes failed whole before.
+- `examples/easyconfigs-pr-overlap/fetch-prs.sh` and
+  `examples/eessi-pr-overlap/fetch-prs.sh` request each page of open pull
+  requests and of changed files, 100 at a time. The open list does not
+  stop at 500. A changed-file list that stops at GitHub's cap of 3000 is
+  kept: the pull request is still written, with `file_list_truncated`
+  set, and the record notes `truncated at GitHub's limit`.
 - `stack order` exits 1 when runtime requirements of one name at one
   toolchain have no version that satisfies every one of them. The error
   names each requester and the version it resolved. Eigen 3.4.1 required

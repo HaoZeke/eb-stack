@@ -153,9 +153,12 @@ eb-stack pr-overlap --pr in/prs/*.json \
   --out-dir out/
 ```
 
-`fetch-prs.sh` reads every open pull request, 100 per page with no upper
-limit, and writes `in/prs/<N>.json` for each one that changes a 2026.06
-easystack. On EESSI/software-layer on 2026-10-31 it printed:
+`fetch-prs.sh` reads every open pull request, 100 per page, and does not
+stop at 500. Changed files are read the same way, through GitHub's cap of
+3000. A pull request whose file list stops there is still written, with
+`file_list_truncated` set, and the record notes `truncated at GitHub's limit`.
+It writes `in/prs/<N>.json` for each one that changes a 2026.06 easystack.
+On EESSI/software-layer on 2026-10-31 it printed:
 
 ```
 open pull requests: 52

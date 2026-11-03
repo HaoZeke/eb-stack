@@ -2700,9 +2700,12 @@ EasyBuild version these easystacks name.
 differ from that version.
 `examples/eessi-pr-overlap/fetch-prs.sh` reads every open PR and writes
 one JSON file per PR that changes an easystack for that EESSI version.
-It pages through the GitHub pulls API 100 at a time with no upper
-limit, so a repository with more open PRs than one listing returns is
-still read in full. It fetches each PR head into the clone as
+It pages through the GitHub pulls API 100 at a time with no stop at
+500, so a repository with more open PRs than one listing returns is
+still read in full. Changed files are read 100 per page through
+GitHub's cap of 3000. A pull request whose file list stops there is
+still written, with `file_list_truncated` set, and the record notes
+`truncated at GitHub's limit`. It fetches each PR head into the clone as
 `refs/remotes/pr/N` and does not check it out. `--eessi-version`
 defaults to `2026.06`.
 
@@ -3028,7 +3031,11 @@ writes one JSON file per open PR that changes an easyconfig. Run it
 from a clone of easybuild-easyconfigs whose `origin` is that
 repository, with `gh` authenticated for public reads. Set
 `EB_STACK_CHECKOUT` to the eb-stack checkout. The script reads base
-text from `develop` and does not check a PR out.
+text from `develop` and does not check a PR out. Open pull requests
+are read 100 per page, with no stop at 500. Changed files are read
+100 per page through GitHub's cap of 3000. A pull request whose file
+list stops there is still written, with `file_list_truncated` set.
+`pr-overlap` notes `truncated at GitHub's limit`.
 
 ```bash
 : "${EB_STACK_CHECKOUT:?set this to an eb-stack checkout}"

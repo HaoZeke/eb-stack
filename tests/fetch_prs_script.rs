@@ -1,8 +1,9 @@
 //! Regression checks for the fetch-prs.sh scripts under examples/.
 //!
 //! The easyconfigs script should rewrite outputs to only the currently open
-//! pull requests when rerun in the same output directory. The EESSI script
-//! should read every page of open pull requests, not stop at a fixed limit.
+//! pull requests when rerun in the same output directory. Both scripts should
+//! read every page of open pull requests, including a repository with more
+//! than 500, and page a changed-file list through GitHub's 3000-file cap.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -165,16 +166,16 @@ for arg in "$@"; do
     repos/*) url="$arg" ;;
   esac
 done
+page=$(sed -n 's/.*[?&]page=\([0-9][0-9]*\).*/\1/p' <<<"$url")
+[[ -n "$page" ]] || page=1
 if [[ "$url" == *"/pulls?state=open&per_page=100"* ]]; then
-  cat "${MOCK_OPEN_JSONL:?}"
+  if [[ "$page" == 1 ]]; then cat "${MOCK_OPEN_JSONL:?}"; fi
   exit 0
 fi
-if [[ "$url" == *"/pulls/1/files"* ]]; then
-  printf '%s\n' "easybuild/easyconfigs/l/Lib/Lib-1.0.eb"
-  exit 0
-fi
-if [[ "$url" == *"/pulls/2/files"* ]]; then
-  printf '%s\n' "easybuild/easyconfigs/l/Lib/Lib-1.0.eb"
+if [[ "$url" == *"/pulls/1/files"* || "$url" == *"/pulls/2/files"* ]]; then
+  if [[ "$page" == 1 ]]; then
+    printf '%s\n' "easybuild/easyconfigs/l/Lib/Lib-1.0.eb"
+  fi
   exit 0
 fi
 echo "unexpected gh api request: $url" >&2
@@ -328,11 +329,11 @@ fn eessi_fetch_reads_every_page_of_open_pull_requests() {
     write(&page2, &pulls_page(101..=102, sha_of));
     let errors = root.join("gh-errors.log");
 
-    // A stand-in for gh: `api` only, one open-pulls URL, the files of pull
-    // requests 1 to 102, and the easyblocks commit PR 102 pins. The pages are GitHub's raw shape and --jq is
-    // applied per page, as gh does. Without --paginate it serves page 1
-    // only. Every refusal is also logged, because a gh call inside a
-    // process substitution cannot fail the script.
+    // A stand-in for gh: `api` only, one open-pulls page per request, the
+    // files of pull requests 1 and 102, and the easyblocks commit PR 102
+    // pins. The pages are GitHub's raw shape and --jq is applied per page,
+    // as gh does. A page the fixture does not have is an empty array.
+    // Every refusal is also logged.
     let mock_gh = mock_bin.join("gh");
     write_executable(
         &mock_gh,
@@ -355,24 +356,31 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-pages=()
+page_n=$(sed -n 's/.*[?&]page=\([0-9][0-9]*\).*/\1/p' <<<"$url")
+[[ -n "$page_n" ]] || page_n=1
 case "$url" in
-  "repos/EESSI/software-layer/pulls?state=open&per_page=100")
-    pages=("${MOCK_PAGE1:?}")
-    [[ $paginate -eq 1 ]] && pages+=("${MOCK_PAGE2:?}")
-    for page in "${pages[@]}"; do
-      if [[ -n "$filter" ]]; then jq -c "$filter" "$page"; else cat "$page"; fi
-    done
+  *"/pulls?state=open&per_page=100"*)
+    file=""
+    case "$page_n" in
+      1) file="${MOCK_PAGE1:?}" ;;
+      2) file="${MOCK_PAGE2:-}" ;;
+    esac
+    if [[ -n "$file" && -f "$file" ]]; then
+      if [[ -n "$filter" ]]; then jq -c "$filter" "$file"; else cat "$file"; fi
+    else
+      if [[ -n "$filter" ]]; then echo '[]' | jq -c "$filter"; else echo '[]'; fi
+    fi
     ;;
-  repos/EESSI/software-layer/pulls/1/files|repos/EESSI/software-layer/pulls/102/files)
-    printf '%s\n' "${MOCK_STACK:?}"
+  repos/EESSI/software-layer/pulls/1/files*|repos/EESSI/software-layer/pulls/102/files*)
+    if [[ "$page_n" == 1 ]]; then printf '%s\n' "${MOCK_STACK:?}"; fi
     ;;
   repos/easybuilders/easybuild-easyblocks/commits/2222222222222222222222222222222222222222)
     printf '%s\n' easybuild/easyblocks/p/pkg.py
     ;;
-  repos/EESSI/software-layer/pulls/*/files)
+  repos/EESSI/software-layer/pulls/*/files*)
     number=${url#repos/EESSI/software-layer/pulls/}
-    number=${number%/files}
+    number=${number%%/*}
+    number=${number%%\?*}
     [[ "$number" =~ ^[0-9]+$ && $number -ge 2 && $number -le 101 ]] \
       || refuse "unexpected pull request: $url"
     ;;
@@ -535,13 +543,20 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+page_n=$(sed -n 's/.*[?&]page=\([0-9][0-9]*\).*/\1/p' <<<"$url")
+[[ -n "$page_n" ]] || page_n=1
 case "$url" in
-  *"/pulls?state=open&per_page=100")
-    if [[ -n "$filter" ]]; then jq -c "$filter" "${MOCK_PAGE:?}"; else cat "${MOCK_PAGE:?}"; fi ;;
+  *"/pulls?state=open&per_page=100"*)
+    if [[ "$page_n" == 1 ]]; then
+      if [[ -n "$filter" ]]; then jq -c "$filter" "${MOCK_PAGE:?}"; else cat "${MOCK_PAGE:?}"; fi
+    else
+      if [[ -n "$filter" ]]; then echo '[]' | jq -c "$filter"; else echo '[]'; fi
+    fi
+    ;;
   repos/easybuilders/easybuild-easyblocks/commits/*)
     printf '%s\n' easybuild/easyblocks/p/pkg.py ;;
-  */pulls/*/files)
-    printf '%s\n' "${MOCK_STACK:?}" ;;
+  */pulls/*/files*)
+    if [[ "$page_n" == 1 ]]; then printf '%s\n' "${MOCK_STACK:?}"; fi ;;
   *) echo "unexpected url: $url" >&2; exit 1 ;;
 esac
 "#,
@@ -824,4 +839,460 @@ fn easyconfigs_fetch_refuses_an_empty_out_dir_before_deleting() {
         stderr.contains("usage: fetch-prs.sh <owner/repo> <out-dir>"),
         "stderr missing usage guard:\n{stderr}"
     );
+}
+
+fn write_open_pages(root: &Path, heads: &std::collections::BTreeMap<u64, String>, last: u64) {
+    let sha_of = |n: u64| {
+        heads
+            .get(&n)
+            .cloned()
+            .unwrap_or_else(|| format!("{n:040x}"))
+    };
+    let pages = last.div_ceil(100);
+    for page in 1..=pages {
+        let start = (page - 1) * 100 + 1;
+        let end = std::cmp::min(page * 100, last);
+        write(
+            &root.join(format!("page{page}.json")),
+            &pulls_page(start..=end, sha_of),
+        );
+    }
+}
+
+/// Open pull requests are served one page at a time from `$MOCK_ROOT/pageN.json`.
+/// Changed-file pages for `$MOCK_KEEP` print `$MOCK_PATH` on page 1 only.
+/// Every other pull request has an empty file list. A missing page is `[]`.
+fn write_paged_open_mock(mock_bin: &Path) {
+    write_executable(
+        &mock_bin.join("gh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == api ]] || { echo "unexpected: gh $*" >&2; exit 1; }
+shift
+url="" filter=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --method) shift ;;
+    --paginate) ;;
+    --jq) shift; filter=$1 ;;
+    repos/*) url=$1 ;;
+    *) echo "unexpected arg: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+page_n=$(sed -n 's/.*[?&]page=\([0-9][0-9]*\).*/\1/p' <<<"$url")
+[[ -n "$page_n" ]] || page_n=1
+case "$url" in
+  *"/pulls?state=open&per_page=100"*)
+    file="${MOCK_ROOT:?}/page${page_n}.json"
+    if [[ -f "$file" ]]; then
+      if [[ -n "$filter" ]]; then jq -c "$filter" "$file"; else cat "$file"; fi
+    else
+      if [[ -n "$filter" ]]; then echo '[]' | jq -c "$filter"; else echo '[]'; fi
+    fi
+    ;;
+  */pulls/"${MOCK_KEEP:?}"/files*)
+    if [[ "$page_n" == 1 ]]; then printf '%s\n' "${MOCK_PATH:?}"; fi
+    ;;
+  */pulls/*/files*) ;;
+  *) echo "unexpected url: $url" >&2; exit 1 ;;
+esac
+"#,
+    )
+    .expect("write paged open mock");
+}
+
+/// 501 open pull requests, one per number. Only 501, on page 6, changes an
+/// easyconfig. A walk that stopped at 500 would leave `prs/` empty.
+#[test]
+fn easyconfigs_fetch_reads_open_pull_requests_past_five_hundred() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let origin = root.join("origin.git");
+    let seed = root.join("seed");
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+
+    assert_ok(
+        &run(
+            "git",
+            &["init", "--bare", origin.to_str().expect("origin utf-8")],
+            root,
+            &[],
+        ),
+        "init bare origin",
+    );
+    fs::create_dir_all(&seed).expect("seed dir");
+    assert_ok(&run("git", &["init"], &seed, &[]), "init seed");
+    git(&seed, &["config", "user.name", "Fixture"]);
+    git(&seed, &["config", "user.email", "fixture@example.invalid"]);
+    write(
+        &seed.join("easybuild/easyconfigs/l/Lib/Lib-1.0.eb"),
+        "name = 'Lib'\nversion = '1.0'\n",
+    );
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "seed develop"]);
+    git(&seed, &["branch", "-M", "develop"]);
+    git(
+        &seed,
+        &[
+            "remote",
+            "add",
+            "origin",
+            origin.to_str().expect("origin utf-8"),
+        ],
+    );
+    git(&seed, &["push", "-u", "origin", "develop"]);
+    let sha = make_pr_head(
+        &seed,
+        "pr501",
+        501,
+        "name = 'Lib'\nversion = '1.0'\n# pr501\n",
+    );
+    git(&seed, &["checkout", "develop"]);
+    assert_ok(
+        &run(
+            "git",
+            &[
+                "clone",
+                origin.to_str().expect("origin utf-8"),
+                clone.to_str().expect("clone utf-8"),
+            ],
+            root,
+            &[],
+        ),
+        "clone fixture",
+    );
+    git(&clone, &["checkout", "develop"]);
+
+    let mut heads = std::collections::BTreeMap::new();
+    heads.insert(501, sha.clone());
+    write_open_pages(root, &heads, 501);
+    write_paged_open_mock(&mock_bin);
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/easyconfigs-pr-overlap/fetch-prs.sh");
+    let ec = "easybuild/easyconfigs/l/Lib/Lib-1.0.eb";
+    let output = run(
+        "bash",
+        &[
+            script.to_str().expect("script utf-8"),
+            "acme/repo",
+            out.to_str().expect("out utf-8"),
+        ],
+        &clone,
+        &[
+            ("PATH", path.as_str()),
+            ("MOCK_ROOT", root.to_str().expect("root utf-8")),
+            ("MOCK_KEEP", "501"),
+            ("MOCK_PATH", ec),
+        ],
+    );
+    assert_ok(&output, "easyconfigs fetch past 500");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line == "open pull requests: 501"),
+        "stdout:\n{stdout}"
+    );
+    assert_eq!(json_files(&out.join("prs")), ["501.json"]);
+    let doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/501.json")).expect("read 501"))
+            .expect("501 json");
+    assert_eq!(doc["number"], 501);
+    assert_eq!(doc["head_sha"], sha);
+    assert_eq!(doc["easyconfigs"][0]["path"], ec);
+    assert!(doc["easyconfigs"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("# pr501"));
+    assert!(doc.get("file_list_truncated").is_none());
+}
+
+/// 501 open pull requests. Only 501, on page 6, changes an easystack.
+#[test]
+fn eessi_fetch_reads_open_pull_requests_past_five_hundred() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+    let body = "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg501-1.0-GCCcore-15.2.0.eb\n";
+    let heads = eessi_seed_and_clone(root, &[(501, body.to_string())]);
+    write_open_pages(root, &heads, 501);
+    write_paged_open_mock(&mock_bin);
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let output = run(
+        "bash",
+        &[
+            eessi_script().to_str().expect("script utf-8"),
+            "EESSI/software-layer",
+            "2026.06",
+            out.to_str().expect("out utf-8"),
+        ],
+        &clone,
+        &[
+            ("PATH", path.as_str()),
+            ("MOCK_ROOT", root.to_str().expect("root utf-8")),
+            ("MOCK_KEEP", "501"),
+            ("MOCK_PATH", EESSI_STACK),
+        ],
+    );
+    assert_ok(&output, "eessi fetch past 500");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line == "open pull requests: 501"),
+        "stdout:\n{stdout}"
+    );
+    assert_eq!(json_files(&out.join("prs")), ["501.json"]);
+    let doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/501.json")).expect("read 501"))
+            .expect("501 json");
+    assert_eq!(doc["number"], 501);
+    assert_eq!(doc["head_sha"], heads[&501]);
+    assert_eq!(doc["easystacks"][0]["path"], EESSI_STACK);
+    assert!(doc["easystacks"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("Pkg501-1.0-GCCcore-15.2.0.eb"));
+    assert!(doc.get("file_list_truncated").is_none());
+}
+
+/// Changed files are one page of 100 at a time.
+///
+/// Pull request 8's easyconfig is the 501st file (page 6). Pull request 9's
+/// list answers 422 on the page after 3000 files; the pull request is kept
+/// and `file_list_truncated` is set.
+fn write_file_page_mock(mock_bin: &Path, interesting: &str) {
+    let script = format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "${{1:-}}" == api ]] || {{ echo "unexpected: gh $*" >&2; exit 1; }}
+shift
+url="" filter=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --method) shift ;;
+    --paginate) ;;
+    --jq) shift; filter=$1 ;;
+    repos/*) url=$1 ;;
+    *) echo "unexpected arg: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+page_n=$(sed -n 's/.*[?&]page=\([0-9][0-9]*\).*/\1/p' <<<"$url")
+[[ -n "$page_n" ]] || page_n=1
+interesting={interesting:?}
+emit_fill() {{
+  local n=$1
+  local i
+  for ((i=0; i<n; i++)); do
+    printf '%s\n' "notes/p${{page_n}}-${{i}}.txt"
+  done
+}}
+case "$url" in
+  *"/pulls?state=open&per_page=100"*)
+    file="${{MOCK_ROOT:?}}/page${{page_n}}.json"
+    if [[ -f "$file" ]]; then
+      if [[ -n "$filter" ]]; then jq -c "$filter" "$file"; else cat "$file"; fi
+    else
+      if [[ -n "$filter" ]]; then echo '[]' | jq -c "$filter"; else echo '[]'; fi
+    fi
+    ;;
+  */pulls/8/files*)
+    if (( page_n >= 1 && page_n <= 5 )); then emit_fill 100
+    elif (( page_n == 6 )); then emit_fill 99; printf '%s\n' "$interesting"
+    fi
+    ;;
+  */pulls/9/files*)
+    if (( page_n == 1 )); then
+      printf '%s\n' "$interesting"
+      emit_fill 99
+    elif (( page_n >= 2 && page_n <= 30 )); then emit_fill 100
+    elif (( page_n == 31 )); then
+      echo "gh: pagination is limited for this resource. Responses include a maximum of 3000 files. (HTTP 422)" >&2
+      exit 1
+    fi
+    ;;
+  */pulls/*/files*) ;;
+  *) echo "unexpected url: $url" >&2; exit 1 ;;
+esac
+"#,
+        interesting = interesting,
+    );
+    write_executable(&mock_bin.join("gh"), &script).expect("write file page mock");
+}
+
+#[test]
+fn easyconfigs_fetch_pages_files_past_five_hundred_and_keeps_the_cap() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let origin = root.join("origin.git");
+    let seed = root.join("seed");
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+    let ec = "easybuild/easyconfigs/l/Lib/Lib-1.0.eb";
+
+    assert_ok(
+        &run(
+            "git",
+            &["init", "--bare", origin.to_str().expect("origin utf-8")],
+            root,
+            &[],
+        ),
+        "init bare origin",
+    );
+    fs::create_dir_all(&seed).expect("seed dir");
+    assert_ok(&run("git", &["init"], &seed, &[]), "init seed");
+    git(&seed, &["config", "user.name", "Fixture"]);
+    git(&seed, &["config", "user.email", "fixture@example.invalid"]);
+    write(&seed.join(ec), "name = 'Lib'\nversion = '1.0'\n");
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-m", "seed develop"]);
+    git(&seed, &["branch", "-M", "develop"]);
+    git(
+        &seed,
+        &[
+            "remote",
+            "add",
+            "origin",
+            origin.to_str().expect("origin utf-8"),
+        ],
+    );
+    git(&seed, &["push", "-u", "origin", "develop"]);
+    let sha8 = make_pr_head(&seed, "pr8", 8, "name = 'Lib'\nversion = '1.0'\n# page6\n");
+    let sha9 = make_pr_head(&seed, "pr9", 9, "name = 'Lib'\nversion = '1.0'\n# capped\n");
+    git(&seed, &["checkout", "develop"]);
+    assert_ok(
+        &run(
+            "git",
+            &[
+                "clone",
+                origin.to_str().expect("origin utf-8"),
+                clone.to_str().expect("clone utf-8"),
+            ],
+            root,
+            &[],
+        ),
+        "clone fixture",
+    );
+    git(&clone, &["checkout", "develop"]);
+
+    let mut heads = std::collections::BTreeMap::new();
+    heads.insert(8, sha8.clone());
+    heads.insert(9, sha9.clone());
+    write(
+        &root.join("page1.json"),
+        &pulls_page([8_u64, 9].into_iter(), |n| heads[&n].clone()),
+    );
+    write_file_page_mock(&mock_bin, ec);
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/easyconfigs-pr-overlap/fetch-prs.sh");
+    let output = run(
+        "bash",
+        &[
+            script.to_str().expect("script utf-8"),
+            "acme/repo",
+            out.to_str().expect("out utf-8"),
+        ],
+        &clone,
+        &[
+            ("PATH", path.as_str()),
+            ("MOCK_ROOT", root.to_str().expect("root utf-8")),
+        ],
+    );
+    assert_ok(&output, "easyconfigs file pages");
+    assert_eq!(json_files(&out.join("prs")), ["8.json", "9.json"]);
+    let past: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/8.json")).expect("read 8"))
+            .expect("8 json");
+    assert_eq!(past["easyconfigs"][0]["path"], ec);
+    assert!(past["easyconfigs"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("# page6"));
+    assert!(past.get("file_list_truncated").is_none());
+    let capped: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/9.json")).expect("read 9"))
+            .expect("9 json");
+    assert_eq!(capped["file_list_truncated"], true);
+    assert_eq!(capped["easyconfigs"][0]["path"], ec);
+    assert!(capped["easyconfigs"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("# capped"));
+}
+
+#[test]
+fn eessi_fetch_pages_files_past_five_hundred_and_keeps_the_cap() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let clone = root.join("clone");
+    let out = root.join("out");
+    let mock_bin = root.join("mock-bin");
+    fs::create_dir_all(&mock_bin).expect("mock bin");
+    let body8 = "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg8-1.0-GCCcore-15.2.0.eb\n";
+    let body9 = "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - Pkg9-1.0-GCCcore-15.2.0.eb\n";
+    let heads = eessi_seed_and_clone(root, &[(8, body8.to_string()), (9, body9.to_string())]);
+    write(
+        &root.join("page1.json"),
+        &pulls_page([8_u64, 9].into_iter(), |n| heads[&n].clone()),
+    );
+    write_file_page_mock(&mock_bin, EESSI_STACK);
+    let path = format!(
+        "{}:{}",
+        mock_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let output = run(
+        "bash",
+        &[
+            eessi_script().to_str().expect("script utf-8"),
+            "EESSI/software-layer",
+            "2026.06",
+            out.to_str().expect("out utf-8"),
+        ],
+        &clone,
+        &[
+            ("PATH", path.as_str()),
+            ("MOCK_ROOT", root.to_str().expect("root utf-8")),
+        ],
+    );
+    assert_ok(&output, "eessi file pages");
+    assert_eq!(json_files(&out.join("prs")), ["8.json", "9.json"]);
+    let past: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/8.json")).expect("read 8"))
+            .expect("8 json");
+    assert_eq!(past["easystacks"][0]["path"], EESSI_STACK);
+    assert!(past["easystacks"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("Pkg8-1.0-GCCcore-15.2.0.eb"));
+    assert!(past.get("file_list_truncated").is_none());
+    let capped: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("prs/9.json")).expect("read 9"))
+            .expect("9 json");
+    assert_eq!(capped["file_list_truncated"], true);
+    assert_eq!(capped["easystacks"][0]["path"], EESSI_STACK);
+    assert!(capped["easystacks"][0]["head"]
+        .as_str()
+        .expect("head")
+        .contains("Pkg9-1.0-GCCcore-15.2.0.eb"));
 }
