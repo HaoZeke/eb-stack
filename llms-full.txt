@@ -116,7 +116,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
-    [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md).
+    [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md),
+    [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5152,6 +5153,82 @@ text, the jobs and the counts.
   table does not know is `unknown`.
 - A job that is still running has no `finished` row and is
   `unclassified`.
+
+# Split a Jenkins build list into shards
+
+What it does: `stack shard` takes one Jenkins build list for one node
+type and splits it into shards that can build at the same time. A
+line's set is its closure over `--easyconfigs` minus the modules that
+are already installed. Two lines share a shard only when one line's
+easyconfig is in the other's set. Every other module that two or more
+shards need goes to `prelude.list`, which builds first.
+
+Why you'd use it: a site build list for one CPU target is too long for
+one job, and a naive split rebuilds HDF5 in every shard. The prelude
+holds the shared dependencies once.
+
+# Split the fixture wave
+
+`tests/stack_shard_fixtures/wave1.list` is four lines: OpenFOAM,
+ParaView, PETSc, and Hypre. PETSc depends on Hypre, so those two lines
+share a shard and Hypre is first. OpenFOAM and ParaView both need HDF5
+and Szip; OpenFOAM and PETSc both need MathLib. Those shared modules
+are not lines of their own, so they go to the prelude. zlib is
+installed through the module tree and CMake through the installed
+list, so neither is built.
+
+```bash
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/wave1.list \
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \
+  --installed tests/stack_shard_fixtures/installed.txt \
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \
+  --shards 4 \
+  --generated-at 2026-11-03T00:00:00Z \
+  --out-dir /tmp/shards
+```
+
+That command printed:
+
+```
+shards=3 prelude=3 lines=4
+```
+
+`/tmp/shards/prelude.list` is the shared dependencies, in dependency
+order:
+
+```
+Szip-2.1.1-GCCcore-15.2.0.eb
+HDF5-1.14.6-GCCcore-15.2.0.eb
+MathLib-1.0-GCCcore-15.2.0.eb
+```
+
+The three shard files keep the input lines verbatim. Hypre is a line
+PETSc needs, so it is first in that shard:
+
+```
+Hypre-2.33.0-GCCcore-15.2.0.eb
+PETSc-3.23.0-GCCcore-15.2.0.eb --include-easyblocks=/sw/easyblocks/petsc.py
+```
+
+```
+ParaView-6.0.0-GCCcore-15.2.0.eb
+```
+
+```
+OpenFOAM-13-GCCcore-15.2.0.eb --hooks=/sw/hooks/openfoam.py
+```
+
+`--shards 4` is an upper bound. Three groups exist, so three shard
+files are written. `plan.json` records each line's closure, the shard
+weights, and a SHA-256 of the inputs. `--generated-at` fixes the time
+in that file. `--weights` is `Name/VersionFull` or the easyconfig
+filename, a tab, then seconds. A module the file does not list weighs
+`--default-weight`, which is 1. Build the prelude, then the shards.
+
+A line whose easyconfig is not on the robot path exits 1 and writes
+nothing. `eb_stack_shard` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary
 

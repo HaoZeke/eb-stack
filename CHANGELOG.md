@@ -60,6 +60,11 @@ All notable changes to this project are documented here.
   A line that cannot be resolved exits 1 and writes nothing.
   `eb_stack_shard` is the same command over MCP.
 
+### Documentation
+
+- How to split one Jenkins build list into shards that build at the
+  same time, with the shared dependencies in a prelude.
+
 ## 0.4.0 - 2026-11-01
 
 `stack solve` in 0.3.0 took the policy file as `--policy`. The flag is

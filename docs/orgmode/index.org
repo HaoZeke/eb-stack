@@ -79,6 +79,8 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    *A plan entry likely to run out of memory in a bot job?* → :doc:`howto/oom-profile`
    *Which kind of FAILURE a bot job reported?* → :doc:`howto/bot-classify`
 
+   *Split one Jenkins build list into shards that build at once?* → :doc:`howto/stack-shard`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -169,6 +171,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
    howto/arch-known-failures
    howto/oom-profile
    howto/bot-classify
+   howto/stack-shard
 
 .. toctree::
    :maxdepth: 2
@@ -324,7 +327,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/cuda-compute-capabilities.org][check CUDA compute-capability mismatches in a plan]].
     [[file:howto/arch-known-failures.org][warn about known per-architecture failures]].
     [[file:howto/oom-profile.org][warn before a bot job runs out of memory]].
-    [[file:howto/bot-classify.org][read an EESSI bot FAILURE]].
+    [[file:howto/bot-classify.org][read an EESSI bot FAILURE]],
+    [[file:howto/stack-shard.org][split a Jenkins build list into shards]].
   - Reference: [[file:reference/glossary.org][glossary]],
     [[file:reference/cli.org][CLI]],
     [[file:reference/rust-api.org][Rust API]],
