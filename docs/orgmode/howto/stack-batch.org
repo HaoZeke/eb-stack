@@ -1,0 +1,69 @@
+#+TITLE: Plan software-layer pull requests that do not overlap
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack batch~ plans European Environment for Scientific
+Software Installations (EESSI) software-layer pull requests whose builds
+do not overlap. A root's set is its closure over the robot path minus
+the installed modules, the same set ~pr-overlap~ computes for one
+easystack line. Roots whose sets meet go in one pull request. A root
+whose set meets an open pull request waits for that pull request. The
+rest are packed ~--size~ roots per pull request.
+
+Why you'd use it: ~stack gap~ writes ~roots.txt~ for the recipes the
+generation can already build. Those roots should not all land in one
+pull request, and two pull requests must not build the same module.
+
+* One root beside an installed version
+
+~tests/batch_versions_fixtures~ has GROMACS 2025.4 installed and a
+recipe for GROMACS 2026.2 on foss/2026.1, generation 2026.1 of EESSI
+2026.06. One root is one batch. The second version in that generation
+is a warning, not a failed plan.
+
+#+begin_src bash
+eb-stack stack batch \
+  --root GROMACS-2026.2-foss-2026.1.eb \
+  --easyconfigs tests/batch_versions_fixtures/easyconfigs \
+  --installed tests/batch_versions_fixtures/installed-gromacs-2025.txt \
+  --eessi-version 2026.06 \
+  --easybuild-version 5.4.1 \
+  --generation 2026.1 \
+  --generated-at 2026-10-30T00:00:00Z \
+  --out-dir /tmp/batches
+#+end_src
+
+That command printed:
+
+#+begin_example
+batches=1 roots=1 waits=0 unresolved=0 deployed=0 digest=cd1b5856e678c2d8fbd7bc563a861edf706a9afe7cece55596aaa892a235b080 out=/tmp/batches
+#+end_example
+
+~/tmp/batches/plan.md~ names the batch and the warning:
+
+#+begin_example
+## batch-01-gromacs
+
+{2026.06}[foss/2026.1] GROMACS 2026.2
+
+1 module(s) to build.
+
+1 second-version warning(s); `pr-body.md` has the details.
+#+end_example
+
+The batch directory holds the EESSI easystacks, a lock, a CycloneDX
+software bill of materials, ~reproduce.sh~, ~batch.json~, and
+~pr-body.md~. The pull-request body includes:
+
+#+begin_example
+Second versions in one generation, from `eb-stack stack generation`:
+
+GROMACS has 2 versions in generation 2026.1: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2026.1.eb); pass --allow-versions GROMACS@2026.1 to accept
+#+end_example
+
+~--allow-versions GROMACS@2026.1~ accepts that pair.
+~--generated-at~ fixes the time written into the plan, so the same
+inputs give the same digest. ~--roots-file~ reads the ~roots.txt~ that
+~stack gap~ writes. An entry the architecture cannot build exits 1 and
+writes nothing. ~eb_stack_batch~ is the same command. See
+[[file:generation-lint.org][the second-version check]] and
+[[file:../reference/cli.org][the CLI reference]].

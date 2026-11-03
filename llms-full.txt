@@ -117,7 +117,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
     [warn before a bot job runs out of memory](https://eb-stack.rgoswami.me/howto/oom-profile.html.md).
     [read an EESSI bot FAILURE](https://eb-stack.rgoswami.me/howto/bot-classify.html.md),
-    [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md).
+    [split a Jenkins build list into shards](https://eb-stack.rgoswami.me/howto/stack-shard.html.md),
+    [plan software-layer pull requests that do not overlap](https://eb-stack.rgoswami.me/howto/stack-batch.html.md).
   - Reference: [glossary](https://eb-stack.rgoswami.me/reference/glossary.html.md),
     [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md),
@@ -5228,6 +5229,75 @@ filename, a tab, then seconds. A module the file does not list weighs
 
 A line whose easyconfig is not on the robot path exits 1 and writes
 nothing. `eb_stack_shard` is the same command. See
+[the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Plan software-layer pull requests that do not overlap
+
+What it does: `stack batch` plans European Environment for Scientific
+Software Installations (EESSI) software-layer pull requests whose builds
+do not overlap. A root's set is its closure over the robot path minus
+the installed modules, the same set `pr-overlap` computes for one
+easystack line. Roots whose sets meet go in one pull request. A root
+whose set meets an open pull request waits for that pull request. The
+rest are packed `--size` roots per pull request.
+
+Why you'd use it: `stack gap` writes `roots.txt` for the recipes the
+generation can already build. Those roots should not all land in one
+pull request, and two pull requests must not build the same module.
+
+# One root beside an installed version
+
+`tests/batch_versions_fixtures` has GROMACS 2025.4 installed and a
+recipe for GROMACS 2026.2 on foss/2026.1, generation 2026.1 of EESSI
+2026.06. One root is one batch. The second version in that generation
+is a warning, not a failed plan.
+
+```bash
+eb-stack stack batch \
+  --root GROMACS-2026.2-foss-2026.1.eb \
+  --easyconfigs tests/batch_versions_fixtures/easyconfigs \
+  --installed tests/batch_versions_fixtures/installed-gromacs-2025.txt \
+  --eessi-version 2026.06 \
+  --easybuild-version 5.4.1 \
+  --generation 2026.1 \
+  --generated-at 2026-10-30T00:00:00Z \
+  --out-dir /tmp/batches
+```
+
+That command printed:
+
+```
+batches=1 roots=1 waits=0 unresolved=0 deployed=0 digest=cd1b5856e678c2d8fbd7bc563a861edf706a9afe7cece55596aaa892a235b080 out=/tmp/batches
+```
+
+`/tmp/batches/plan.md` names the batch and the warning:
+
+```
+## batch-01-gromacs
+
+{2026.06}[foss/2026.1] GROMACS 2026.2
+
+1 module(s) to build.
+
+1 second-version warning(s); `pr-body.md` has the details.
+```
+
+The batch directory holds the EESSI easystacks, a lock, a CycloneDX
+software bill of materials, `reproduce.sh`, `batch.json`, and
+`pr-body.md`. The pull-request body includes:
+
+```
+Second versions in one generation, from `eb-stack stack generation`:
+
+GROMACS has 2 versions in generation 2026.1: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2026.1.eb); pass --allow-versions GROMACS@2026.1 to accept
+```
+
+`--allow-versions GROMACS@2026.1` accepts that pair.
+`--generated-at` fixes the time written into the plan, so the same
+inputs give the same digest. `--roots-file` reads the `roots.txt` that
+`stack gap` writes. An entry the architecture cannot build exits 1 and
+writes nothing. `eb_stack_batch` is the same command. See
+[the second-version check](https://eb-stack.rgoswami.me/generation-lint.html.md) and
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
 # Glossary
