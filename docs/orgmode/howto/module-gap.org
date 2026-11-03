@@ -22,7 +22,9 @@ generation in ~data/eessi-generations.toml~, such as
 
 * Capture the live inventories
 
-Run the helper from a shell where the ~module~ command is initialized.
+The helper uses the shell's ~module~ function.
+A non-interactive shell often has none, so the helper then sources ~$LMOD_PKG/init/bash~, or ~$MODULESHOME/init/bash~ when the first is missing.
+It exits 2 when neither file exists.
 Its four arguments are the output directory, the site meta-module, the
 older EESSI module, and the target EESSI module. Use ~-~ for the site
 argument when the base module path is the live site tree.
@@ -38,6 +40,11 @@ one EESSI version cannot add paths to the next dump. The files are
 ~eessi-target.txt~. Pass them as ~--site~, ~--older~, and
 ~--installed~, respectively. They are the raw ~module -t avail~
 output; ~stack gap~ ignores path headers and default markers.
+
+The purge and load output for each tree goes to a ~.module.log~ file next to its inventory, such as ~eessi-target.module.log~.
+If the purge or the load fails, or ~module is-loaded~ does not report the module afterwards, the helper prints the module name and that log and exits 1.
+It writes no inventory for that tree, so ~stack gap~ never reads a purged base tree as an older or target inventory.
+Before the first dump, the helper deletes all three inventories from any earlier run, so a failed run leaves none of them behind.
 
 * Read the open-pull-request inventories
 
