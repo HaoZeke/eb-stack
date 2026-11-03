@@ -2170,6 +2170,384 @@ fn load_easyblock_catalog(
     Ok(Some(catalog))
 }
 
+/// Arguments for `stack shard`.
+pub struct StackShardRequest {
+    /// Jenkins build list of one node type.
+    pub build_list: PathBuf,
+    /// Robot-path easyconfig trees; later trees take precedence.
+    pub easyconfigs: Vec<PathBuf>,
+    /// Installed-module lists, one `Name/VersionFull` per line.
+    pub installed: Vec<PathBuf>,
+    /// Lmod `modules/all` trees whose modules count as installed.
+    pub installed_modules_dirs: Vec<PathBuf>,
+    /// Upper bound on the number of shards.
+    pub shards: usize,
+    /// `module<TAB>seconds` per line.
+    pub weights: Option<PathBuf>,
+    /// Weight of a module `weights` does not list.
+    pub default_weight: u64,
+    /// `--filter-deps` as EasyBuild takes it.
+    pub filter_deps: Vec<String>,
+    /// RFC 3339 time written into the plan; absent is now.
+    pub generated_at: Option<String>,
+    /// Output directory.
+    pub out_dir: PathBuf,
+}
+
+/// What `stack shard` wrote.
+pub struct StackShardRun {
+    /// Shards written.
+    pub shards: usize,
+    /// Prelude modules.
+    pub prelude: usize,
+    /// Build-list lines.
+    pub lines: usize,
+}
+
+impl StackShardRun {
+    /// One line for the CLI.
+    pub fn summary(&self) -> String {
+        format!(
+            "shards={} prelude={} lines={}",
+            self.shards, self.prelude, self.lines
+        )
+    }
+}
+
+/// Modules under an Lmod `modules/all` tree, as `Name/Version` (the version
+/// may hold further `/` levels). Hidden files, `default`, and `.modulerc`
+/// files are skipped; a symlink is followed.
+fn modules_under(root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    fn walk(
+        dir: &Path,
+        prefix: &str,
+        out: &mut std::collections::BTreeSet<String>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "default" {
+                continue;
+            }
+            let path = entry.path();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(&path, &rel, out)?;
+            } else if !prefix.is_empty() {
+                out.insert(rel.strip_suffix(".lua").unwrap_or(&rel).to_string());
+            }
+        }
+        Ok(())
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(root, "", &mut out).map_err(|error| {
+        usage(format!(
+            "--installed-modules-dir {}: {error}",
+            root.display()
+        ))
+    })?;
+    Ok(out)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Split a build list into shards whose builds do not overlap, plus a prelude
+/// of the dependencies two or more shards need. Writes nothing when a line
+/// cannot be resolved.
+pub fn run_stack_shard(args: &StackShardRequest) -> Result<StackShardRun> {
+    use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
+    use crate::domain::Candidate;
+    use crate::shard::{parse_lines, parse_weights, plan, LineClosure};
+    use serde_json::json;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    if args.shards == 0 {
+        return Err(usage("--shards must be at least 1"));
+    }
+    let list_bytes = std::fs::read(&args.build_list)
+        .with_context(|| format!("--build-list {}: not readable", args.build_list.display()))?;
+    let list_text = String::from_utf8_lossy(&list_bytes).into_owned();
+    let lines = parse_lines(&list_text);
+    if lines.is_empty() {
+        return Err(usage(format!(
+            "--build-list {}: no build-list lines",
+            args.build_list.display()
+        )));
+    }
+    let (weights, weights_digest) = match &args.weights {
+        Some(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("--weights {}: not readable", path.display()))?;
+            let parsed = parse_weights(&String::from_utf8_lossy(&bytes))
+                .map_err(|error| usage(format!("--weights {}: {error}", path.display())))?;
+            (parsed, Some(sha256_hex(&bytes)))
+        }
+        None => (BTreeMap::new(), None),
+    };
+    let stamp = generated_at(args.generated_at.clone(), true)?;
+    let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter = FilterDeps::parse(&filter_specs)
+        .map_err(|error| usage(format!("--filter-deps: {error}")))?;
+
+    let mut installed: BTreeSet<String> = BTreeSet::new();
+    for path in &args.installed {
+        installed.extend(pr_overlap::parse_installed(
+            &std::fs::read_to_string(path)
+                .with_context(|| format!("--installed {}: not readable", path.display()))?,
+        ));
+    }
+    for dir in &args.installed_modules_dirs {
+        installed.extend(modules_under(dir)?);
+    }
+
+    let (robot, _) = load_robot_trees(&args.easyconfigs, &[])?;
+    let mut universe = robot.base;
+    if !filter.is_empty() {
+        filter.apply(&mut universe);
+    }
+    let file_name = |c: &Candidate| -> String {
+        c.easyconfig_path
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let by_file: BTreeMap<String, &Candidate> =
+        universe.iter().map(|c| (file_name(c), c)).collect();
+    let by_module: BTreeMap<String, &Candidate> = universe
+        .iter()
+        .map(|c| (module_name(&ModuleKey::of(c)), c))
+        .collect();
+
+    // Resolve every line before computing anything, so a bad list fails with
+    // every bad line named.
+    let mut problems = Vec::new();
+    let mut starts: Vec<Option<ModuleKey>> = Vec::new();
+    for line in &lines {
+        if !line.file.ends_with(".eb") {
+            problems.push(format!(
+                "line {}: {} is not an easyconfig filename",
+                line.number, line.file
+            ));
+            starts.push(None);
+            continue;
+        }
+        match by_file.get(&line.file) {
+            Some(c) => starts.push(Some(ModuleKey::of(c))),
+            None => {
+                problems.push(format!(
+                    "line {}: {}: no such easyconfig on the robot path",
+                    line.number, line.file
+                ));
+                starts.push(None);
+            }
+        }
+    }
+    let forced: BTreeSet<ModuleKey> = lines
+        .iter()
+        .zip(&starts)
+        .filter(|(line, _)| line.forced)
+        .filter_map(|(_, key)| key.clone())
+        .collect();
+    let is_installed =
+        |key: &ModuleKey| !forced.contains(key) && installed.contains(&module_name(key));
+    let mut closures = Vec::new();
+    let mut reached: BTreeSet<ModuleKey> = BTreeSet::new();
+    for (line, start) in lines.iter().zip(&starts) {
+        let Some(start) = start else { continue };
+        let closure = closure_against_installed(
+            &universe,
+            std::slice::from_ref(start),
+            Choice::Newest,
+            &is_installed,
+        );
+        for requirement in &closure.unresolved {
+            problems.push(format!(
+                "line {}: {}: {} needs {}",
+                line.number,
+                line.file,
+                module_name(&requirement.from),
+                requirement.requirement
+            ));
+        }
+        reached.extend(closure.to_build.iter().cloned());
+        reached.extend(closure.installed.iter().cloned());
+        closures.push(LineClosure {
+            root: module_name(start),
+            to_build: closure.to_build.iter().map(module_name).collect(),
+        });
+    }
+    if !problems.is_empty() {
+        return Err(anyhow!(
+            "{} problem(s) in the build list; nothing written\n{}",
+            problems.len(),
+            problems.join("\n")
+        ));
+    }
+
+    // One closure over every line gives a dependency order for the prelude.
+    let all_starts: Vec<ModuleKey> = starts.iter().flatten().cloned().collect();
+    let order: Vec<String> =
+        closure_against_installed(&universe, &all_starts, Choice::Newest, &is_installed)
+            .to_build
+            .iter()
+            .map(module_name)
+            .collect();
+    let easyconfig_of = |module: &str| -> String {
+        by_module
+            .get(module)
+            .map(|c| file_name(c))
+            .unwrap_or_else(|| module.to_string())
+    };
+    let weight = |module: &str| -> u64 {
+        weights
+            .get(module)
+            .or_else(|| weights.get(&easyconfig_of(module)))
+            .copied()
+            .unwrap_or(args.default_weight)
+    };
+    let planned = plan(&closures, &order, &weight, args.shards);
+
+    // The digest covers what decides the plan: the list, the weights, the
+    // installed modules, and every easyconfig a closure reached, by file name
+    // and content.
+    let mut easyconfig_digests: BTreeMap<String, String> = BTreeMap::new();
+    for key in &reached {
+        if let Some(c) = by_module.get(&module_name(key)) {
+            let content = std::fs::read(&c.easyconfig_path)
+                .with_context(|| format!("read {}", c.easyconfig_path))?;
+            easyconfig_digests.insert(file_name(c), sha256_hex(&content));
+        }
+    }
+    let mut digest_input = format!(
+        "shards={}\ndefault_weight={}\nbuild_list={}\n",
+        args.shards,
+        args.default_weight,
+        sha256_hex(&list_bytes)
+    );
+    if let Some(digest) = &weights_digest {
+        digest_input.push_str(&format!("weights={digest}\n"));
+    }
+    for spec in &filter_specs {
+        digest_input.push_str(&format!("filter_deps={spec}\n"));
+    }
+    for module in &installed {
+        digest_input.push_str(&format!("installed={module}\n"));
+    }
+    for (file, digest) in &easyconfig_digests {
+        digest_input.push_str(&format!("easyconfig={file} {digest}\n"));
+    }
+    let inputs_digest = sha256_hex(digest_input.as_bytes());
+
+    let width = planned.shards.len().to_string().len().max(2);
+    let shard_name = |s: usize| format!("shard-{:0width$}", s + 1);
+    let mut files: Vec<(String, String)> = vec![(
+        "prelude.list".into(),
+        planned
+            .prelude
+            .iter()
+            .map(|m| format!("{}\n", easyconfig_of(m)))
+            .collect(),
+    )];
+    let mut shard_json = Vec::new();
+    for (s, shard) in planned.shards.iter().enumerate() {
+        files.push((
+            format!("{}.list", shard_name(s)),
+            shard
+                .lines
+                .iter()
+                .map(|&i| format!("{}\n", lines[i].text))
+                .collect(),
+        ));
+        shard_json.push(json!({
+            "name": shard_name(s),
+            "file": format!("{}.list", shard_name(s)),
+            "weight": shard.weight,
+            "lines": shard.lines.iter().map(|&i| lines[i].number).collect::<Vec<_>>(),
+            "modules": shard.modules,
+        }));
+    }
+    let line_json: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            json!({
+                "line": line.number,
+                "text": line.text,
+                "easyconfig": line.file,
+                "module": closures[i].root,
+                "group": planned.group_of[i] + 1,
+                "shard": shard_name(planned.shard_of[i]),
+                "closure": closures[i].to_build,
+            })
+        })
+        .collect();
+    let document = json!({
+        "schema_version": 1,
+        "generated_at": stamp,
+        "inputs": {
+            "sha256": inputs_digest,
+            "build_list_sha256": sha256_hex(&list_bytes),
+            "weights_sha256": weights_digest,
+            "installed_modules": installed.len(),
+            "filter_deps": filter_specs,
+            "easyconfigs": easyconfig_digests,
+        },
+        "shards_requested": args.shards,
+        "default_weight": args.default_weight,
+        "prelude": {
+            "file": "prelude.list",
+            "weight": planned.prelude_weight,
+            "modules": planned
+                .prelude
+                .iter()
+                .map(|m| json!({"module": m, "easyconfig": easyconfig_of(m), "weight": weight(m)}))
+                .collect::<Vec<_>>(),
+        },
+        "shards": shard_json,
+        "lines": line_json,
+    });
+
+    std::fs::create_dir_all(&args.out_dir)
+        .with_context(|| format!("create {}", args.out_dir.display()))?;
+    // A rerun with fewer shards must not leave an old shard list behind for
+    // the pipeline to pick up.
+    let written: BTreeSet<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+    for entry in std::fs::read_dir(&args.out_dir)
+        .with_context(|| format!("read {}", args.out_dir.display()))?
+    {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("shard-") && name.ends_with(".list") && !written.contains(name.as_str())
+        {
+            std::fs::remove_file(entry.path())
+                .with_context(|| format!("remove stale {}", entry.path().display()))?;
+        }
+    }
+    for (name, text) in &files {
+        crate::write_text(&args.out_dir.join(name), text)?;
+    }
+    crate::write_json_pretty(&args.out_dir.join("plan.json"), &document)?;
+    Ok(StackShardRun {
+        shards: planned.shards.len(),
+        prelude: planned.prelude.len(),
+        lines: lines.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

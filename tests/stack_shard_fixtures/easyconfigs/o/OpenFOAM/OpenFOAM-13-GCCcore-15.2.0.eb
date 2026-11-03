@@ -1,0 +1,19 @@
+easyblock = 'ConfigureMake'
+
+name = 'OpenFOAM'
+version = '13'
+
+homepage = 'https://example.org/OpenFOAM'
+description = "Fixture for stack shard."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+builddependencies = [('CMake', '3.31.8')]
+
+dependencies = [('MathLib', '1.0'), ('HDF5', '1.14.6'), ('zlib', '1.3.1')]
+
+moduleclass = 'lib'

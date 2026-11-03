@@ -1,0 +1,7 @@
+# seconds per module
+OpenFOAM/13-GCCcore-15.2.0	3600
+ParaView/6.0.0-GCCcore-15.2.0	1800
+Qt6-6.9.0-GCCcore-15.2.0.eb	2400
+PETSc/3.23.0-GCCcore-15.2.0	600
+Hypre/2.33.0-GCCcore-15.2.0	300
+SuiteSparse/7.10.0-GCCcore-15.2.0	399.5

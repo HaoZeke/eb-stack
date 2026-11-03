@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'Broken'
+version = '1.0'
+
+homepage = 'https://example.org/Broken'
+description = "Fixture for stack shard."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('NoSuchLib', '9.9')]
+
+moduleclass = 'lib'

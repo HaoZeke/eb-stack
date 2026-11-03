@@ -1008,6 +1008,44 @@ struct BatchArgs {
     out_dir: PathBuf,
 }
 
+#[derive(clap::Args, Debug)]
+struct ShardArgs {
+    /// Jenkins build list of one node type: `Name-version-toolchain.eb
+    /// [eb options]` per line, `#` comments skipped.
+    #[arg(long)]
+    build_list: PathBuf,
+    /// Robot-path easyconfig tree. Repeatable; later trees take precedence.
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Installed modules, one `Name/VersionFull` per line. Repeatable.
+    #[arg(long)]
+    installed: Vec<PathBuf>,
+    /// Lmod `modules/all` tree whose modules count as installed, for
+    /// example EESSI's tree for the CPU target and the site tree. Repeatable.
+    #[arg(long = "installed-modules-dir")]
+    installed_modules_dirs: Vec<PathBuf>,
+    /// Most shards to write. Fewer are written when fewer groups exist.
+    #[arg(long)]
+    shards: usize,
+    /// Build time per module, `Name/VersionFull<TAB>seconds` (or the
+    /// easyconfig filename in place of the module) per line.
+    #[arg(long)]
+    weights: Option<PathBuf>,
+    /// Weight of a module `--weights` does not list.
+    #[arg(long, default_value_t = 1)]
+    default_weight: u64,
+    /// Dependencies to drop the way EasyBuild's `--filter-deps` drops them.
+    /// Comma-separated. When omitted, `EASYBUILD_FILTER_DEPS` is used if set.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
+    /// RFC 3339 time written into the plan. Absent is now.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Output directory for `prelude.list`, `shard-NN.list`, and `plan.json`.
+    #[arg(long)]
+    out_dir: PathBuf,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum ProvidedFormatArg {
     /// The provided lines, then any further findings, then a count.
@@ -1224,6 +1262,20 @@ enum StackCommand {
         after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
     )]
     Batch(Box<BatchArgs>),
+    /// Split one Jenkins build list into shards that can build at once.
+    ///
+    /// Each line's closure is computed over the robot path minus the
+    /// installed modules, as `pr-overlap` computes a root's set. Lines whose
+    /// own easyconfig another line needs share a shard; any other module the
+    /// closures of two or more shards need goes to `prelude.list`, which
+    /// builds first. Groups are packed into at most `--shards` shards by
+    /// weight. Writes `prelude.list`, `shard-NN.list` (input lines verbatim,
+    /// dependencies first), and `plan.json`. A line whose easyconfig or
+    /// dependency cannot be resolved fails the run and nothing is written.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards"
+    )]
+    Shard(Box<ShardArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
     /// that architecture has never installed.
     ///
@@ -2951,6 +3003,36 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     oom_profile,
                     oom_resources,
                     command_line,
+                    out_dir,
+                },
+            )?;
+            println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Shard(args) => {
+            let ShardArgs {
+                build_list,
+                easyconfigs,
+                installed,
+                installed_modules_dirs,
+                shards,
+                weights,
+                default_weight,
+                filter_deps,
+                generated_at,
+                out_dir,
+            } = *args;
+            let run = eb_stack::site_commands::run_stack_shard(
+                &eb_stack::site_commands::StackShardRequest {
+                    build_list,
+                    easyconfigs,
+                    installed,
+                    installed_modules_dirs,
+                    shards,
+                    weights,
+                    default_weight,
+                    filter_deps,
+                    generated_at,
                     out_dir,
                 },
             )?;

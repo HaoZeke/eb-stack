@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'Szip'
+version = '2.1.1'
+
+homepage = 'https://example.org/Szip'
+description = "Fixture for stack shard."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+builddependencies = [('CMake', '3.31.8')]
+
+moduleclass = 'lib'

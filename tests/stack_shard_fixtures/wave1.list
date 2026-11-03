@@ -1,0 +1,6 @@
+# Snel wave 1, rome
+OpenFOAM-13-GCCcore-15.2.0.eb --hooks=/sw/hooks/openfoam.py
+ParaView-6.0.0-GCCcore-15.2.0.eb
+
+PETSc-3.23.0-GCCcore-15.2.0.eb --include-easyblocks=/sw/easyblocks/petsc.py
+Hypre-2.33.0-GCCcore-15.2.0.eb

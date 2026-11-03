@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with neither ~--easystack~ nor ~--node~. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -40,6 +40,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack order~ | Sequence every pinned build a set of roots needs |
 | ~stack gap~ | Classify site modules the stack lacks and name the recipe that closes each |
 | ~stack batch~ | Plan software-layer pull requests whose builds do not overlap |
+| ~stack shard~ | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies |
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
@@ -480,6 +481,16 @@ eb-stack stack batch \
   [--oom-resources BOT-RESOURCES.toml] \
   --out-dir BATCHES
 
+eb-stack stack shard \
+  --build-list NODE-TYPE.list \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--installed-modules-dir MODULES/all]... [--installed INSTALLED.txt]... \
+  --shards 4 \
+  [--weights SECONDS.tsv] [--default-weight 1] \
+  [--filter-deps NAME,NAME...] \
+  [--generated-at 2026-11-03T00:00:00Z] \
+  --out-dir SHARDS
+
 eb-stack stack arch \
   --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
   [--arch riscv64]... \
@@ -728,6 +739,39 @@ known-failure and out-of-memory warnings. ~--allow-versions NAME~ or
 ~stack generation~, and repeats. These are warnings, so a batch still
 exits 0; a bad ~--allow-versions~ spec is a usage error. When the EESSI
 version is not in the generation table, the check is skipped for the run.
+
+~stack shard~ splits one Jenkins build list (one node type, after
+~--include-systems~ is applied) into shards that can build at the same
+time. Each line is ~Name-version-toolchain.eb [eb options]~; ~#~ lines
+are comments. A line's set is its closure over the ~--easyconfigs~ robot
+path minus the installed modules, as ~pr-overlap~ computes a root's set.
+Installed modules come from ~--installed-modules-dir~, an Lmod
+~modules/all~ tree read as ~Name/Version~ (EESSI's tree for the CPU target
+and the site tree, for example), and from ~--installed~ lists, one
+~Name/VersionFull~ per line; both repeat. A line with ~--rebuild~ or
+~--force~ builds its own module even when it is installed. Two lines share
+a shard only when one line's easyconfig is in the other's set, or both name
+the same easyconfig; the line that is needed comes first. Every other module
+the sets of two or more shards need goes to the prelude, so the shards'
+sets are disjoint. Groups are packed into at most ~--shards~ shards,
+heaviest first onto the lightest shard. A module weighs its ~--weights~
+value (~Name/VersionFull~ or the easyconfig filename, a tab, then seconds;
+a fraction rounds up), or ~--default-weight~ (1) when the file does not
+list it. ~--filter-deps~, or ~EASYBUILD_FILTER_DEPS~ when the flag is
+absent, drops dependencies the way EasyBuild does.
+
+~--out-dir~ gets ~prelude.list~ (the prelude as easyconfig filenames in
+dependency order; empty when nothing is shared), ~shard-NN.list~ (the input
+lines verbatim, dependencies first), and ~plan.json~ (each line's closure,
+group and shard, the weight of every shard and of the prelude, and a
+SHA-256 over the build list, the weights, the installed modules and every
+easyconfig a closure reached). A ~shard-NN.list~ that an earlier run left
+and this run does not write is removed. ~--generated-at~ fixes the time in
+~plan.json~, so the same inputs give identical files. A line whose
+easyconfig is not on the robot path, whose first word is not an ~.eb~
+file, or whose closure has a requirement nothing satisfies exits 1, names
+every such line, and writes nothing. The command prints
+~shards=<k> prelude=<n> lines=<m>~.
 
 ** ~stack arch~
 
@@ -1628,7 +1672,7 @@ plus sandboxed recipe and easyblock tools:
   (easyblocks; ~eb_build_test~ only with ~EB_STACK_ALLOW_BUILD=1~);
 - ~eb_stack_solve~, ~eb_stack_sbom~, ~eb_stack_order~,
   ~eb_stack_easystack~, ~eb_stack_gap~, ~eb_stack_provided~,
-  ~eb_stack_batch~, ~eb_stack_arch~, ~eb_stack_files~,
+  ~eb_stack_batch~, ~eb_stack_shard~, ~eb_stack_arch~, ~eb_stack_files~,
   ~eb_stack_generation~, ~eb_stack_cuda_cc~, ~eb_stack_known_failures~,
   ~eb_stack_oom~, ~eb_stack_bot_classify~, ~eb_stack_sections~,
   ~eb_stack_from_commit~;

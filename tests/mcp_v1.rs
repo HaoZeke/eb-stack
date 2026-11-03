@@ -146,6 +146,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_stack_gap",
         "eb_stack_provided",
         "eb_stack_batch",
+        "eb_stack_shard",
         "eb_stack_arch",
         "eb_stack_files",
         "eb_stack_generation",
@@ -170,7 +171,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 49, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 50, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2552,6 +2553,7 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_stack_gap", "stack gap"),
         ("eb_stack_provided", "stack provided"),
         ("eb_stack_batch", "stack batch"),
+        ("eb_stack_shard", "stack shard"),
         ("eb_stack_arch", "stack arch"),
         ("eb_stack_files", "stack files"),
         ("eb_stack_generation", "stack generation"),
@@ -3715,6 +3717,7 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         ("eb_stack_gap", &["stack", "gap"]),
         ("eb_stack_provided", &["stack", "provided"]),
         ("eb_stack_batch", &["stack", "batch"]),
+        ("eb_stack_shard", &["stack", "shard"]),
         ("eb_stack_arch", &["stack", "arch"]),
         ("eb_stack_files", &["stack", "files"]),
         ("eb_stack_generation", &["stack", "generation"]),

@@ -444,6 +444,24 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_shard",
+            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line that cannot be resolved is a tool error and nothing is written.",
+            &[
+                ("build_list", "string"),
+                ("easyconfigs", "array_min1"),
+                ("shards", "integer"),
+                ("out_dir", "string"),
+            ],
+            &[
+                ("installed", "array"),
+                ("installed_modules_dir", "array"),
+                ("weights", "string"),
+                ("default_weight", "integer"),
+                ("filter_deps", "string"),
+                ("generated_at", "string"),
+            ],
+        ),
+        tool_with_optional(
             "eb_stack_arch",
             "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged. With probe_sources, source_urls and sources are resolved on each arch family (x86_64, aarch64, and riscv64 when arch is absent) and probed by HEAD with ranged GET fallback. A source no probed family can fetch is unreachable; one another probed family can fetch is arch-missing.",
             &[("easystack", "array_min1")],
@@ -806,6 +824,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_gap" => stack_gap_tool(arguments),
         "eb_stack_provided" => stack_provided_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
+        "eb_stack_shard" => stack_shard_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_stack_files" => stack_files_tool(arguments),
         "eb_stack_generation" => stack_generation_tool(arguments),
@@ -3067,6 +3086,29 @@ fn stack_provided_tool(arguments: &Value) -> Result<Value, String> {
         "hooks": report.hooks.len(),
         "family": report.family.len(),
         "licensed": report.licensed.len(),
+    }))
+}
+
+fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
+    let shards = optional_u64(arguments, "shards")?.ok_or("shards is required")?;
+    let request = crate::site_commands::StackShardRequest {
+        build_list: required_path(arguments, "build_list")?,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        installed: path_array(arguments, "installed")?,
+        installed_modules_dirs: path_array(arguments, "installed_modules_dir")?,
+        shards: usize::try_from(shards).map_err(|error| format!("shards: {error}"))?,
+        weights: optional_path(arguments, "weights"),
+        default_weight: optional_u64(arguments, "default_weight")?.unwrap_or(1),
+        filter_deps: filter_deps_argument(arguments),
+        generated_at: optional_string(arguments, "generated_at"),
+        out_dir: required_path(arguments, "out_dir")?,
+    };
+    let run = crate::site_commands::run_stack_shard(&request).map_err(workflow_error)?;
+    Ok(json!({
+        "text": run.summary(),
+        "shards": run.shards,
+        "prelude": run.prelude,
+        "lines": run.lines,
     }))
 }
 
