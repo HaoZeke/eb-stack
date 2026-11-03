@@ -3854,3 +3854,53 @@ fn mcp_stack_oom_prints_the_memory_cap_beside_the_core_cap() {
         "{text}"
     );
 }
+
+#[test]
+fn mcp_stack_oom_takes_easybuild_parallel_and_max_parallel() {
+    let response = call(
+        1,
+        "eb_stack_oom",
+        json!({"node": ["16:32768:x86_64/amd/zen4"], "parallel": 4}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("node 16 cores, 32768 MiB, x86_64/amd/zen4, --parallel 4\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  libxc: current 4 (divide_by_factor on *, max(1, 16 // 2) = 8, then --parallel 4); memory unmeasured\n"),
+        "{text}"
+    );
+
+    let response = call(
+        2,
+        "eb_stack_oom",
+        json!({"node": ["48:30016:aarch64/a64fx"], "max_parallel": 48}),
+    );
+    let text = response["result"]["structuredContent"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains(
+            "  LLVM: current 24 (divide_by_factor on *, max(1, 48 // 2)); memory unmeasured\n"
+        ),
+        "{text}"
+    );
+
+    let response = call(
+        3,
+        "eb_stack_oom",
+        json!({"node": ["16:32768"], "parallel": 0}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let message = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.contains("--parallel must be a positive integer"),
+        "{message}"
+    );
+}

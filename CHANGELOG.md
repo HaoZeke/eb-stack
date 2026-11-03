@@ -96,6 +96,17 @@ All notable changes to this project are documented here.
   more than the node has. `--mib-per-job FILE` is a visible alias of
   `--job-memory FILE`. The `memory` column, `limit_by_memory` in place of
   the hook, is unchanged.
+- `stack oom --parallel N` and `--max-parallel N` model a job that sets
+  EasyBuild's `--parallel` or `--max-parallel`; the bot sets neither.
+  EasyBuild uses `--parallel` in place of the core count, capped at
+  max-parallel and `maxparallel`. The EESSI `post_ready_hook` still
+  applies its op to the node's cores (`det_parallelism()` with no
+  arguments) and keeps the result only when it is lower: with
+  `--parallel 12` on 16 cores libxc gets 16 // 2 = 8, and with
+  `--parallel 4` it stays at 4. The `--node` lines and a warning's
+  `parallel` line name the setting that decided, and say when the
+  hook's result was not lower. 0 for either flag is status 2.
+  `eb_stack_oom` takes `parallel` and `max_parallel`.
 
 ### Documentation
 

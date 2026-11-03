@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -1160,6 +1160,18 @@ than the node's memory. The memory
 a hook would read on the build machine is the smallest cgroup v2
 ~memory.max~ on the process's cgroup path, else ~MemTotal~.
 
+~--parallel N~ and ~--max-parallel N~ are EasyBuild's settings for the
+job, as ~EASYBUILD_PARALLEL~ and ~EASYBUILD_MAX_PARALLEL~ would set them;
+the bot sets neither. EasyBuild uses ~--parallel~ in place of the core
+count, capped at ~--max-parallel~ (in place of the table's
+~max_parallel~) and at the easyconfig's ~maxparallel~. The hook applies
+its op to the node's cores, not to either setting, and keeps the result
+only when it is lower. ~--node~ lines then end the hook formula with
+~then --parallel N~ or ~then max-parallel N~ when that setting decided,
+and the node line names ~--parallel~. A warning's ~parallel~ line names
+~--parallel~ and the cores the hook divided, and says when the hook's
+result was not below EasyBuild's level. 0 for either flag is status 2.
+
 ~--hooks~ reads ~PARALLELISM_LIMITS~ from an EESSI ~eb_hooks.py~ in
 place of the hook rows of ~data/eessi-bot-resources.toml~. The nodes
 and EasyBuild's ~max-parallel~ still come from the table. The file is
@@ -1819,7 +1831,8 @@ needs one ~easystack~ or ~pr~. It returns the same report as
 stdout, and ~hits~, one object per line. Warnings are not a tool error
 unless ~strict~ is true, when a remaining warning is.
 ~eb_stack_oom~ takes ~easystack~, ~arch~, ~easyconfigs~,
-~installed~, ~profile~, ~resources~, ~node~, ~job_memory~, and ~hooks~.
+~installed~, ~profile~, ~resources~, ~node~, ~job_memory~, ~hooks~,
+~parallel~, and ~max_parallel~.
 It needs an easystack, a node, or hooks. It returns the ~stack oom~
 text, one object per warning, ~factor_warnings~ for a divide factor
 that is not an integer, and ~hook_warnings~ for a dropped sum in the

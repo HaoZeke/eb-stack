@@ -339,7 +339,10 @@ the change in the pull request yourself. The command exits 0.
 
 The hook ops are `divide_by_factor` (`max(1, parallel // factor)`) and
 `set_maximum` (`min(parallel, n)`). A CPU-target key overrides `*`.
-A64FX divides every other build by 4. A divide factor that is not an
+A64FX divides every other build by 4. The op applies to the node's
+cores, not to EasyBuild's `--parallel`, and wins only when lower;
+`--parallel N` and `--max-parallel N` on `stack oom` show a job that
+sets them. A divide factor that is not an
 integer is a warning: `16 // 2.5` is the float `6.0`. Use an integer.
 `--hooks software-layer-scripts/eb_hooks.py` reads `PARALLELISM_LIMITS`
 from the file instead of the bundled copy, and the warning names the

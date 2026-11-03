@@ -547,6 +547,9 @@ pub struct HookLimit {
 pub struct BotResources {
     /// EasyBuild's default `max-parallel`.
     pub max_parallel: u32,
+    /// EasyBuild's `--parallel` for the job. `None`, which is what the bot
+    /// passes, lets EasyBuild count the cores.
+    pub parallel: Option<u32>,
     /// Node types, in file order.
     pub partitions: Vec<Partition>,
     /// Hook limits, in file order.
@@ -624,7 +627,13 @@ pub struct Parallel {
     pub level: u32,
     /// CPUs the job holds.
     pub cores: u32,
-    /// The hook limit that applied.
+    /// EasyBuild's `--parallel`, when the job sets one.
+    pub requested: Option<u32>,
+    /// EasyBuild's `max-parallel`, when it lowered `--parallel` or the
+    /// cores.
+    pub max_parallel: Option<u32>,
+    /// The hook limit that matched. It applies only when its result is
+    /// below the level EasyBuild chose.
     pub hook: Option<LimitOp>,
     /// `maxparallel` in the easyconfig.
     pub recipe: Option<u32>,
@@ -714,6 +723,7 @@ impl BotResources {
         }
         Ok(Self {
             max_parallel: raw.easybuild.max_parallel,
+            parallel: None,
             partitions,
             limits,
             hooks_source: raw.hooks.source,
@@ -784,9 +794,27 @@ impl BotResources {
         lines
     }
 
+    /// The level EasyBuild's `set_parallel` gives a build before the hook.
+    ///
+    /// `--parallel` replaces the core count, so it may be above the cores.
+    /// `max-parallel` caps either. The second value is that cap when it
+    /// lowered the level.
+    fn easybuild_level(&self, cores: u32) -> (u32, Option<u32>) {
+        let asked = self.parallel.unwrap_or(cores);
+        if self.max_parallel < asked {
+            (self.max_parallel, Some(self.max_parallel))
+        } else {
+            (asked, None)
+        }
+    }
+
     /// The parallel level `name` builds with on `partition`.
+    ///
+    /// `post_ready_hook` applies its op to the cores it detects, not to
+    /// `--parallel` or `max-parallel`, and keeps the result only when it
+    /// is below the level EasyBuild chose.
     pub fn parallel(&self, name: &str, partition: &Partition, recipe: Option<u32>) -> Parallel {
-        let mut level = partition.cores.min(self.max_parallel);
+        let (mut level, max_parallel) = self.easybuild_level(partition.cores);
         if let Some(recipe) = recipe {
             level = level.min(recipe.max(1));
         }
@@ -797,6 +825,8 @@ impl BotResources {
         Parallel {
             level,
             cores: partition.cores,
+            requested: self.parallel,
+            max_parallel,
             hook,
             recipe,
         }
@@ -956,28 +986,53 @@ fn estimate_text(entry: &MemoryEntry, parallel: u32, peak: f64) -> String {
 }
 
 fn parallel_reason(name: &str, parallel: &Parallel) -> String {
-    let mut parts = vec![format!("{} cores", parallel.cores)];
+    let cores = parallel.cores;
+    let mut parts = vec![match parallel.requested {
+        Some(requested) => format!("--parallel {requested} on {cores} cores"),
+        None => format!("{cores} cores"),
+    }];
+    if let Some(max_parallel) = parallel.max_parallel {
+        parts.push(format!("max-parallel {max_parallel}"));
+    }
     if let Some(recipe) = parallel.recipe {
         parts.push(format!("maxparallel = {recipe} in the easyconfig"));
     }
-    match parallel.hook {
-        Some(LimitOp::Divide(factor)) => {
+    let Some(op) = parallel.hook else {
+        parts.push(format!("no eb_hooks.py limit for {name}"));
+        return parts.join(", ");
+    };
+    let mut hook = match op {
+        LimitOp::Divide(factor) => {
             let shown = format_factor(factor);
-            let divided = divide_by_factor(parallel.cores, factor);
-            if divided.float_result {
-                parts.push(format!(
-                    "eb_hooks.py divides {name} by {shown} ({} // {shown} is {:.1}, a float)",
-                    parallel.cores, divided.level as f64
-                ));
+            let divided = divide_by_factor(cores, factor);
+            let mut text = if divided.float_result {
+                format!(
+                    "eb_hooks.py divides {name} by {shown} ({cores} // {shown} is {:.1}, a float)",
+                    divided.level as f64
+                )
             } else {
-                parts.push(format!("eb_hooks.py divides {name} by {shown}"));
+                format!("eb_hooks.py divides {name} by {shown}")
+            };
+            if let Some(requested) = parallel.requested {
+                text.push_str(&format!(
+                    " on the {cores} cores, not on --parallel {requested}"
+                ));
             }
+            text
         }
-        Some(LimitOp::Maximum(value)) => {
-            parts.push(format!("eb_hooks.py caps {name} at {value}"));
+        LimitOp::Maximum(value) => format!("eb_hooks.py caps {name} at {value}"),
+    };
+    let hooked = op.apply(cores);
+    if hooked > parallel.level {
+        if op != LimitOp::Maximum(hooked) {
+            hook.push_str(&format!(", which gives {hooked}"));
         }
-        None => parts.push(format!("no eb_hooks.py limit for {name}")),
+        hook.push_str(&format!(
+            ", not below {}, so it does not apply",
+            parallel.level
+        ));
     }
+    parts.push(hook);
     parts.join(", ")
 }
 
@@ -1335,9 +1390,25 @@ fn node_partition(node: &NodeSize) -> Partition {
     }
 }
 
+/// EasyBuild's level before the hook on `cores`, and the setting that
+/// decided it when that is not the cores.
+fn easybuild_bound(resources: &BotResources, cores: u32) -> (u32, Option<String>) {
+    let (level, capped) = resources.easybuild_level(cores);
+    let bound = match (capped, resources.parallel) {
+        (Some(max_parallel), _) => Some(format!("max-parallel {max_parallel}")),
+        (None, Some(requested)) => Some(format!("--parallel {requested}")),
+        (None, None) => None,
+    };
+    (level, bound)
+}
+
 fn current_clause(resources: &BotResources, name: &str, node: &NodeSize) -> (u32, String) {
     let partition = node_partition(node);
     let got = resources.parallel(name, &partition, None);
+    let (_, bound) = easybuild_bound(resources, node.cores);
+    let then = bound
+        .clone()
+        .unwrap_or_else(|| format!("{} cores", node.cores));
     let key = resources
         .matching_limit(name, &partition.target)
         .map(|limit| limit.target.as_str());
@@ -1353,14 +1424,11 @@ fn current_clause(resources: &BotResources, name: &str, node: &NodeSize) -> (u32
             if divided.level != got.level {
                 if divided.float_result {
                     text.push_str(&format!(
-                        " = {:.1}, a float, then max-parallel {}",
-                        divided.level as f64, resources.max_parallel
+                        " = {:.1}, a float, then {then}",
+                        divided.level as f64
                     ));
                 } else {
-                    text.push_str(&format!(
-                        " = {}, then max-parallel {}",
-                        divided.level, resources.max_parallel
-                    ));
+                    text.push_str(&format!(" = {}, then {then}", divided.level));
                 }
             } else if divided.float_result {
                 text.push_str(&format!(" = {:.1}, a float", divided.level as f64));
@@ -1371,17 +1439,14 @@ fn current_clause(resources: &BotResources, name: &str, node: &NodeSize) -> (u32
             let raw = set_maximum(node.cores, value);
             let mut text = format!("set_maximum{on}, min({}, {value})", node.cores);
             if raw != got.level {
-                text.push_str(&format!(
-                    " = {raw}, then max-parallel {}",
-                    resources.max_parallel
-                ));
+                text.push_str(&format!(" = {raw}, then {then}"));
             }
             text
         }
-        None if node.cores > resources.max_parallel => {
-            format!("no hook limit, max-parallel {}", resources.max_parallel)
-        }
-        None => "no hook limit".to_string(),
+        None => match bound {
+            Some(bound) => format!("no hook limit, {bound}"),
+            None => "no hook limit".to_string(),
+        },
     };
     (got.level, text)
 }
@@ -1396,19 +1461,20 @@ fn memory_cap_clause(core_cap: u32, mib_per_job: u32, node: &NodeSize) -> String
     }
 }
 
-fn memory_clause(mib_per_job: Option<u32>, node: &NodeSize, max_parallel: u32) -> String {
+fn memory_clause(mib_per_job: Option<u32>, node: &NodeSize, resources: &BotResources) -> String {
     let Some(mib_per_job) = mib_per_job else {
         return "memory unmeasured".to_string();
     };
     let raw = limit_by_memory(node.cores, mib_per_job, node.memory_mib);
-    let curr = node.cores.min(max_parallel).max(1);
-    let effective = if raw < curr { raw } else { curr };
+    let (curr, bound) = easybuild_bound(resources, node.cores);
+    let effective = raw.min(curr);
     let formula = format!(
         "max(1, min({}, {} // {mib_per_job}))",
         node.cores, node.memory_mib
     );
     if effective != raw {
-        format!("memory {effective} ({formula} = {raw}, then max-parallel {max_parallel})")
+        let bound = bound.unwrap_or_else(|| format!("{} cores", node.cores));
+        format!("memory {effective} ({formula} = {raw}, then {bound})")
     } else {
         format!("memory {effective} ({formula})")
     }
@@ -1459,7 +1525,7 @@ fn job_memory_footer(jobs: &JobMemoryTable) -> String {
 ///
 /// Each node is a core count, a memory in MiB, and an optional CPU
 /// target. The hook column is what `post_ready_hook` would leave, including
-/// EasyBuild's `max-parallel`. The memory column is
+/// EasyBuild's `--parallel` and `max-parallel`. The memory column is
 /// `limit_by_memory(cores, mib_per_job)` when the table has a number, and
 /// `unmeasured` when it does not. With a number, the hook column is
 /// followed by its [`memory_cap`]. No number is invented.
@@ -1471,14 +1537,18 @@ pub fn render_parallelism(
     let mut out =
         String::from("parallelism under the current eb_hooks.py limit and under limit_by_memory\n");
     let names = report_names(resources, jobs);
+    let requested = resources
+        .parallel
+        .map(|parallel| format!(", --parallel {parallel}"))
+        .unwrap_or_default();
     for node in nodes {
         match &node.target {
             Some(target) => out.push_str(&format!(
-                "node {} cores, {} MiB, {target}\n",
+                "node {} cores, {} MiB, {target}{requested}\n",
                 node.cores, node.memory_mib
             )),
             None => out.push_str(&format!(
-                "node {} cores, {} MiB\n",
+                "node {} cores, {} MiB{requested}\n",
                 node.cores, node.memory_mib
             )),
         }
@@ -1490,7 +1560,7 @@ pub fn render_parallelism(
                 .unwrap_or_default();
             out.push_str(&format!(
                 "  {name}: current {level} ({clause}){cap}; {}\n",
-                memory_clause(mib, node, resources.max_parallel)
+                memory_clause(mib, node, resources)
             ));
         }
         let sentinel = "\u{0}";
@@ -1533,6 +1603,10 @@ pub struct OomCheckRequest {
     /// An EESSI `eb_hooks.py` whose `PARALLELISM_LIMITS` replace the hook
     /// rows of the bot resource table.
     pub hooks: Option<PathBuf>,
+    /// EasyBuild's `--parallel` for the job. `None` counts the cores.
+    pub parallel: Option<u32>,
+    /// EasyBuild's `--max-parallel` for the job, in place of the table's.
+    pub max_parallel: Option<u32>,
 }
 
 /// What `stack oom` prints.
@@ -1568,10 +1642,22 @@ pub fn run_oom_check(request: &OomCheckRequest) -> Result<OomCheckReport> {
     for text in &request.nodes {
         nodes.push(parse_node_size(text).map_err(usage)?);
     }
+    for (flag, value) in [
+        ("--parallel", request.parallel),
+        ("--max-parallel", request.max_parallel),
+    ] {
+        if value == Some(0) {
+            return Err(usage(format!("{flag} must be a positive integer")));
+        }
+    }
     let mut resources = match &request.resources {
         Some(path) => BotResources::load(path)?,
         None => BotResources::bundled()?,
     };
+    resources.parallel = request.parallel;
+    if let Some(max_parallel) = request.max_parallel {
+        resources.max_parallel = max_parallel;
+    }
     let jobs = match &request.job_memory {
         Some(path) => JobMemoryTable::load(path)?,
         None => JobMemoryTable::bundled()?,
@@ -1920,6 +2006,70 @@ mod tests {
         // QuantumESPRESSO has an A64FX entry only, so zen4 is left alone.
         assert_eq!(resources.parallel("QuantumESPRESSO", zen4, None).level, 16);
         assert_eq!(resources.parallel("libxc", zen4, Some(4)).level, 4);
+    }
+
+    #[test]
+    fn the_hook_applies_to_the_cores_not_to_easybuild_parallel() {
+        let mut resources = BotResources::bundled().unwrap();
+        let zen4 = zen4(&resources).clone();
+        let a64fx = resources
+            .partitions
+            .iter()
+            .find(|p| p.target == "aarch64/a64fx")
+            .unwrap()
+            .clone();
+
+        resources.parallel = Some(12);
+        let libxc = resources.parallel("libxc", &zen4, None);
+        // 16 // 2, not 12 // 2.
+        assert_eq!(libxc.level, 8);
+        assert_eq!(
+            parallel_reason("libxc", &libxc),
+            "--parallel 12 on 16 cores, eb_hooks.py divides libxc by 2 on the 16 cores, not on --parallel 12"
+        );
+        assert_eq!(resources.parallel("zlib", &zen4, None).level, 12);
+
+        resources.parallel = Some(4);
+        let libxc = resources.parallel("libxc", &zen4, None);
+        assert_eq!(libxc.level, 4);
+        assert_eq!(
+            parallel_reason("libxc", &libxc),
+            "--parallel 4 on 16 cores, eb_hooks.py divides libxc by 2 on the 16 cores, not on --parallel 4, which gives 8, not below 4, so it does not apply"
+        );
+        let rocblas = resources.parallel("rocBLAS", &zen4, None);
+        assert_eq!(
+            parallel_reason("rocBLAS", &rocblas),
+            "--parallel 4 on 16 cores, eb_hooks.py caps rocBLAS at 8, not below 4, so it does not apply"
+        );
+
+        // EasyBuild takes --parallel as given, above the cores, up to
+        // max-parallel. The hook still starts from the cores.
+        resources.parallel = Some(32);
+        resources.max_parallel = 64;
+        assert_eq!(resources.parallel("zlib", &zen4, None).level, 32);
+        assert_eq!(resources.parallel("libxc", &zen4, None).level, 8);
+        resources.max_parallel = 16;
+        let zlib = resources.parallel("zlib", &zen4, None);
+        assert_eq!(zlib.level, 16);
+        assert_eq!(
+            parallel_reason("zlib", &zlib),
+            "--parallel 32 on 16 cores, max-parallel 16, no eb_hooks.py limit for zlib"
+        );
+
+        resources.parallel = None;
+        let llvm = resources.parallel("LLVM", &a64fx, None);
+        assert_eq!(llvm.level, 16);
+        assert_eq!(
+            parallel_reason("LLVM", &llvm),
+            "48 cores, max-parallel 16, eb_hooks.py divides LLVM by 2, which gives 24, not below 16, so it does not apply"
+        );
+        resources.max_parallel = 48;
+        let llvm = resources.parallel("LLVM", &a64fx, None);
+        assert_eq!(llvm.level, 24);
+        assert_eq!(
+            parallel_reason("LLVM", &llvm),
+            "48 cores, eb_hooks.py divides LLVM by 2"
+        );
     }
 
     #[test]

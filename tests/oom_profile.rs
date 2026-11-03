@@ -515,6 +515,151 @@ fn the_memory_cap_is_the_core_cap_under_the_memory_ceiling() {
 }
 
 #[test]
+fn the_hook_divides_the_node_cores_not_easybuild_parallel() {
+    let hooks = arg("hooks/integers.py");
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--hooks",
+        &hooks,
+        "--parallel",
+        "12",
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    // 16 // 2 is 8; 12 // 2 would have been 6.
+    assert_eq!(
+        stdout,
+        format!(
+            "hooks: 3 PARALLELISM_LIMITS rows from {hooks}\n\
+             parallelism under the current eb_hooks.py limit and under limit_by_memory\n\
+             node 16 cores, 32768 MiB, x86_64/amd/zen4, --parallel 12\n  \
+             libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n\
+             node 48 cores, 30016 MiB, aarch64/a64fx, --parallel 12\n  \
+             libxc: current 6 (set_maximum on aarch64/a64fx, min(48, 6)); memory unmeasured\n  \
+             (other builds): current 12 (divide_by_factor on aarch64/a64fx, max(1, 48 // 4)); memory unmeasured\n\
+             job memory: libxc 7.0 unmeasured, no mib_per_job\n"
+        )
+    );
+
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--hooks",
+        &hooks,
+        "--parallel",
+        "4",
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(
+            "  libxc: current 4 (divide_by_factor on *, max(1, 16 // 2) = 8, then --parallel 4); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+
+    // EasyBuild uses --parallel as given, above the cores; a build with no
+    // hook row runs at 32 on 16 cores once max-parallel allows it.
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--parallel",
+        "32",
+        "--max-parallel",
+        "64",
+        "--node",
+        "16:32768:x86_64/amd/zen4",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("  Qt5: current 32 (no hook limit, --parallel 32); memory unmeasured\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  libxc: current 8 (divide_by_factor on *, max(1, 16 // 2)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+
+    let (_, default, _) = run(&["stack", "oom", "--node", "48:30016:aarch64/a64fx"]);
+    assert!(
+        default.contains("  LLVM: current 16 (divide_by_factor on *, max(1, 48 // 2) = 24, then max-parallel 16); memory unmeasured\n"),
+        "{default}"
+    );
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--max-parallel",
+        "48",
+        "--node",
+        "48:30016:aarch64/a64fx",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(
+            "  LLVM: current 24 (divide_by_factor on *, max(1, 48 // 2)); memory unmeasured\n"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn easybuild_parallel_12_still_leaves_libxc_at_8_on_zen4() {
+    let easystack = arg("easystacks/pr1772-eessi-2026.06-eb-5.4.0-2026.1.yml");
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--parallel",
+        "12",
+        "--easystack",
+        &easystack,
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("  parallel 8: --parallel 12 on 16 cores, eb_hooks.py divides libxc by 2 on the 16 cores, not on --parallel 12\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("oom=1 fits=1 builds=5 nodes=2\n"),
+        "{stdout}"
+    );
+
+    let (code, stdout, stderr) = run(&[
+        "stack",
+        "oom",
+        "--arch",
+        "x86_64/amd/zen4",
+        "--parallel",
+        "4",
+        "--easystack",
+        &easystack,
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "oom=0 fits=2 builds=5 nodes=2\n");
+}
+
+#[test]
+fn a_zero_easybuild_parallel_level_is_rejected() {
+    for flag in ["--parallel", "--max-parallel"] {
+        let (code, stdout, stderr) = run(&["stack", "oom", flag, "0", "--node", "16:32768"]);
+        assert_eq!(code, 2, "{stdout}\n{stderr}");
+        assert!(
+            stderr.contains(&format!("{flag} must be a positive integer")),
+            "{stderr}"
+        );
+        assert!(stdout.is_empty(), "{stdout}");
+    }
+}
+
+#[test]
 fn a_node_size_without_cores_or_memory_is_rejected() {
     let (code, _, stderr) = run(&["stack", "oom", "--node", "16"]);
     assert_eq!(code, 2, "{stderr}");
@@ -646,6 +791,6 @@ fn the_how_to_shows_the_real_output() {
             "{command}"
         );
     }
-    assert_eq!(oom_blocks, 11);
+    assert_eq!(oom_blocks, 13);
     assert_eq!(rss_blocks, 1);
 }

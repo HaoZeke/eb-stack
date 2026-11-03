@@ -1597,6 +1597,18 @@ enum StackCommand {
         /// a name and drops the sum, such as `msg+ "..."`, is a warning.
         #[arg(long)]
         hooks: Option<PathBuf>,
+        /// EasyBuild's `--parallel` for the job, as `EASYBUILD_PARALLEL`
+        /// would set it. EasyBuild then uses it in place of the cores,
+        /// capped at max-parallel. The hook still applies its op to the
+        /// node's cores and keeps the result only when it is lower. The bot
+        /// sets none.
+        #[arg(long)]
+        parallel: Option<u32>,
+        /// EasyBuild's `--max-parallel` for the job, in place of
+        /// `max_parallel` in the bot resource table, EasyBuild's default.
+        /// The hook does not read it.
+        #[arg(long)]
+        max_parallel: Option<u32>,
     },
     /// Say what an EESSI bot job's FAILURE was: a real failure, ERROR-only
     /// noise, an empty tarball, or infra.
@@ -3282,6 +3294,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
             node,
             job_memory,
             hooks,
+            parallel,
+            max_parallel,
         } => {
             let report =
                 eb_stack::oom_profile::run_oom_check(&eb_stack::oom_profile::OomCheckRequest {
@@ -3294,6 +3308,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     nodes: node,
                     job_memory,
                     hooks,
+                    parallel,
+                    max_parallel,
                 })?;
             print!("{}", report.stdout);
             Ok(())
