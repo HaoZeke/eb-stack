@@ -2454,7 +2454,8 @@ pub fn run_stack_shard_with(
                 .and_then(|path| crate::eb_parse::parse_easyconfig_file(&path).ok())
         });
         if let Some(candidate) = candidate {
-            if let Some(other) = selected_names.insert(ModuleKey::of(&candidate), line.file.clone()) {
+            if let Some(other) = selected_names.insert(ModuleKey::of(&candidate), line.file.clone())
+            {
                 if other != line.file {
                     return Err(usage(format!(
                         "{} and {} select different easyconfigs for the same module; nothing written",
@@ -3232,9 +3233,18 @@ mod tests {
                 assert_eq!(run.opaque, 0, "{:?}", run.warnings);
                 let plan = plan_of(root);
                 let closure = line(&plan, file)["closure"].as_array().unwrap().clone();
-                assert!(closure.contains(&Value::String(format!("{required}/1.0-GCCcore-15.2.0"))), "{plan}");
-                assert!(!closure.contains(&Value::String(format!("{excluded}/1.0-GCCcore-15.2.0"))), "{plan}");
-                assert_eq!(read(root.join("out/prelude.list")).trim(), format!("{required}-1.0-GCCcore-15.2.0.eb"));
+                assert!(
+                    closure.contains(&Value::String(format!("{required}/1.0-GCCcore-15.2.0"))),
+                    "{plan}"
+                );
+                assert!(
+                    !closure.contains(&Value::String(format!("{excluded}/1.0-GCCcore-15.2.0"))),
+                    "{plan}"
+                );
+                assert_eq!(
+                    read(root.join("out/prelude.list")).trim(),
+                    format!("{required}-1.0-GCCcore-15.2.0.eb")
+                );
                 assert_no_module_twice(&plan);
             }
         }
