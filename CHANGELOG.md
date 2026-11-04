@@ -44,6 +44,20 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `ledger append`, `ledger head`, `ledger show`, and `ledger verify` keep
+  a per-stack software ledger: one JSON Lines file of install, rebuild,
+  retire, move, access, removal, finding, and correction records. Each
+  line is canonical JSON (keys sorted, no whitespace, integers only) with
+  its `index` and `id` filled in, and its leaf is the RFC 9162 leaf hash
+  of the line, from the `rfc9162` crate. Heads are signed with Ed25519
+  under the domain `eb-stack-ledger-v1`; the key is a PEM path passed on
+  the command line and is refused inside the log's directory.
+  `ledger verify --record N --head HEAD` checks an inclusion proof and
+  `ledger verify --from HEAD1 --to HEAD2` a consistency proof, so a
+  removed record or a rewritten log is status 1. `eb_ledger_append`,
+  `eb_ledger_head`, `eb_ledger_show`, and `eb_ledger_verify` are the same
+  commands over MCP.
+
 - `stack order --installed` stops the build order at modules already on
   the machine. A file is a module listing and a directory is an Lmod
   tree, read the same way as `stack gap --installed`. The version is the

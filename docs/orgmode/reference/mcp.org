@@ -88,7 +88,7 @@ absolute path there.
 
 * Tools
 
-The catalog has 51 tools. ~tools/list~ returns one tool for each CLI
+The catalog has 55 tools. ~tools/list~ returns one tool for each CLI
 command in the table, and the recipe and easyblock tools that have no
 command. ~mcp~ publishes that catalog and has no tool of its own. Each
 command's tool calls the same runner as that command. The ~text~ field
@@ -133,6 +133,10 @@ name in the schema ~tools/list~ returns. The
 | ~campaign finding claim~ | ~eb_campaign_finding_claim~ |
 | ~campaign finding resolve~ | ~eb_campaign_finding_resolve~ |
 | ~repro summary~ | ~eb_repro_summary~ |
+| ~ledger append~ | ~eb_ledger_append~ |
+| ~ledger head~ | ~eb_ledger_head~ |
+| ~ledger show~ | ~eb_ledger_show~ |
+| ~ledger verify~ | ~eb_ledger_verify~ |
 | ~easyblock-reach~ | ~eb_easyblock_reach~ |
 | ~pr-overlap~ | ~eb_pr_overlap~ |
 | ~rebuild-set~ | ~eb_rebuild_set~ |
