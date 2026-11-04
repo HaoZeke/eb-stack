@@ -801,6 +801,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn build_parallelism_limit_is_a_generic_parameter() {
+        let findings = lint_style("max_parallel = 1\n");
+        assert!(findings_clean(&findings), "{findings:?}");
+        let typo = lint_style("max_paralell = 1\n");
+        assert!(typo.iter().any(|finding| finding.code == "EB_LOCAL_VAR_NAMING"));
+    }
+
+    #[test]
     fn lint_empty_ok() {
         assert!(lint_style("").is_empty());
         assert!(lint_style("name = 'x'\n").is_empty());

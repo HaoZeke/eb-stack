@@ -65,6 +65,7 @@ pub(super) const DEFAULT_PARAMS: &[&str] = &[
     "license_file",
     "license_server",
     "license_server_port",
+    "max_parallel",
     "maxparallel",
     "modaliases",
     "modaltsoftname",
