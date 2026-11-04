@@ -345,10 +345,14 @@ fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
         "eb_recipe_templates",
         "eb_recipe_hierarchy",
         "eb_repro_summary",
+        "eb_ledger_append",
+        "eb_ledger_head",
+        "eb_ledger_show",
+        "eb_ledger_verify",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 51, "{names:?}");
+    assert_eq!(names.len(), 55, "{names:?}");
 }
 
 fn software_layer_prs() -> Vec<PrInput> {
