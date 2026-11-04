@@ -805,7 +805,9 @@ mod tests {
         let findings = lint_style("max_parallel = 1\n");
         assert!(findings_clean(&findings), "{findings:?}");
         let typo = lint_style("max_paralell = 1\n");
-        assert!(typo.iter().any(|finding| finding.code == "EB_LOCAL_VAR_NAMING"));
+        assert!(typo
+            .iter()
+            .any(|finding| finding.code == "EB_LOCAL_VAR_NAMING"));
     }
 
     #[test]
