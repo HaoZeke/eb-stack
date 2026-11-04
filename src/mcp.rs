@@ -1287,7 +1287,7 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         && maintainer.ok_for_upstream()
         && easyblock_error.is_none()
         && !source_failed
-        && !(strict && !skipped.is_empty())
+        && (!strict || skipped.is_empty())
         && duplicate_error.is_none()
         && (metadata_only || (dep_ok && toolchain_verified));
     let skipped_text: Vec<String> = skipped.iter().map(ToString::to_string).collect();
