@@ -1017,6 +1017,23 @@ struct ShardArgs {
     /// Robot-path easyconfig tree. Repeatable; later trees take precedence.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
+    /// Easyconfigs of one `--from-commit` pin, as `COMMIT=DIR`. A line with
+    /// that pin is resolved against DIR first, then the robot path.
+    /// Repeatable; an abbreviated commit matches.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Easyconfigs one `--from-pr` pull request changes, at its head, as
+    /// `N=DIR`. Repeatable.
+    #[arg(long = "pr-tree")]
+    pr_trees: Vec<String>,
+    /// Directory holding the trees of `--from-commit` and `--from-pr` lines
+    /// that no `--commit-tree` or `--pr-tree` names. A missing commit is
+    /// downloaded from codeload.github.com (easybuilders/easybuild-easyconfigs,
+    /// its `.eb` files only); a pull request's changed easyconfigs from
+    /// api.github.com at its head. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+    /// api.github.com when set.
+    #[arg(long)]
+    commit_cache: Option<PathBuf>,
     /// Installed modules, one `Name/VersionFull` per line. Repeatable.
     #[arg(long)]
     installed: Vec<PathBuf>,
@@ -1316,15 +1333,21 @@ enum StackCommand {
     /// Split one Jenkins build list into shards that can build at once.
     ///
     /// Each line's closure is computed over the robot path minus the
-    /// installed modules, as `pr-overlap` computes a root's set. Lines whose
-    /// own easyconfig another line needs share a shard; any other module the
+    /// installed modules, as `pr-overlap` computes a root's set. A line with
+    /// `--from-commit` or `--from-pr` is resolved against that tree first,
+    /// then the robot path, as EasyBuild resolves it; the trees come from
+    /// `--commit-tree`, `--pr-tree`, or `--commit-cache`. Lines whose own
+    /// easyconfig another line needs share a shard; any other module the
     /// closures of two or more shards need goes to `prelude.list`, which
     /// builds first. Groups are packed into at most `--shards` shards by
     /// weight. Writes `prelude.list`, `shard-NN.list` (input lines verbatim,
-    /// dependencies first), and `plan.json`. A line whose easyconfig or
-    /// dependency cannot be resolved fails the run and nothing is written.
+    /// dependencies first), and `plan.json`. A fetched line that still cannot
+    /// be resolved, or a robot-path easyconfig that does not parse, is
+    /// planned on its own without a closure and reported on stderr. Any other
+    /// line whose easyconfig or dependency cannot be resolved fails the run
+    /// and nothing is written.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards"
+        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
@@ -3111,6 +3134,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let ShardArgs {
                 build_list,
                 easyconfigs,
+                commit_trees,
+                pr_trees,
+                commit_cache,
                 installed,
                 installed_modules_dirs,
                 shards,
@@ -3124,6 +3150,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 &eb_stack::site_commands::StackShardRequest {
                     build_list,
                     easyconfigs,
+                    commit_trees,
+                    pr_trees,
+                    commit_cache,
                     installed,
                     installed_modules_dirs,
                     shards,
@@ -3134,6 +3163,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     out_dir,
                 },
             )?;
+            for warning in &run.warnings {
+                eprintln!("warning: {warning}");
+            }
             println!("{}", run.summary());
             Ok(())
         }
