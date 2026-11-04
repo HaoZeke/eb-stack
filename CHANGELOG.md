@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Changed
+
+- `scripts/gen-llms-txt.py` runs `scripts/llms_leakguard.py` before it
+  writes `llms.txt` or `llms-full.txt`. A link to `AGENTS.md`,
+  `CLAUDE.md`, or `GEMINI.md` fails that check unless the URL is in
+  `scripts/leakguard.toml`. The manual index link
+  `https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md` is allowlisted.
+  `uvx prek run -a` runs the same check.
+
 ### Fixed
 
 - `stack shard` plans a build-list line it cannot resolve as an opaque

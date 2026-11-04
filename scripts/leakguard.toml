@@ -1,0 +1,6 @@
+# URLs a generated public file may link to even when the path is an
+# agent instruction file. The manual index (docs/orgmode/index.org,
+# Discovery) links AGENTS.md, and llms.txt repeats that URL.
+allow_urls = [
+  "https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md",
+]
