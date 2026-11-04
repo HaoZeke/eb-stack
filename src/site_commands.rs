@@ -3108,6 +3108,7 @@ mod tests {
         use super::super::*;
         use crate::shard_trees::tests::{archive, MapHttp};
         use serde_json::Value;
+        use std::collections::BTreeMap;
         use std::path::Path;
 
         const SHA: &str = "0d6b80c34f3553774e93162cf89088e2423ecf89";
@@ -3282,8 +3283,8 @@ mod tests {
                 ]
             );
             assert_eq!(
-                plan["inputs"]["trees"][format!("--from-commit={SHA}")],
-                Value::Null
+                plan["inputs"]["trees"],
+                serde_json::json!({ format!("--from-commit={SHA}"): null })
             );
             assert!(plan["inputs"]["easyconfigs"]
                 .get(format!("NewLib-2.0-GCCcore-15.2.0.eb --from-commit={SHA}"))
