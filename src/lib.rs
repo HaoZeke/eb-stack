@@ -81,6 +81,7 @@ pub mod sbom;
 pub mod select;
 pub mod shadow;
 pub mod shard;
+pub mod shard_trees;
 pub mod site_commands;
 pub mod source_fetch;
 pub mod source_probe;

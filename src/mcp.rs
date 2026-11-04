@@ -458,7 +458,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_shard",
-            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line that cannot be resolved is a tool error and nothing is written.",
+            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr is resolved against that tree first, then easyconfigs: commit_tree (COMMIT=DIR), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
             &[
                 ("build_list", "string"),
                 ("easyconfigs", "array_min1"),
@@ -466,6 +466,9 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
             &[
+                ("commit_tree", "array"),
+                ("pr_tree", "array"),
+                ("commit_cache", "string"),
                 ("installed", "array"),
                 ("installed_modules_dir", "array"),
                 ("weights", "string"),
@@ -3160,6 +3163,9 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
     let request = crate::site_commands::StackShardRequest {
         build_list: required_path(arguments, "build_list")?,
         easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        pr_trees: string_array(arguments, "pr_tree")?,
+        commit_cache: optional_path(arguments, "commit_cache"),
         installed: path_array(arguments, "installed")?,
         installed_modules_dirs: path_array(arguments, "installed_modules_dir")?,
         shards: usize::try_from(shards).map_err(|error| format!("shards: {error}"))?,
@@ -3175,6 +3181,8 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         "shards": run.shards,
         "prelude": run.prelude,
         "lines": run.lines,
+        "opaque": run.opaque,
+        "warnings": run.warnings,
     }))
 }
 
