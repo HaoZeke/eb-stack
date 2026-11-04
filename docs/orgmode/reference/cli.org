@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved and is not fetched by EasyBuild, and writes nothing; ~--shards 0~, a list with no lines, and a ~--commit-tree~ or ~--pr-tree~ that is not ~COMMIT=DIR~ or ~N=DIR~ are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -492,6 +492,7 @@ eb-stack stack batch \
 eb-stack stack shard \
   --build-list NODE-TYPE.list \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--commit-cache DIR] [--commit-tree COMMIT=DIR]... [--pr-tree N=DIR]... \
   [--installed-modules-dir MODULES/all]... [--installed INSTALLED.txt]... \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
@@ -823,6 +824,27 @@ a fraction rounds up), or ~--default-weight~ (1) when the file does not
 list it. ~--filter-deps~, or ~EASYBUILD_FILTER_DEPS~ when the flag is
 absent, drops dependencies the way EasyBuild does.
 
+A line with ~--from-commit=SHA~ or ~--from-pr=N~ is resolved the way
+EasyBuild resolves it: that commit's or pull request's easyconfigs first,
+then the robot path. ~--commit-tree COMMIT=DIR~ names the easyconfigs
+directory of one commit (an abbreviated commit matches) and
+~--pr-tree N=DIR~ the easyconfigs one pull request changes; both repeat.
+~--commit-cache DIR~ holds every other tree. A commit missing there is
+downloaded from
+~https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/SHA~,
+which also serves a fork commit a pull request carries, and only its ~.eb~
+files under ~easybuild/easyconfigs/~ are kept, at ~DIR/SHA/easybuild/easyconfigs~.
+A pull request's head commit and changed easyconfigs come from
+~api.github.com~ and are kept at ~DIR/pr-N-HEAD~, so a pull request that
+moves is read again. ~GITHUB_TOKEN~ or ~GH_TOKEN~ is sent to
+~api.github.com~ when set. A tree is written under a temporary name and
+renamed into place, so several planners can share one cache. A module the
+closures of two or more shards need goes to the prelude whichever tree it
+comes from; a prelude line for a module only a fetched tree provides
+carries that line's ~--from-commit~, ~--from-pr~ and
+~--include-easyblocks-from-*~ options, so it builds the same easyconfig
+with the same easyblock.
+
 ~--out-dir~ gets ~prelude.list~ (the prelude as easyconfig filenames in
 dependency order; empty when nothing is shared), ~shard-NN.list~ (the input
 lines verbatim, dependencies first), and ~plan.json~ (each line's closure,
@@ -830,11 +852,22 @@ group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
 easyconfig a closure reached). A ~shard-NN.list~ that an earlier run left
 and this run does not write is removed. ~--generated-at~ fixes the time in
-~plan.json~, so the same inputs give identical files. A line whose
-easyconfig is not on the robot path, whose first word is not an ~.eb~
-file, or whose closure has a requirement nothing satisfies exits 1, names
-every such line, and writes nothing. The command prints
-~shards=<k> prelude=<n> lines=<m>~.
+~plan.json~, so the same inputs give identical files. A fetched line
+that still cannot be resolved (no tree for its commit, its easyconfig in
+neither its tree nor the robot path, or a requirement neither provides),
+and a line whose easyconfig is on the robot path but does not parse, is
+planned as an opaque line: its own group, no closure, the default weight,
+written to its shard unchanged. ~plan.json~ gives the kind under each
+line's ~opaque~, the cause under ~opaque_reason~, and every opaque line
+under the top-level ~opaque~; ~inputs.trees~ maps each fetched source to
+~null~ when its tree was read or to the reason it was not. Each opaque line
+and each other caveat (a fetched line planned over the robot path only, a
+module two trees resolve differently) is printed to stderr as
+~warning: ...~ and kept under ~warnings~. Any other line whose easyconfig is
+not on the robot path, whose first word is not an ~.eb~ file, or whose
+closure has a requirement nothing satisfies exits 1, names every such line,
+and writes nothing. The command prints ~shards=<k> prelude=<n> lines=<m>~,
+followed by ~opaque=<o>~ when a line is opaque.
 
 ** ~stack arch~
 

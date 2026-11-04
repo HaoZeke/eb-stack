@@ -71,6 +71,31 @@ in that file. ~--weights~ is ~Name/VersionFull~ or the easyconfig
 filename, a tab, then seconds. A module the file does not list weighs
 ~--default-weight~, which is 1. Build the prelude, then the shards.
 
-A line whose easyconfig is not on the robot path exits 1 and writes
-nothing. ~eb_stack_shard~ is the same command. See
+* Resolve lines EasyBuild fetches from GitHub
+
+A line with ~--from-commit=SHA~ or ~--from-pr=N~ builds an easyconfig
+the robot path may not have. Pass a cache directory and ~stack shard~
+reads each such line's tree there, downloading the ones it lacks:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --commit-cache /scratch-shared/$USER/eb-stack-commit-trees \
+  --shards 4 \
+  --out-dir /tmp/shards
+#+end_src
+
+The line is then closed over its tree first and the robot path second,
+as EasyBuild closes it. ~petsc4py-3.25.0-foss-2026.1.eb --from-commit=...~
+needs PETSc 3.25.0, which is a line of its own, so the two lines share a
+shard and PETSc builds first. A dependency it shares with another shard
+goes to the prelude. ~--commit-tree SHA=DIR~ and ~--pr-tree N=DIR~ name a
+tree you already have. A fetched line that still cannot be resolved is
+planned on its own without a closure; the command prints a
+~warning:~ line with the reason, and ~plan.json~ keeps it under
+~opaque_reason~.
+
+A line whose easyconfig is not on the robot path, and that EasyBuild
+does not fetch, exits 1 and writes nothing. ~eb_stack_shard~ is the same command. See
 [[file:../reference/cli.org][the CLI reference]].

@@ -15,6 +15,19 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack shard` resolves a build-list line with `--from-commit` or
+  `--from-pr` against that commit's or pull request's easyconfigs first,
+  then the robot path, the order EasyBuild uses. A dependency such a line
+  shares with another shard goes to the prelude, so two shards do not
+  build it at once. `petsc4py-3.25.0-foss-2026.1.eb --from-commit=...`
+  and the `PETSc-3.25.0-foss-2026.1.eb` line it needs plan into one
+  shard, PETSc first. Split over two shards, the second build stops on
+  PETSc's install lock. A prelude line for a module only a
+  fetched tree provides carries that line's `--from-commit`,
+  `--from-pr` and `--include-easyblocks-from-*` options. A fetched line
+  that still cannot be resolved stays opaque; `plan.json` gives the cause
+  under `opaque_reason` and the top-level `opaque`, and the command
+  prints a `warning:` line for it and `opaque=<n>` in its summary.
 - `stack shard` plans a build-list line it cannot resolve as an opaque
   line when EasyBuild can still build it: the line carries `--from-pr`
   or `--from-commit`, or its easyconfig is on the robot path but does
@@ -43,6 +56,14 @@ All notable changes to this project are documented here.
   and 4.2.1). Those are the same package keys `stack solve` uses.
 
 ### Added
+
+- `stack shard --commit-cache DIR` reads the trees of `--from-commit` and
+  `--from-pr` lines from DIR and downloads the missing ones: a commit from
+  `codeload.github.com/easybuilders/easybuild-easyconfigs` (its `.eb`
+  files only), a pull request's changed easyconfigs at its head from
+  `api.github.com`. `--commit-tree COMMIT=DIR` and `--pr-tree N=DIR` name
+  trees already on disk. `eb_stack_shard` takes `commit_cache`,
+  `commit_tree` and `pr_tree`.
 
 - `stack order --installed` stops the build order at modules already on
   the machine. A file is a module listing and a directory is an Lmod
