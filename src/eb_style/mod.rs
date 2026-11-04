@@ -121,8 +121,7 @@ pub fn valid_easyconfig_parameters(easyblock: Option<&str>) -> BTreeSet<String> 
 /// edits (pre-existing) and no review line or file-wide scope covers it;
 /// `error_free` still reports it.
 pub fn blocks_clean(finding: &StyleFinding) -> bool {
-    (finding.severity == Severity::Error && !finding.info)
-        || (is_formatting_code(&finding.code) && !finding.info)
+    (!finding.info && (finding.severity == Severity::Error || is_formatting_code(&finding.code)))
         || (finding.in_review && REVIEW_COUNTED.contains(&finding.code.as_str()))
         || (finding.code == "EB_DIFF_SOURCES_CHANGED" && !finding.info)
         || (finding.code == "EB_REVIEW_ITEM_OPEN" && !finding.info)
