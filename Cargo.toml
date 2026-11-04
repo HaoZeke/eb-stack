@@ -21,8 +21,6 @@ categories = [
     "config",
 ]
 exclude = [
-    ".claude/",
-    ".codex/",
     ".pixi/",
     "docs/build*/",
     "target/",
