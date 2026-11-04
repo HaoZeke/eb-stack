@@ -48,6 +48,11 @@ def main() -> int:
     args = parser.parse_args()
     pages = load_pages()
     files = render(pages)
+    blocked = leakguard_violations(files)
+    if blocked:
+        for line in blocked:
+            print(line, file=sys.stderr)
+        return 1
     if args.check and args.pages_only:
         print("pass only one of --check and --pages-only", file=sys.stderr)
         return 2
@@ -434,6 +439,20 @@ def project_entries() -> list[str]:
             )
         )
     return [f"- [{title}]({url}): {summary}" for title, url, summary in entries]
+
+
+def leakguard_violations(files: dict[str, str]) -> list[str]:
+    """The same check `scripts/llms_leakguard.py` runs for prek."""
+    import importlib.util
+
+    path = ROOT / "scripts" / "llms_leakguard.py"
+    spec = importlib.util.spec_from_file_location("llms_leakguard", path)
+    if spec is None or spec.loader is None:
+        print(f"leakguard: cannot load {path}", file=sys.stderr)
+        return [f"leakguard: cannot load {path}"]
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.violations_in(files)
 
 
 def write(files: dict[str, str]) -> None:

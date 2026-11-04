@@ -97,3 +97,27 @@ fn llms_txt_matches_the_org_manual() {
     );
     assert!(root.join("docs/llm/reference/cli.md").is_file());
 }
+
+/// The public manual links AGENTS.md. The leakguard allowlists that URL, and
+/// `scripts/llms_leakguard.py` is the pre-check `gen-llms-txt.py` runs.
+#[test]
+fn the_agents_md_link_is_allowlisted() {
+    let root = repo();
+    let config =
+        std::fs::read_to_string(root.join("scripts/leakguard.toml")).expect("leakguard.toml");
+    assert!(
+        config.contains("https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md"),
+        "{config}"
+    );
+    let output = Command::new("python3")
+        .arg(root.join("scripts/llms_leakguard.py"))
+        .current_dir(&root)
+        .output()
+        .expect("python3 scripts/llms_leakguard.py");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
