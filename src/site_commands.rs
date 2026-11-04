@@ -2502,15 +2502,30 @@ pub fn run_stack_shard_with(
     let universe_of = |source: &LineSource| -> Option<usize> {
         sources.iter().position(|s| s == source).map(|i| i + 1)
     };
-    let build_universe = |u: usize| -> Vec<Candidate> {
-        if u == 0 {
-            filtered(base.clone())
-        } else {
-            filtered(merge_candidates_with_precedence(&[
-                base.clone(),
-                overlays[u - 1].clone(),
-            ]))
+    // The own easyconfig of every fetched line, from its tree, with the
+    // source options that fetch it. A line that needs another line's module
+    // finds it installed by that line when it builds, whichever tree that
+    // module's easyconfig is in, so these sit under every universe at the
+    // lowest precedence and the two lines share a shard.
+    let mut fetched_roots: Vec<Candidate> = Vec::new();
+    let mut root_options: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for line in &lines {
+        let Some(u) = line.source.as_ref().and_then(universe_of) else {
+            continue;
+        };
+        if let Some(c) = overlays[u - 1].iter().find(|c| file_name(c) == line.file) {
+            root_options
+                .entry(c.easyconfig_path.clone())
+                .or_insert_with(|| line.source_options.clone());
+            fetched_roots.push(c.clone());
         }
+    }
+    let build_universe = |u: usize| -> Vec<Candidate> {
+        let mut layers = vec![fetched_roots.clone(), base.clone()];
+        if u > 0 {
+            layers.push(overlays[u - 1].clone());
+        }
+        filtered(merge_candidates_with_precedence(&layers))
     };
     let overlay_paths: Vec<BTreeSet<String>> = std::iter::once(BTreeSet::new())
         .chain(overlays.iter().map(|layer| {
@@ -2667,7 +2682,10 @@ pub fn run_stack_shard_with(
                 let options = if overlay_paths[u].contains(&c.easyconfig_path) {
                     line.source_options.clone()
                 } else {
-                    Vec::new()
+                    root_options
+                        .get(&c.easyconfig_path)
+                        .cloned()
+                        .unwrap_or_default()
                 };
                 let module = module_name(key);
                 match origin.get(&module) {
@@ -3431,6 +3449,49 @@ mod tests {
                 "Gone-1.0-GCCcore-15.2.0.eb --from-commit={missing}\n"
             )));
             assert!(!root.join("cache").join(missing).exists());
+        }
+
+        /// texlive on the robot path needs libGLU, which only a fetched
+        /// line's commit provides. The libGLU line builds it first in the
+        /// same shard, so texlive resolves and the two lines are one group.
+        #[test]
+        fn a_robot_line_needing_a_fetched_line_shares_its_shard() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let robot = root.join("robot");
+            ec(&robot, "Mesa", "26.1.1", &[]);
+            ec(&robot, "texlive", "20250308", &[("libGLU", "9.0.3")]);
+            ec(&robot, "Other", "1.0", &[("Mesa", "26.1.1")]);
+            let tree = root.join("commit-tree");
+            ec(&tree, "libGLU", "9.0.3", &[("Mesa", "26.1.1")]);
+            let mut args = request(
+                root,
+                &format!(
+                    "libGLU-9.0.3-GCCcore-15.2.0.eb --from-commit={SHA}\n\
+                     texlive-20250308-GCCcore-15.2.0.eb\n\
+                     Other-1.0-GCCcore-15.2.0.eb\n"
+                ),
+            );
+            args.commit_trees = vec![format!("{SHA}={}", tree.display())];
+            let run = run_stack_shard_with(&args, &MapHttp::default()).unwrap();
+            assert_eq!(run.opaque, 0, "{:?}", run.warnings);
+            let plan = plan_of(root);
+            let glu = line(&plan, "libGLU-9.0.3-GCCcore-15.2.0.eb");
+            let tex = line(&plan, "texlive-20250308-GCCcore-15.2.0.eb");
+            assert_eq!(glu["group"], tex["group"]);
+            let shard_file = format!("out/{}.list", tex["shard"].as_str().unwrap());
+            assert_eq!(
+                read(root.join(shard_file)),
+                format!(
+                    "libGLU-9.0.3-GCCcore-15.2.0.eb --from-commit={SHA}\n\
+                     texlive-20250308-GCCcore-15.2.0.eb\n"
+                )
+            );
+            assert_eq!(
+                read(root.join("out/prelude.list")),
+                "Mesa-26.1.1-GCCcore-15.2.0.eb\n"
+            );
+            assert_no_module_twice(&plan);
         }
 
         #[test]
