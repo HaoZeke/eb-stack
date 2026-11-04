@@ -3178,6 +3178,37 @@ mod tests {
             }
         }
 
+        #[test]
+        fn explicit_recipe_alias_selects_its_own_dependency_closure() {
+            for alias in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let root = dir.path();
+                let robot = root.join("robot");
+                ec(&robot, "OldLib", "1.0", &[]);
+                ec(&robot, "NewLib", "1.0", &[]);
+                let canonical = ec(&robot, "Alpha", "1.0", &[("OldLib", "1.0")]);
+                let alternate = "a/Alpha/Alpha-1.0-GCCcore-15.2.0-site.eb";
+                let text = read(robot.join(&canonical)).replace("OldLib", "NewLib");
+                std::fs::write(robot.join(alternate), text).unwrap();
+                let (selected, required, excluded) = if alias {
+                    (alternate, "NewLib", "OldLib")
+                } else {
+                    (canonical.as_str(), "OldLib", "NewLib")
+                };
+                ec(&robot, "Beta", "1.0", &[(required, "1.0")]);
+                let file = Path::new(selected).file_name().unwrap().to_str().unwrap();
+                let args = request(root, &format!("{file}\nBeta-1.0-GCCcore-15.2.0.eb\n"));
+                let run = run_stack_shard_with(&args, &MapHttp::default()).unwrap();
+                assert_eq!(run.opaque, 0, "{:?}", run.warnings);
+                let plan = plan_of(root);
+                let closure = line(&plan, file)["closure"].as_array().unwrap().clone();
+                assert!(closure.contains(&Value::String(format!("{required}/1.0-GCCcore-15.2.0"))), "{plan}");
+                assert!(!closure.contains(&Value::String(format!("{excluded}/1.0-GCCcore-15.2.0"))), "{plan}");
+                assert_eq!(read(root.join("out/prelude.list")).trim(), format!("{required}-1.0-GCCcore-15.2.0.eb"));
+                assert_no_module_twice(&plan);
+            }
+        }
+
         fn read(path: PathBuf) -> String {
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
         }
