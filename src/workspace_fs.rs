@@ -1145,7 +1145,9 @@ mod tests {
         let requested = alias.join("inside.eb");
         write_workspace(&alias, &requested, "ok\n").expect("write through root alias");
         assert_eq!(
-            read_workspace(&alias, &requested).expect("read alias").content,
+            read_workspace(&alias, &requested)
+                .expect("read alias")
+                .content,
             "ok\n"
         );
         let canonical = real.canonicalize().expect("canonical root");
