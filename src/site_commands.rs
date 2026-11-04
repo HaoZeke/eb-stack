@@ -2307,28 +2307,35 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Whether a file named `name` exists anywhere under one of `roots`.
-fn file_under(roots: &[PathBuf], name: &str) -> bool {
-    let mut stack: Vec<PathBuf> = roots.to_vec();
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(kind) = entry.file_type() else {
+/// Find an explicit filename using the robot trees' later-path precedence.
+fn file_on_robot(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    for root in roots.iter().rev() {
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
-            if kind.is_dir() {
-                if entry.file_name() != ".git" {
-                    stack.push(path);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    if entry.file_name() != ".git" {
+                        stack.push(path);
+                    }
+                } else if entry.file_name() == name {
+                    return Some(path);
                 }
-            } else if entry.file_name() == name {
-                return true;
             }
         }
     }
-    false
+    None
+}
+
+/// Whether a file named `name` exists anywhere under one of `roots`.
+fn file_under(roots: &[PathBuf], name: &str) -> bool {
+    file_on_robot(roots, name).is_some()
 }
 
 /// Split a build list into shards whose builds do not overlap, plus a prelude
@@ -2428,7 +2435,7 @@ pub fn run_stack_shard_with(
     }
 
     let (robot, _) = load_robot_trees(&args.easyconfigs, &[])?;
-    let base = robot.base;
+    let mut base = robot.base;
     let file_name = |c: &Candidate| -> String {
         c.easyconfig_path
             .rsplit('/')
@@ -2436,6 +2443,29 @@ pub fn run_stack_shard_with(
             .unwrap_or_default()
             .to_string()
     };
+    // Identity merging can discard a named alias with a distinct dependency
+    // set. Explicit build-list filenames select their own robot candidate.
+    let mut selected = Vec::new();
+    let mut selected_names: BTreeMap<ModuleKey, String> = BTreeMap::new();
+    for line in lines.iter().filter(|line| !line.fetched) {
+        let candidate = base.iter().find(|c| file_name(c) == line.file).cloned();
+        let candidate = candidate.or_else(|| {
+            file_on_robot(&args.easyconfigs, &line.file)
+                .and_then(|path| crate::eb_parse::parse_easyconfig_file(&path).ok())
+        });
+        if let Some(candidate) = candidate {
+            if let Some(other) = selected_names.insert(ModuleKey::of(&candidate), line.file.clone()) {
+                if other != line.file {
+                    return Err(usage(format!(
+                        "{} and {} select different easyconfigs for the same module; nothing written",
+                        other, line.file
+                    )));
+                }
+            }
+            selected.push(candidate);
+        }
+    }
+    base = merge_candidates_with_precedence(&[base, selected]);
     let filtered = |mut universe: Vec<Candidate>| -> Vec<Candidate> {
         if !filter.is_empty() {
             filter.apply(&mut universe);
