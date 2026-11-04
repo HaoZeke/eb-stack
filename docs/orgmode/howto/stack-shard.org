@@ -97,5 +97,71 @@ planned on its own without a closure; the command prints a
 ~opaque_reason~.
 
 A line whose easyconfig is not on the robot path, and that EasyBuild
-does not fetch, exits 1 and writes nothing. ~eb_stack_shard~ is the same command. See
+does not fetch, exits 1 and writes nothing. A ~--commit-cache~ download
+that fails before an HTTP status also exits 1 and writes nothing. The
+message names the cache, the commit, the URL, and the transport error.
+~eb_stack_shard~ is the same command. See
 [[file:../reference/cli.org][the CLI reference]].
+
+* Plan a list that fetches PETSc
+
+~tests/stack_shard_fixtures/fetched.list~ is 34 lines whose easyconfigs
+are in easybuild-easyconfigs
+~0d6b80c34f3553774e93162cf89088e2423ecf89~ (the commit that adds
+~petsc4py-3.25.0-foss-2026.1.eb~). Eleven lines pass ~--from-commit~ for
+that commit, ten pass only
+~--include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287~
+(the peeled commit of easybuild-easyblocks v5.4.1), and the rest are
+plain. ~petsc4py~ depends on ~PETSc~ 3.25.0. The PETSc line is one of
+the fetched lines.
+
+The robot path is that commit's ~easybuild/easyconfigs~ with
+~p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb~ removed, so the file comes
+only from the commit. ~EB_STACK_COMMIT_MIRROR~, when set, is a local
+copy of the codeload ~.tar.gz~ for the commit. The shard command still
+downloads that commit into ~--commit-cache~.
+
+#+begin_src bash
+SHA=0d6b80c34f3553774e93162cf89088e2423ecf89
+MIRROR=${EB_STACK_COMMIT_MIRROR:-/tmp/ec-mirror/${SHA}.tar.gz}
+mkdir -p "$(dirname "$MIRROR")"
+test -f "$MIRROR" || curl -fsSL -o "$MIRROR" \
+  "https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/${SHA}"
+rm -rf /tmp/ec-robot
+mkdir -p /tmp/ec-robot
+tar -xzf "$MIRROR" -C /tmp/ec-robot
+ROBOT=/tmp/ec-robot/easybuild-easyconfigs-${SHA}/easybuild/easyconfigs
+rm -f "$ROBOT"/p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/fetched.list \
+  --easyconfigs "$ROBOT" \
+  --commit-cache /tmp/eb-stack-commit-trees \
+  --shards 4 \
+  --generated-at 2026-11-04T00:00:00Z \
+  --out-dir /tmp/shards-fetched
+#+end_src
+
+That command printed:
+
+#+begin_example
+shards=4 prelude=173 lines=34
+#+end_example
+
+~/tmp/shards-fetched/shard-03.list~ holds the PETSc line and then
+petsc4py. No module is listed in two shards or in a shard and the
+prelude.
+
+#+begin_example
+Hypre-3.1.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+SuperLU_DIST-9.2.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+PETSc-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89 --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+petsc4py-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+HeFFTe-2.4.1-foss-2026.1.eb
+CheMPS2-1.8.12-foss-2026.1.eb
+#+end_example
+
+Without ~--commit-cache~, petsc4py is planned on its own. The summary
+is ~shards=4 prelude=173 lines=34 opaque=1~, and petsc4py is in a
+different shard from PETSc. The same inputs with the cache put them in
+one shard, PETSc first. A second run with ~--generated-at~ writes the
+same files.

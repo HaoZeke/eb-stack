@@ -5605,9 +5605,100 @@ in that file. `--weights` is `Name/VersionFull` or the easyconfig
 filename, a tab, then seconds. A module the file does not list weighs
 `--default-weight`, which is 1. Build the prelude, then the shards.
 
-A line whose easyconfig is not on the robot path exits 1 and writes
-nothing. `eb_stack_shard` is the same command. See
+# Resolve lines EasyBuild fetches from GitHub
+
+A line with `--from-commit=SHA` or `--from-pr=N` builds an easyconfig
+the robot path may not have. Pass a cache directory and `stack shard`
+reads each such line's tree there, downloading the ones it lacks:
+
+```bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --commit-cache /scratch-shared/$USER/eb-stack-commit-trees \
+  --shards 4 \
+  --out-dir /tmp/shards
+```
+
+The line is then closed over its tree first and the robot path second,
+as EasyBuild closes it. `petsc4py-3.25.0-foss-2026.1.eb --from-commit=...`
+needs PETSc 3.25.0, which is a line of its own, so the two lines share a
+shard and PETSc builds first. A dependency it shares with another shard
+goes to the prelude. `--commit-tree SHA=DIR` and `--pr-tree N=DIR` name a
+tree you already have. A fetched line that still cannot be resolved is
+planned on its own without a closure; the command prints a
+`warning:` line with the reason, and `plan.json` keeps it under
+`opaque_reason`.
+
+A line whose easyconfig is not on the robot path, and that EasyBuild
+does not fetch, exits 1 and writes nothing. A `--commit-cache` download
+that fails before an HTTP status also exits 1 and writes nothing. The
+message names the cache, the commit, the URL, and the transport error.
+`eb_stack_shard` is the same command. See
 [the CLI reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
+# Plan a list that fetches PETSc
+
+`tests/stack_shard_fixtures/fetched.list` is 34 lines whose easyconfigs
+are in easybuild-easyconfigs
+`0d6b80c34f3553774e93162cf89088e2423ecf89` (the commit that adds
+`petsc4py-3.25.0-foss-2026.1.eb`). Eleven lines pass `--from-commit` for
+that commit, ten pass only
+`--include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287`
+(the peeled commit of easybuild-easyblocks v5.4.1), and the rest are
+plain. `petsc4py` depends on `PETSc` 3.25.0. The PETSc line is one of
+the fetched lines.
+
+The robot path is that commit's `easybuild/easyconfigs` with
+`p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb` removed, so the file comes
+only from the commit. `EB_STACK_COMMIT_MIRROR`, when set, is a local
+copy of the codeload `.tar.gz` for the commit. The shard command still
+downloads that commit into `--commit-cache`.
+
+```bash
+SHA=0d6b80c34f3553774e93162cf89088e2423ecf89
+MIRROR=${EB_STACK_COMMIT_MIRROR:-/tmp/ec-mirror/${SHA}.tar.gz}
+mkdir -p "$(dirname "$MIRROR")"
+test -f "$MIRROR" || curl -fsSL -o "$MIRROR" \
+  "https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/${SHA}"
+rm -rf /tmp/ec-robot
+mkdir -p /tmp/ec-robot
+tar -xzf "$MIRROR" -C /tmp/ec-robot
+ROBOT=/tmp/ec-robot/easybuild-easyconfigs-${SHA}/easybuild/easyconfigs
+rm -f "$ROBOT"/p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/fetched.list \
+  --easyconfigs "$ROBOT" \
+  --commit-cache /tmp/eb-stack-commit-trees \
+  --shards 4 \
+  --generated-at 2026-11-04T00:00:00Z \
+  --out-dir /tmp/shards-fetched
+```
+
+That command printed:
+
+```
+shards=4 prelude=173 lines=34
+```
+
+`/tmp/shards-fetched/shard-03.list` holds the PETSc line and then
+petsc4py. No module is listed in two shards or in a shard and the
+prelude.
+
+```
+Hypre-3.1.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+SuperLU_DIST-9.2.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+PETSc-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89 --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+petsc4py-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+HeFFTe-2.4.1-foss-2026.1.eb
+CheMPS2-1.8.12-foss-2026.1.eb
+```
+
+Without `--commit-cache`, petsc4py is planned on its own. The summary
+is `shards=4 prelude=173 lines=34 opaque=1`, and petsc4py is in a
+different shard from PETSc. The same inputs with the cache put them in
+one shard, PETSc first. A second run with `--generated-at` writes the
+same files.
 
 # Plan software-layer pull requests that do not overlap
 
@@ -6195,7 +6286,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with none of `--easystack`, `--node`, and `--hooks`, or a `--parallel` or `--max-parallel` of 0. A `--hooks` file that is not valid Python, has no module-level `PARALLELISM_LIMITS`, or has a row the model cannot follow is status 1, and the message names the line. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved, and writes nothing; `--shards 0` and a list with no lines are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with `--strict` it is status 1 when a warning remains, and status 0 when every hit is remedied. `stack oom` is status 0 when it warns: the warnings are advice, not a failed check. A `--node` value that is not `CORES:MEMORY_MIB` or `CORES:MEMORY_MIB:TARGET` is status 2, and so is a command with none of `--easystack`, `--node`, and `--hooks`, or a `--parallel` or `--max-parallel` of 0. A `--hooks` file that is not valid Python, has no module-level `PARALLELISM_LIMITS`, or has a row the model cannot follow is status 1, and the message names the line. `stack bot-classify` is status 0 for every class, and status 2 when a path is a directory. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build. `stack provided` is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets `--hooks`, or belongs in a `--family-lock`. A group-restricted warning is status 0 unless `--strict`. Status 2 is when neither `--installed` nor `--baseline-lock` is set. `stack shard` is status 1 when a build-list line cannot be resolved and is not fetched by EasyBuild, or when a `--commit-cache` download fails before an HTTP status, and writes nothing in either case. `--shards 0`, a list with no lines, and a `--commit-tree` or `--pr-tree` that is not `COMMIT=DIR` or `N=DIR` are status 2. `stack shadow` is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -6670,6 +6761,7 @@ eb-stack stack batch \
 eb-stack stack shard \
   --build-list NODE-TYPE.list \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--commit-cache DIR] [--commit-tree COMMIT=DIR]... [--pr-tree N=DIR]... \
   [--installed-modules-dir MODULES/all]... [--installed INSTALLED.txt]... \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
@@ -7001,6 +7093,27 @@ a fraction rounds up), or `--default-weight` (1) when the file does not
 list it. `--filter-deps`, or `EASYBUILD_FILTER_DEPS` when the flag is
 absent, drops dependencies the way EasyBuild does.
 
+A line with `--from-commit=SHA` or `--from-pr=N` is resolved the way
+EasyBuild resolves it: that commit's or pull request's easyconfigs first,
+then the robot path. `--commit-tree COMMIT=DIR` names the easyconfigs
+directory of one commit (an abbreviated commit matches) and
+`--pr-tree N=DIR` the easyconfigs one pull request changes; both repeat.
+`--commit-cache DIR` holds every other tree. A commit missing there is
+downloaded from
+`https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/SHA`,
+which also serves a fork commit a pull request carries, and only its `.eb`
+files under `easybuild/easyconfigs/` are kept, at `DIR/SHA/easybuild/easyconfigs`.
+A pull request's head commit and changed easyconfigs come from
+`api.github.com` and are kept at `DIR/pr-N-HEAD`, so a pull request that
+moves is read again. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+`api.github.com` when set. A tree is written under a temporary name and
+renamed into place, so several planners can share one cache. A module the
+closures of two or more shards need goes to the prelude whichever tree it
+comes from; a prelude line for a module only a fetched tree provides
+carries that line's `--from-commit`, `--from-pr` and
+`--include-easyblocks-from-*` options, so it builds the same easyconfig
+with the same easyblock.
+
 `--out-dir` gets `prelude.list` (the prelude as easyconfig filenames in
 dependency order; empty when nothing is shared), `shard-NN.list` (the input
 lines verbatim, dependencies first), and `plan.json` (each line's closure,
@@ -7008,11 +7121,26 @@ group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
 easyconfig a closure reached). A `shard-NN.list` that an earlier run left
 and this run does not write is removed. `--generated-at` fixes the time in
-`plan.json`, so the same inputs give identical files. A line whose
-easyconfig is not on the robot path, whose first word is not an `.eb`
-file, or whose closure has a requirement nothing satisfies exits 1, names
-every such line, and writes nothing. The command prints
-`shards=<k> prelude=<n> lines=<m>`.
+`plan.json`, so the same inputs give identical files. A
+`--commit-cache` download that fails before an HTTP status (the cache has
+no tree and the client never gets a status) exits 1 and writes nothing;
+the message names the cache, the commit, the URL, and the transport
+error. An HTTP error status is not that case. A fetched line
+that still cannot be resolved (no tree for its commit, its easyconfig in
+neither its tree nor the robot path, or a requirement neither provides),
+and a line whose easyconfig is on the robot path but does not parse, is
+planned as an opaque line: its own group, no closure, the default weight,
+written to its shard unchanged. `plan.json` gives the kind under each
+line's `opaque`, the cause under `opaque_reason`, and every opaque line
+under the top-level `opaque`; `inputs.trees` maps each fetched source to
+`null` when its tree was read or to the reason it was not. Each opaque line
+and each other caveat (a fetched line planned over the robot path only, a
+module two trees resolve differently) is printed to stderr as
+`warning: ...` and kept under `warnings`. Any other line whose easyconfig is
+not on the robot path, whose first word is not an `.eb` file, or whose
+closure has a requirement nothing satisfies exits 1, names every such line,
+and writes nothing. The command prints `shards=<k> prelude=<n> lines=<m>`,
+followed by `opaque=<o>` when a line is opaque.
 
 ## `stack arch`
 

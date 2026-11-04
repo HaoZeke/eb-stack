@@ -28,6 +28,9 @@ All notable changes to this project are documented here.
   that still cannot be resolved stays opaque; `plan.json` gives the cause
   under `opaque_reason` and the top-level `opaque`, and the command
   prints a `warning:` line for it and `opaque=<n>` in its summary.
+  A `--commit-cache` download that fails before an HTTP status exits 1
+  and writes nothing; the error names the cache, the commit, the URL,
+  and the transport error. An HTTP status, including 404, stays opaque.
 - `stack shard` plans a build-list line it cannot resolve as an opaque
   line when EasyBuild can still build it: the line carries `--from-pr`
   or `--from-commit`, or its easyconfig is on the robot path but does

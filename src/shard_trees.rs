@@ -34,6 +34,13 @@ pub const EASYCONFIGS_REPO: &str = "easybuilders/easybuild-easyconfigs";
 /// already has without reading them.
 pub const MANIFEST: &str = ".eb-stack-sha256";
 
+/// Prefix on a commit download that received no HTTP status.
+///
+/// `run_stack_shard_with` treats a message that starts with this as a
+/// failure and writes nothing. An HTTP status, including 404, stays a
+/// per-line warning: the server answered, and the commit is simply absent.
+pub const CACHE_DOWNLOAD_FAILED: &str = "cache download failed";
+
 /// Where the trees of fetched lines come from.
 pub struct TreeSources<'a> {
     /// `--commit-tree COMMIT=DIR`: a commit, full or abbreviated, to an
@@ -82,10 +89,12 @@ impl TreeSources<'_> {
             return Ok(tree);
         }
         let url = format!("https://codeload.github.com/{}/tar.gz/{sha}", self.repo);
-        let response = self
-            .http
-            .get(&url)
-            .map_err(|error| format!("commit {sha}: {url}: {error}"))?;
+        let response = self.http.get(&url).map_err(|error| {
+            format!(
+                "{CACHE_DOWNLOAD_FAILED}: cache {} has no tree for commit {sha}, and downloading {url} failed: {error}",
+                cache.display()
+            )
+        })?;
         if response.status != 200 {
             return Err(format!("commit {sha}: {url}: HTTP {}", response.status));
         }
@@ -415,6 +424,37 @@ pub(crate) mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, [SHA]);
+    }
+
+    /// GET that fails before an HTTP status, as a connect error does.
+    struct OfflineHttp;
+
+    impl HttpGet for OfflineHttp {
+        fn get(&self, _url: &str) -> Result<HttpResponse, String> {
+            // The client returns this text; the planner must keep it.
+            Err("tcp connect error: Network is unreachable".into())
+        }
+    }
+
+    #[test]
+    fn a_cache_miss_with_no_network_names_the_cache_and_the_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let trees = TreeSources {
+            commit_trees: BTreeMap::new(),
+            pr_trees: BTreeMap::new(),
+            cache: Some(cache.clone()),
+            http: &OfflineHttp,
+            repo: EASYCONFIGS_REPO.into(),
+        };
+        let why = trees.commit_tree(SHA).unwrap_err();
+        let url = format!("https://codeload.github.com/{EASYCONFIGS_REPO}/tar.gz/{SHA}");
+        assert!(why.starts_with(CACHE_DOWNLOAD_FAILED), "{why}");
+        assert!(why.contains(&cache.display().to_string()), "{why}");
+        assert!(why.contains(&format!("no tree for commit {SHA}")), "{why}");
+        assert!(why.contains(&url), "{why}");
+        assert!(why.contains("Network is unreachable"), "{why}");
+        assert!(!cache.join(SHA).exists());
     }
 
     #[test]

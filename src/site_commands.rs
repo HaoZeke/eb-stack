@@ -2472,6 +2472,14 @@ pub fn run_stack_shard_with(
                 LineSource::Prs(prs) => prs.iter().map(|n| trees.pr_tree(*n)).collect(),
                 LineSource::Invalid(_) => unreachable!("invalid sources are not wanted"),
             };
+            // A cache miss that never reaches an HTTP status cannot fall back:
+            // the tree was requested and the download did not happen. An HTTP
+            // status still becomes an opaque line below.
+            if let Err(why) = &dirs {
+                if why.starts_with(crate::shard_trees::CACHE_DOWNLOAD_FAILED) {
+                    return Err(anyhow!("{why}; nothing written"));
+                }
+            }
             let layers = dirs.and_then(|dirs| {
                 let mut layer = Vec::new();
                 for dir in dirs {
@@ -3492,6 +3500,37 @@ mod tests {
                 "Mesa-26.1.1-GCCcore-15.2.0.eb\n"
             );
             assert_no_module_twice(&plan);
+        }
+
+        /// A connect error is not an HTTP status. The plan is not written.
+        struct OfflineHttp;
+
+        impl crate::pr_overlap::HttpGet for OfflineHttp {
+            fn get(&self, _url: &str) -> Result<crate::pr_overlap::HttpResponse, String> {
+                Err("tcp connect error: Network is unreachable".into())
+            }
+        }
+
+        #[test]
+        fn a_cache_miss_with_no_network_fails_and_writes_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            ec(&root.join("robot"), "MathLib", "1.0", &[]);
+            let mut args = request(
+                root,
+                &format!("Absent-1.0-GCCcore-15.2.0.eb --from-commit={SHA}\n"),
+            );
+            args.commit_cache = Some(root.join("cache"));
+            let error = run_stack_shard_with(&args, &OfflineHttp).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.starts_with(crate::shard_trees::CACHE_DOWNLOAD_FAILED),
+                "{message}"
+            );
+            assert!(message.contains("Network is unreachable"), "{message}");
+            assert!(message.contains("nothing written"), "{message}");
+            assert!(!root.join("out").exists(), "nothing is written");
+            assert!(!root.join("cache").join(SHA).exists());
         }
 
         #[test]
