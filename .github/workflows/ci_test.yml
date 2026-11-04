@@ -129,6 +129,7 @@ jobs:
             --test source_artifact_class \
             --test target_config \
             --test campaign \
+            --test ledger \
             --test mcp_v1
 
   package-closure:
