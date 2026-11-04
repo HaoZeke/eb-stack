@@ -2229,6 +2229,7 @@ pub struct StackShardRequest {
 }
 
 /// What `stack shard` wrote.
+#[derive(Debug)]
 pub struct StackShardRun {
     /// Shards written.
     pub shards: usize,
