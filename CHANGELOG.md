@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.4.0 - 2026-11-05
 
 ### Changed
 
@@ -231,7 +231,6 @@ All notable changes to this project are documented here.
   with the node: it gives 8 on 64 cores and on 12. The fixtures are
   `hooks/set-maximum-8.py` and `hooks/divide-8.py`.
 
-## 0.4.0 - 2026-11-01
 
 `stack solve` in 0.3.0 took the policy file as `--policy`. The flag is
 now `--stack-policy`, the same spelling `package plan` and `package bump`
