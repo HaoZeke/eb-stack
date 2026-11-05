@@ -3951,11 +3951,15 @@ fn component_checksums_complete(
     entries.into_iter().all(|(_, _, options)| {
         let mut fields: HashMap<String, Value> = defaults.iter().cloned().collect();
         match options {
-            None => {},
+            None => {}
             Some(Value::Dict(values)) => fields.extend(values),
             _ => return false,
         }
-        let count = |key| value_list_as_slice(fields.get(key)).ok().map(<[Value]>::len);
+        let count = |key| {
+            value_list_as_slice(fields.get(key))
+                .ok()
+                .map(<[Value]>::len)
+        };
         let (Some(sources), Some(patches)) = (count("sources"), count("patches")) else {
             return false;
         };
@@ -3963,13 +3967,16 @@ fn component_checksums_complete(
         let Ok(checksums) = value_list_as_slice(fields.get("checksums")) else {
             return false;
         };
-        expected > 0 && checksums.len() == expected && checksums.iter().all(|entry| {
-            let tokens = checksum_strings_from_value(entry);
-            !tokens.is_empty() && tokens.iter().all(|token| {
-                matches!(token.len(), 32 | 40 | 64 | 128)
-                    && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        expected > 0
+            && checksums.len() == expected
+            && checksums.iter().all(|entry| {
+                let tokens = checksum_strings_from_value(entry);
+                !tokens.is_empty()
+                    && tokens.iter().all(|token| {
+                        matches!(token.len(), 32 | 40 | 64 | 128)
+                            && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
             })
-        })
     })
 }
 

@@ -13,7 +13,8 @@ fn complete_component_archives_pass_without_inventing_root_checksums() {
         "components = [('Renderer', '1.0', {{'sources': ['render.tar.xz'], \
          'checksums': ['{}']}}), ('Data', '2.0', {{'sources': ['data.tar.gz'], \
          'checksums': ['{}']}})]\n",
-        "a".repeat(64), "b".repeat(64)
+        "a".repeat(64),
+        "b".repeat(64)
     ));
     let resolved = resolve_easyconfig_str(&source).unwrap();
     assert!(resolved.checksums.is_empty());
@@ -47,7 +48,9 @@ fn one_unchecked_component_refuses_the_bundle() {
 
 #[test]
 fn empty_component_checksum_is_not_coverage() {
-    rejects("components = [('Renderer', '1.0', {'sources': ['render.tar.gz'], 'checksums': ['']})]\n");
+    rejects(
+        "components = [('Renderer', '1.0', {'sources': ['render.tar.gz'], 'checksums': ['']})]\n",
+    );
 }
 
 #[test]
