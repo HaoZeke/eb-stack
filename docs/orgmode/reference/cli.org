@@ -1,8 +1,8 @@
 #+TITLE: Command-line reference
 #+OPTIONS: toc:t num:nil author:nil
 
-~eb-stack~ has six namespaced command groups (~package~, ~recipe~,
-~stack~, ~target~, ~campaign~, ~repro~), four reports (~easyblock-reach~,
+~eb-stack~ has seven namespaced command groups (~package~, ~recipe~,
+~stack~, ~target~, ~campaign~, ~repro~, ~ledger~), four reports (~easyblock-reach~,
 ~pr-overlap~, ~rebuild-set~, ~component-reach~), and a Model Context Protocol (MCP) server.
 ~--version~ prints the crate version. All paths written by package commands
 are deterministic bundle artifacts. Closure, generation, baseline,
@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved and is not fetched by EasyBuild, or when a ~--commit-cache~ download fails before an HTTP status, and writes nothing in either case. ~--shards 0~, a list with no lines, and a ~--commit-tree~ or ~--pr-tree~ that is not ~COMMIT=DIR~ or ~N=DIR~ are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved and is not fetched by EasyBuild, or when a ~--commit-cache~ download fails before an HTTP status, and writes nothing in either case. ~--shards 0~, a list with no lines, and a ~--commit-tree~ or ~--pr-tree~ that is not ~COMMIT=DIR~ or ~N=DIR~ are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide. ~ledger verify~ is status 1 when a proof or a head signature does not check, and status 2 without exactly one of ~--record~ with ~--head~ and ~--from~ with ~--to~. ~ledger append~ is status 1 when the record is outside the format, the log no longer reads, or the log is not at ~--expect-head~; it then writes nothing.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -61,6 +61,10 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding claim~ | Claim an open finding for one worker |
 | ~campaign finding resolve~ | Resolve a claimed finding with an action, evidence, and the paths it changed |
+| ~ledger append~ | Append one event record to a per-stack ledger as a canonical JSON line and sign the new head |
+| ~ledger head~ | Sign a ledger's current head, for a published anchor |
+| ~ledger show~ | List ledger records newest first, for one module or software name |
+| ~ledger verify~ | Check that a record is in a signed head, or that one signed head extends another |
 | ~mcp [--workspace]~ | Serve each CLI workflow over stdio, including ~pr-overlap~, ~rebuild-set~, ~component-reach~, and ~easyblock-reach~, with recipe file tools rooted at ~--workspace~ |
 | ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
@@ -1746,6 +1750,96 @@ independently.
 See [[file:campaigns.org][campaign state and typed findings]] for the serialized
 state, claim ladder, class/disposition table, and repair protocol.
 
+* Ledger commands
+
+#+begin_src bash
+eb-stack ledger append RECORD.json \
+  --log ledger/2026.06.jsonl \
+  [--expect-head HEAD.json] \
+  [--key KEY.pem --head-out HEAD.json]
+
+eb-stack ledger head \
+  --log ledger/2026.06.jsonl --key KEY.pem --out HEAD.json [--ts RFC3339]
+
+eb-stack ledger show --log ledger/2026.06.jsonl [--package NAME] [--json]
+
+eb-stack ledger verify \
+  --log ledger/2026.06.jsonl --public-key KEY.pub \
+  --record N --head HEAD.json
+
+eb-stack ledger verify \
+  --log ledger/2026.06.jsonl --public-key KEY.pub \
+  --from HEAD1.json --to HEAD2.json
+#+end_src
+
+A ledger is one append-only JSON Lines file per stack. Each line is one
+event on one installation, and every line of a file has the same ~stack~.
+The file is an RFC 9162 Merkle log over the ~rfc9162~ crate: the leaf of
+record ~N~ is ~SHA-256(0x00 || line N)~, over the bytes of the line without
+its newline, and an interior node is ~SHA-256(0x01 || left || right)~.
+
+*Canonical form.* A record is a JSON object written as one line: keys
+sorted by their UTF-8 bytes at every depth, no whitespace outside strings,
+strings escaped as ~serde_json~ escapes them (~"~, ~\~ and control
+characters; other characters as UTF-8), numbers as integers only. A record
+with a fractional number is refused. Two files that differ only in key
+order and spacing append the same line.
+
+*Fields.* ~append~ refuses a field outside this table.
+
+| Field | Content |
+|-
+| ~ts~ | UTC time, RFC 3339 (~Z~ or ~+00:00~). ~append~ fills the current time when absent |
+| ~actor~ | Who wrote it: a Jenkins run URL, a bot pull request and job, or a login |
+| ~stack~ | ~2026.06~ (EESSI version) or ~2025~ |
+| ~target~ | CPU target and accelerator, e.g. ~x86_64/amd/zen4~ |
+| ~module~ | Module name, e.g. ~PETSc/3.25.0-foss-2026.1~ |
+| ~location~ | The installation path that RPATHs use |
+| ~action~ | ~install~, ~rebuild-inplace~, ~rebuild-bump~, ~retire~, ~unretire~, ~move~, ~access~, ~remove~, ~finding~, or ~correction~ |
+| ~stage~ | Optional: ~started~, ~finished~, or ~aborted~, for an operation that runs in steps |
+| ~reason~, ~easyconfig~, ~sources~, ~sbom~, ~modulefile~, ~build~ | Optional JSON: free text or an object of references and SHA-256 sums |
+| ~supersedes~, ~superseded_by~, ~moved_from~, ~moved_to~, ~corrects~ | Optional ~id~ of a related record. A ~correction~ needs ~corrects~ |
+| ~index~ | Leaf number. Written by ~append~; a record that carries another value is refused |
+| ~id~ | SHA-256 of the canonical record without ~id~ and ~sig~. Written by ~append~; a record that carries another value is refused |
+| ~sig~ | Optional per-record signature, kept in the line and left out of ~id~ |
+
+The first fields are required non-empty strings: ~ts~, ~actor~, ~stack~,
+~target~, ~module~, ~location~, and ~action~. A wrong record is never edited:
+a ~correction~ record follows it. Licence numbers, keys and tokens do not
+belong in a record.
+
+*Reading a log.* ~show~, ~verify~, ~head~ and ~append~ read every line and
+refuse the log when a line is not canonical, its ~index~ is not its line
+number, its ~id~ does not recompute, its ~stack~ differs from the first
+line, or the last line has no newline.
+
+*Heads.* A head file is one JSON line: ~domain~ (always
+~eb-stack-ledger-v1~), ~size~, ~root~ (hex), ~ts~, ~public_key~ (hex), and
+~signature~ (hex). The Ed25519 signature covers
+~eb-stack-ledger-v1<TAB>size<TAB>root<TAB>ts~. ~--key~ is an Ed25519 PKCS#8
+PEM file, as ~openssl genpkey -algorithm ed25519~ writes it. A key inside the
+log's directory is refused, so the key is always an argument and never a
+file beside the log. ~--public-key~ is the matching PEM (~openssl pkey
+-pubout~), or the 64 hex characters of a head's ~public_key~.
+
+~append~ locks the log file, checks the log, refuses the record when the
+log is not at the size and root of ~--expect-head~, writes the line, and,
+with ~--key~ and ~--head-out~, writes the signed head after the append. It
+prints ~appended record N id ID; head size S root ROOT~. ~head~ signs the
+log's current head into ~--out~, at ~--ts~ or now. ~show~ prints ~index~,
+~ts~, ~action~, ~target~, ~module~ and ~actor~ per record, newest first, then
+~K of N records~. ~--package~ matches a whole module name, or the software
+name before its ~/~. ~--json~ prints the records as a JSON array.
+
+~verify --record N --head HEAD~ checks HEAD's signature against
+~--public-key~, computes the inclusion proof of record N from the first
+~size~ lines, and checks it against HEAD's root. A record removed from the
+log, or any line changed, makes the root differ. ~verify --from HEAD1 --to
+HEAD2~ checks both signatures, computes the consistency proof from HEAD1's
+size to HEAD2's size, and checks that it yields both roots. A log rewritten
+under HEAD1 and signed again fails, because no proof yields the old root
+and the new one.
+
 * ~repro summary~
 
 #+begin_src bash
@@ -1835,7 +1929,9 @@ plus sandboxed recipe and easyblock tools:
 - ~eb_pr_overlap~ (the same writer as ~pr-overlap~, including
   ~--kind easyconfigs~, a merge order, and ~--impact~),
   ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~;
-- ~eb_repro_summary~.
+- ~eb_repro_summary~;
+- ~eb_ledger_append~, ~eb_ledger_head~, ~eb_ledger_show~,
+  ~eb_ledger_verify~.
 
 ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and
 ~eb_recipe_grep~ resolve every path inside that root. A ~..~ component, an
@@ -1924,7 +2020,14 @@ that is not an integer, and ~hook_warnings~ for a dropped sum in the
 ~oom_profile~, and ~oom_resources~. It refuses an unsupported plan the same way and writes
 known-failures and oom warnings.
 ~eb_repro_summary~
-requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
+requires ~scores~ and takes ~ratchet~ and ~json~.
+~eb_ledger_append~ requires ~log~ and ~record~ and takes ~expect_head~,
+~key~ and ~head_out~; it also returns ~index~, ~id~, ~size~, ~root~ and the
+signed head. ~eb_ledger_head~ requires ~log~, ~key~ and ~out~ and takes ~ts~.
+~eb_ledger_show~ requires ~log~ and takes ~package~ and ~json~, and returns
+the records. ~eb_ledger_verify~ requires ~log~ and ~public_key~, and either
+~record~ (an integer) with ~head~, or ~from~ with ~to~; it returns the proof
+nodes, and a proof that does not check is a tool error. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.
 

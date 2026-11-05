@@ -77,6 +77,7 @@ stack    solve | sbom | order | easystack | sections | from-commit | gap | provi
 target   list | doctor
 campaign run | status | finding claim | finding resolve
 repro    summary
+ledger   append | head | show | verify
 easyblock-reach
 pr-overlap
 rebuild-set
@@ -86,7 +87,7 @@ mcp
 
 The Model Context Protocol (MCP) catalog mirrors these commands,
 including pr-overlap, rebuild-set, component-reach, easyblock-reach,
-and repro summary, with `eb_`-prefixed tools. Recipe file tools
+repro summary, and the ledger commands, with `eb_`-prefixed tools. Recipe file tools
 (`eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`,
 `eb_recipe_apply_suggestion`, `eb_recipe_diff`, `eb_recipe_write`,
 `eb_recipe_grep`, and `eb_dep_versions`), easyblock dry-run, module
