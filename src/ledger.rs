@@ -21,9 +21,12 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fmt::Write as _;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The name a head signature covers, so a head of this log is not a head of
 /// any other log that signs RFC 9162 heads.
@@ -405,12 +408,81 @@ impl SignedHead {
         serde_json::from_str(&text).with_context(|| format!("parse head {}", path.display()))
     }
 
-    /// Write a head file: the head as JSON, one line.
+    /// Write a head file: the head as JSON, one line. The file is replaced
+    /// atomically, so a reader sees the previous head or this one and a
+    /// failed write leaves the previous head in place. A symbolic link at
+    /// `path` is refused rather than replaced or followed.
     pub fn write(&self, path: &Path) -> Result<()> {
         let mut text = serde_json::to_string(self)?;
         text.push('\n');
-        std::fs::write(path, text).with_context(|| format!("write head {}", path.display()))
+        replace_file(path, text.as_bytes())
+            .with_context(|| format!("write head {}", path.display()))
     }
+}
+
+/// Write `bytes` to a new file beside `path`, flush it, rename it over
+/// `path`, and flush the directory so the rename survives a crash.
+fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("the path names no file"))?;
+    let directory = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    if let Ok(existing) = std::fs::symlink_metadata(path) {
+        if existing.file_type().is_symlink() {
+            bail!("the path is a symbolic link; refusing to replace it");
+        }
+        if existing.is_dir() {
+            bail!("the path is a directory");
+        }
+    }
+    loop {
+        let mut temporary = OsString::from(".");
+        temporary.push(name);
+        temporary.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = directory.join(temporary);
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).context("create a temporary file"),
+        };
+        let written = file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .context("write the temporary file")
+            .and_then(|()| std::fs::rename(&temporary, path).context("rename into place"));
+        drop(file);
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        written?;
+        return sync_directory(directory);
+    }
+}
+
+/// Flush a directory so entries created, renamed or removed in it survive a
+/// crash.
+fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(directory)
+            .and_then(|handle| handle.sync_all())
+            .with_context(|| format!("flush directory {}", directory.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
 }
 
 /// A 64 byte signature from 128 lower-case hex characters.
@@ -475,6 +547,173 @@ fn refuse_key_beside_log(key: &Path, log: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A signing key read for one log, with the file it was read from.
+struct KeyFile {
+    key: SigningKey,
+    /// The resolved path of the key file.
+    path: PathBuf,
+    /// Device and inode of the key file.
+    inode: Option<(u64, u64)>,
+}
+
+/// Read the signing key for `log` from the file whose resolved path was
+/// checked to lie outside the log's directory. A key with a second hard
+/// link is refused: that name could sit in the log's tree, where the
+/// directory check cannot see it.
+fn open_signing_key(path: &Path, log: &Path) -> Result<KeyFile> {
+    let mut file =
+        File::open(path).with_context(|| format!("read signing key {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .with_context(|| format!("signing key {}", path.display()))?;
+    if !opened.is_file() {
+        bail!("signing key {} is not a regular file", path.display());
+    }
+    refuse_key_beside_log(path, log)?;
+    let resolved = path
+        .canonicalize()
+        .with_context(|| format!("signing key {}", path.display()))?;
+    let inode = file_identity(&opened);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.nlink() != 1 {
+            bail!(
+                "signing key {} has {} hard links; a key with another name could travel with the log",
+                path.display(),
+                opened.nlink()
+            );
+        }
+        let current = std::fs::metadata(&resolved)
+            .with_context(|| format!("signing key {}", path.display()))?;
+        if file_identity(&current) != inode {
+            bail!("signing key {} changed while it was read", path.display());
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .with_context(|| format!("read signing key {}", path.display()))?;
+    let key = SigningKey::from_pkcs8_pem(&text).map_err(|error| {
+        anyhow!(
+            "signing key {} is not Ed25519 PKCS#8 PEM: {error}",
+            path.display()
+        )
+    })?;
+    Ok(KeyFile {
+        key,
+        path: resolved,
+        inode,
+    })
+}
+
+/// Device and inode, where the platform has them.
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+/// The files that belong to one log, by resolved path.
+#[derive(Debug, Clone)]
+struct LedgerPaths {
+    log: PathBuf,
+    directory: PathBuf,
+    record_lock: PathBuf,
+    /// File name prefix of tails moved out of the log.
+    quarantine: OsString,
+}
+
+impl LedgerPaths {
+    fn of(log: &Path) -> Result<Self> {
+        let log = log
+            .canonicalize()
+            .with_context(|| format!("resolve ledger {}", log.display()))?;
+        let directory = log.parent().unwrap_or(Path::new("/")).to_path_buf();
+        let name = log.file_name().unwrap_or_default();
+        let mut record_lock = name.to_os_string();
+        record_lock.push(".posix-lock");
+        let mut quarantine = name.to_os_string();
+        quarantine.push(".quarantine.");
+        Ok(Self {
+            record_lock: directory.join(record_lock),
+            log,
+            directory,
+            quarantine,
+        })
+    }
+}
+
+/// Refuse a head path that would replace or write through the log, its
+/// record lock, a quarantined tail, or the signing key, by name, symbolic
+/// link or hard link. A path whose directory does not exist names none of
+/// them, and writing the head reports it.
+fn check_head_target(out: &Path, paths: &LedgerPaths, key: Option<&KeyFile>) -> Result<()> {
+    let absolute = std::path::absolute(out).with_context(|| format!("head {}", out.display()))?;
+    let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) else {
+        bail!("head path {} names no file", out.display());
+    };
+    let Ok(parent) = parent.canonicalize() else {
+        return Ok(());
+    };
+    let resolved = parent.join(name);
+    let refuse = |what: &str| -> Result<()> {
+        bail!(
+            "head path {} is {what}; a head never replaces it",
+            out.display()
+        )
+    };
+    if resolved == paths.log {
+        return refuse("the ledger");
+    }
+    if resolved == paths.record_lock {
+        return refuse("the ledger's record lock");
+    }
+    if key.is_some_and(|key| key.path == resolved) {
+        return refuse("the signing key");
+    }
+    if parent == paths.directory
+        && name
+            .as_encoded_bytes()
+            .starts_with(paths.quarantine.as_encoded_bytes())
+    {
+        return refuse("a quarantined ledger tail");
+    }
+    let Ok(existing) = std::fs::symlink_metadata(&resolved) else {
+        return Ok(());
+    };
+    if existing.file_type().is_symlink() {
+        bail!(
+            "head path {} is a symbolic link; refusing to replace it",
+            out.display()
+        );
+    }
+    let Some(inode) = file_identity(&existing) else {
+        return Ok(());
+    };
+    let identity = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .ok()
+            .and_then(|metadata| file_identity(&metadata))
+    };
+    if identity(&paths.log) == Some(inode) {
+        return refuse("a link to the ledger");
+    }
+    if identity(&paths.record_lock) == Some(inode) {
+        return refuse("a link to the ledger's record lock");
+    }
+    if key.is_some_and(|key| key.inode == Some(inode)) {
+        return refuse("a link to the signing key");
+    }
+    Ok(())
+}
+
 fn now_utc() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -510,6 +749,9 @@ pub struct AppendReport {
     pub signed: Option<SignedHead>,
     /// Whether this acknowledges an identical event that is in the log.
     pub replayed: bool,
+    /// The byte count and quarantine file of an interrupted tail that was
+    /// cut from the log before this append.
+    pub quarantined: Option<(usize, PathBuf)>,
 }
 
 impl AppendReport {
@@ -521,64 +763,139 @@ impl AppendReport {
         } else {
             "appended"
         };
-        format!(
+        let mut text = format!(
             "{status} record {} id {}; head size {} root {}",
             self.index, self.id, self.head.size, self.head.root
-        )
+        );
+        if let Some((bytes, path)) = &self.quarantined {
+            let _ = write!(
+                text,
+                "; moved {bytes} bytes of an interrupted append to {}",
+                path.display()
+            );
+        }
+        text
     }
 }
 
-/// A local gate keeps contenders from opening the process-scoped record-lock
-/// inode. Closing any descriptor for that inode releases the process's lock.
+/// POSIX record locks belong to a process, not to a descriptor: a second
+/// lock request from the same process converts the first instead of
+/// waiting, and closing any descriptor for the inode drops every lock the
+/// process holds on it. One slot per ledger inode per process keeps a second
+/// writer or signer in this process from reaching the record-lock inode
+/// while another holds it.
+#[cfg(unix)]
+mod process_slot {
+    use std::sync::{Condvar, Mutex, PoisonError};
+
+    static HELD: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+    static RELEASED: Condvar = Condvar::new();
+
+    pub(super) struct Slot((u64, u64));
+
+    impl Slot {
+        pub(super) fn claim(inode: (u64, u64)) -> Self {
+            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            while held.contains(&inode) {
+                held = RELEASED.wait(held).unwrap_or_else(PoisonError::into_inner);
+            }
+            held.push(inode);
+            Self(inode)
+        }
+    }
+
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            held.retain(|inode| *inode != self.0);
+            RELEASED.notify_all();
+        }
+    }
+}
+
+/// Whether a guard excludes everyone or only writers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LockMode {
+    /// A writer: excludes writers and signers.
+    Write,
+    /// A signer: excludes writers. Needs read access only.
+    Read,
+}
+
+/// A writer's local gate keeps contenders from opening the process-scoped
+/// record-lock inode. Closing any descriptor for that inode releases the
+/// process's lock.
 struct LedgerLock {
-    gate: std::fs::File,
-    record: Option<std::fs::File>,
+    gate: Option<File>,
+    record: Option<File>,
+    #[cfg(unix)]
+    slot: Option<process_slot::Slot>,
     owner: u32,
+    paths: LedgerPaths,
 }
 
 impl LedgerLock {
-    fn acquire(gate: &std::fs::File, log: &Path) -> Result<Self> {
-        if !gate.metadata().context("inspect ledger file")?.is_file() {
+    fn acquire(gate: &File, log: &Path) -> Result<Self> {
+        Self::acquire_as(gate, log, LockMode::Write)
+    }
+
+    /// Take the signer's lock through a descriptor opened for reading.
+    fn acquire_shared(log_file: &File, log: &Path) -> Result<Self> {
+        Self::acquire_as(log_file, log, LockMode::Read)
+    }
+
+    fn acquire_as(opened_log: &File, log: &Path, mode: LockMode) -> Result<Self> {
+        if !opened_log
+            .metadata()
+            .context("inspect ledger file")?
+            .is_file()
+        {
             bail!("ledger must be a regular file: {}", log.display());
         }
-        let gate = gate
+        let gate = opened_log
             .try_clone()
             .context("duplicate ledger lock descriptor")?;
-        FileExt::lock_exclusive(&gate).with_context(|| format!("lock ledger {}", log.display()))?;
+        match mode {
+            LockMode::Write => FileExt::lock_exclusive(&gate),
+            #[cfg(unix)]
+            LockMode::Read => Ok(()),
+            #[cfg(not(unix))]
+            LockMode::Read => FileExt::lock_shared(&gate),
+        }
+        .with_context(|| format!("lock ledger {}", log.display()))?;
         let mut guard = Self {
-            gate,
+            gate: Some(gate),
             record: None,
+            #[cfg(unix)]
+            slot: None,
             owner: std::process::id(),
+            paths: LedgerPaths::of(log)?,
         };
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
             use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
-            let opened = guard.gate.metadata().context("inspect ledger lock inode")?;
+            let opened = opened_log.metadata().context("inspect ledger lock inode")?;
             if opened.nlink() != 1 {
                 bail!(
                     "ledger requires one link for writer exclusion: {}",
                     log.display()
                 );
             }
-            let canonical = log.canonicalize().context("resolve ledger lock path")?;
-            let resolved = canonical.metadata().context("inspect resolved ledger")?;
+            let resolved = guard
+                .paths
+                .log
+                .metadata()
+                .context("inspect resolved ledger")?;
             if (opened.dev(), opened.ino()) != (resolved.dev(), resolved.ino()) {
                 bail!(
                     "ledger path changed while acquiring its lock: {}",
                     log.display()
                 );
             }
-            let mut name = canonical.into_os_string();
-            name.push(".posix-lock");
-            let record = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(PathBuf::from(name))
+            guard.slot = Some(process_slot::Slot::claim((opened.dev(), opened.ino())));
+            let record = open_record_lock(&guard.paths.record_lock, mode)
                 .with_context(|| format!("open record lock for ledger {}", log.display()))?;
             let info = record.metadata().context("inspect ledger record lock")?;
             if !info.is_file() || info.nlink() != 1 {
@@ -590,7 +907,10 @@ impl LedgerLock {
             // All-zero offsets cover the whole file; flock's scalar fields
             // have valid zero representations on the supported Unix targets.
             let mut lock: libc::flock = unsafe { std::mem::zeroed() };
-            lock.l_type = libc::F_WRLCK as _;
+            lock.l_type = match mode {
+                LockMode::Write => libc::F_WRLCK,
+                LockMode::Read => libc::F_RDLCK,
+            } as _;
             lock.l_whence = libc::SEEK_SET as _;
             loop {
                 // The descriptor stays open in this guard and lock points to
@@ -606,6 +926,37 @@ impl LedgerLock {
                 }
             }
             guard.record = Some(record);
+
+            fn open_record_lock(path: &Path, mode: LockMode) -> std::io::Result<File> {
+                let mut options = OpenOptions::new();
+                options
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+                if mode == LockMode::Write {
+                    return options.write(true).create(true).truncate(false).open(path);
+                }
+                match options.open(path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    opened => return opened,
+                }
+                // No writer has created the lock yet. A signer that can create
+                // it does; one that cannot must not sign unlocked, because a
+                // writer may create it and append at any moment.
+                match options.clone().write(true).create_new(true).open(path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        options.open(path)
+                    }
+                    Err(error) => Err(std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "{} does not exist and cannot be created ({error}); \
+                             a writer creates it on its first append",
+                            path.display()
+                        ),
+                    )),
+                    created => created,
+                }
+            }
         }
         Ok(guard)
     }
@@ -616,9 +967,92 @@ impl Drop for LedgerLock {
         // Closing the sidecar releases the record lock before another local
         // contender can open it. A forked child must not unlock its parent.
         drop(self.record.take());
-        if self.owner == std::process::id() {
-            let _ = FileExt::unlock(&self.gate);
+        #[cfg(unix)]
+        drop(self.slot.take());
+        if let Some(gate) = self.gate.take() {
+            if self.owner == std::process::id() {
+                let _ = FileExt::unlock(&gate);
+            }
         }
+    }
+}
+
+/// Move the bytes after the last newline, an append that never finished,
+/// into a new quarantine file beside the log, flush it and the directory,
+/// and only then cut them from the log. Runs under the writer lock.
+fn quarantine_tail(
+    file: &File,
+    paths: &LedgerPaths,
+    committed: u64,
+    tail: &[u8],
+) -> Result<PathBuf> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mode = file
+            .metadata()
+            .context("inspect ledger")?
+            .permissions()
+            .mode()
+            & 0o666;
+        options.mode(mode).custom_flags(libc::O_NOFOLLOW);
+    }
+    let stamp = Utc::now().format("%Y%m%dT%H%M%S%9fZ");
+    let mut attempt = 0u32;
+    let (path, mut quarantine) = loop {
+        let mut name = paths.quarantine.clone();
+        name.push(format!("{stamp}.{}.{attempt}", std::process::id()));
+        let path = paths.directory.join(name);
+        match options.open(&path) {
+            Ok(opened) => break (path, opened),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 1000 => {
+                attempt += 1;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("create ledger quarantine {}", path.display()))
+            }
+        }
+    };
+    let kept = quarantine
+        .write_all(tail)
+        .and_then(|()| quarantine.sync_all())
+        .with_context(|| format!("write ledger quarantine {}", path.display()))
+        .and_then(|()| sync_directory(&paths.directory));
+    if let Err(error) = kept {
+        drop(quarantine);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    file.set_len(committed)
+        .and_then(|()| file.sync_all())
+        .with_context(|| {
+            format!(
+                "cut the interrupted tail from ledger {}; it is kept in {}",
+                paths.log.display(),
+                path.display()
+            )
+        })?;
+    Ok(path)
+}
+
+/// Write one line and flush it. A failed or short write is cut back to
+/// `start`, so the log never keeps a partial line this writer left.
+fn write_line(file: &mut File, start: u64, line: &str, log: &Path) -> Result<()> {
+    let written = file
+        .write_all(format!("{line}\n").as_bytes())
+        .and_then(|()| file.sync_all());
+    let Err(error) = written else {
+        return Ok(());
+    };
+    let error = anyhow!(error).context(format!("append to ledger {}", log.display()));
+    match file.set_len(start).and_then(|()| file.sync_all()) {
+        Ok(()) => Err(error),
+        Err(rollback) => Err(error.context(format!(
+            "the partial line could not be cut back ({rollback}); the next append quarantines it"
+        ))),
     }
 }
 
@@ -636,10 +1070,7 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         ));
     }
     let key = match &request.key {
-        Some(path) => {
-            refuse_key_beside_log(path, &request.log)?;
-            Some(read_signing_key(path)?)
-        }
+        Some(path) => Some(open_signing_key(path, &request.log)?),
         None => None,
     };
     let text = std::fs::read_to_string(&request.record)
@@ -661,12 +1092,28 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     let mut file = options
         .open(&request.log)
         .with_context(|| format!("open ledger {}", request.log.display()))?;
-    let _lock = LedgerLock::acquire(&file, &request.log)?;
-    let mut current = String::new();
+    let lock = LedgerLock::acquire(&file, &request.log)?;
+    if let Some(out) = &request.head_out {
+        check_head_target(out, &lock.paths, key.as_ref())?;
+    }
+    let mut current = Vec::new();
     file.seek(SeekFrom::Start(0))?;
-    file.read_to_string(&mut current)?;
-    let mut entries =
-        parse_log(&current).with_context(|| format!("ledger {}", request.log.display()))?;
+    file.read_to_end(&mut current)?;
+    let committed = current
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    if committed < current.len() && serde_json::from_slice::<Value>(&current[committed..]).is_ok() {
+        bail!(
+            "the last line of ledger {} is complete JSON without a newline; it may be a \
+             committed record, so it is neither repaired nor appended after",
+            request.log.display()
+        );
+    }
+    let mut entries = std::str::from_utf8(&current[..committed])
+        .context("the log is not UTF-8")
+        .and_then(parse_log)
+        .with_context(|| format!("ledger {}", request.log.display()))?;
     let id = match record.as_object() {
         Some(record) => event_id(record)?,
         None => None,
@@ -733,16 +1180,31 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
             );
         }
     }
-    if !replayed {
-        file.write_all(format!("{}\n", entry.line).as_bytes())
-            .with_context(|| format!("append to ledger {}", request.log.display()))?;
-        file.sync_all()?;
+    let quarantined = if committed < current.len() {
+        Some(quarantine_tail(
+            &file,
+            &lock.paths,
+            committed as u64,
+            &current[committed..],
+        )?)
+    } else {
+        None
+    };
+    if replayed {
+        // The earlier attempt may have stopped before its flush; acknowledge
+        // only what is on stable storage.
+        file.sync_all()
+            .with_context(|| format!("flush ledger {}", request.log.display()))?;
+    } else {
+        write_line(&mut file, committed as u64, &entry.line, &request.log)?;
         entries.push(entry.clone());
     }
-    let signed = key.map(|key| SignedHead::sign(&entries, &key, &now));
+    sync_directory(&lock.paths.directory)?;
+    let signed = key.map(|key| SignedHead::sign(&entries, &key.key, &now));
     if let (Some(signed), Some(out)) = (&signed, &request.head_out) {
         signed.write(out)?;
     }
+    drop(lock);
     Ok(AppendReport {
         index: entry.index,
         id: entry.id,
@@ -750,6 +1212,7 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         head: rfc9162::Head::over(&leaves(&entries)),
         signed,
         replayed,
+        quarantined: quarantined.map(|path| (current.len() - committed, path)),
     })
 }
 
@@ -766,11 +1229,12 @@ pub struct HeadRequest {
     pub ts: Option<String>,
 }
 
-/// Sign the log's current head.
+/// Sign the log's current head. The log is read and the head written under
+/// the signer's side of the writer lock, so the head is the log between two
+/// appends and a head an append wrote is never replaced by an older one.
+/// The signer opens the log and its record lock for reading only.
 pub fn sign_head(request: &HeadRequest) -> Result<SignedHead> {
-    refuse_key_beside_log(&request.key, &request.log)?;
-    let key = read_signing_key(&request.key)?;
-    let entries = read_log(&request.log)?;
+    let key = open_signing_key(&request.key, &request.log)?;
     let ts = match &request.ts {
         Some(ts) => {
             let parsed = DateTime::parse_from_rfc3339(ts)
@@ -782,8 +1246,25 @@ pub fn sign_head(request: &HeadRequest) -> Result<SignedHead> {
         }
         None => now_utc(),
     };
-    let head = SignedHead::sign(&entries, &key, &ts);
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(&request.log)
+        .with_context(|| format!("read ledger {}", request.log.display()))?;
+    let lock = LedgerLock::acquire_shared(&file, &request.log)?;
+    check_head_target(&request.out, &lock.paths, Some(&key))?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .with_context(|| format!("read ledger {}", request.log.display()))?;
+    let entries = parse_log(&text).with_context(|| format!("ledger {}", request.log.display()))?;
+    let head = SignedHead::sign(&entries, &key.key, &ts);
     head.write(&request.out)?;
+    drop(lock);
     Ok(head)
 }
 
@@ -1096,5 +1577,54 @@ mod tests {
         assert!(
             SignedHead::material(1, &head.root, &head.ts).starts_with(b"eb-stack-ledger-v1\t1\t")
         );
+    }
+
+    /// Whether a second guard taken in this process waits for `first`.
+    #[cfg(unix)]
+    fn second_guard_waits(first: LockMode, second: LockMode) {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("stack.jsonl");
+        std::fs::write(&log, "").unwrap();
+        let open = || OpenOptions::new().read(true).open(&log).unwrap();
+        let held = LedgerLock::acquire_as(&open(), &log, first).unwrap();
+        let taken = Arc::new(AtomicBool::new(false));
+        let waiter = {
+            let (log, taken, file) = (log.clone(), Arc::clone(&taken), open());
+            std::thread::spawn(move || {
+                let guard = LedgerLock::acquire_as(&file, &log, second).unwrap();
+                taken.store(true, Ordering::SeqCst);
+                drop(guard);
+            })
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !taken.load(Ordering::SeqCst),
+            "a second guard in the same process shared the record lock"
+        );
+        drop(held);
+        waiter.join().unwrap();
+        assert!(taken.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_signer_in_the_writer_process_waits_for_the_writer() {
+        second_guard_waits(LockMode::Write, LockMode::Read);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signers_in_one_process_do_not_share_the_record_lock() {
+        second_guard_waits(LockMode::Read, LockMode::Read);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_in_the_signer_process_waits_for_the_signer() {
+        second_guard_waits(LockMode::Read, LockMode::Write);
     }
 }

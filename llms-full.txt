@@ -8095,7 +8095,27 @@ file beside the log. `--public-key` is the matching PEM (~openssl pkey
 log is not at the size and root of `--expect-head`, writes the line, and,
 with `--key` and `--head-out`, writes the signed head after the append. It
 prints `appended record N id ID; head size S root ROOT`. `head` signs the
-log's current head into `--out`, at `--ts` or now. `show` prints `index`,
+log's current head into `--out`, at `--ts` or now.
+
+**Locking and crashes.** Writers take an exclusive POSIX record lock on
+`LOG.posix-lock` beside the log; `head` takes a shared lock on the same
+file, so a head is the log between two appends and an older head never
+replaces a newer one. `head` opens the log and the lock file read-only and
+needs no write access to the ledger directory, but refuses a log whose
+lock file no writer has created. `append` flushes the log and its
+directory before it reports a record, including a record it acknowledges
+as already recorded. A write that fails part way is cut back. Bytes after
+the last newline that are not a JSON value, left by an append that never
+finished, are copied to a new `LOG.quarantine.*` file and flushed before
+the next `append` cuts them from the log; `append` then adds
+`; moved N bytes of an interrupted append to PATH` to its line. A complete
+JSON value without its newline is refused and left in place. A head file is
+replaced by renaming a flushed new file over it. A head path that names
+the log, its lock file, a quarantine file, or the signing key, directly or
+through a symbolic or hard link, is refused, and so is a head path that is
+a symbolic link. A signing key with more than one hard link is refused. The
+lock is a POSIX record lock: whether it excludes writers on several hosts
+depends on the shared file system's lock support. `show` prints `index`,
 `ts`, `action`, `target`, `module` and `actor` per record, newest first, then
 `K of N records`. `--package` matches a whole module name, or the software
 name before its `/`. `--json` prints the records as a JSON array.
