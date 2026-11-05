@@ -98,6 +98,7 @@ jobs:
             --test eon_foss_2026_1 \
             --test qmcpack_foss_2026_1 \
             --test eon_packaging \
+            --test bundle_component_checksums \
             --test goal_scenario \
             -- --nocapture
 
