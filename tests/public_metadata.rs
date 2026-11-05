@@ -116,9 +116,16 @@ fn local_agent_state_stays_out_of_public_commits() {
     assert!(gitignore.lines().any(|line| line == "!/.github/"));
     let fixture = tempfile::tempdir().expect("temporary repository");
     std::fs::write(fixture.path().join(".gitignore"), gitignore).expect("write ignore policy");
-    let init = Command::new("git").args(["init", "--quiet"])
-        .arg(fixture.path()).output().expect("initialize temporary repository");
-    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+    let init = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(fixture.path())
+        .output()
+        .expect("initialize temporary repository");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
     for (path, ignored) in [
         (".working-state/marker", true),
         (".cache/marker", true),
@@ -129,11 +136,25 @@ fn local_agent_state_stays_out_of_public_commits() {
         let file = fixture.path().join(path);
         std::fs::create_dir_all(file.parent().unwrap()).expect("create fixture directory");
         std::fs::write(file, "fixture").expect("write fixture file");
-        let result = Command::new("git").arg("-C").arg(fixture.path())
-            .args(["-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "--", path])
-            .output().expect("check ignore behavior");
-        assert_eq!(result.status.code(), Some(if ignored { 0 } else { 1 }),
-                   "unexpected ignore behavior for {path}: {}", String::from_utf8_lossy(&result.stderr));
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args([
+                "-c",
+                "core.excludesFile=/dev/null",
+                "check-ignore",
+                "--no-index",
+                "--",
+                path,
+            ])
+            .output()
+            .expect("check ignore behavior");
+        assert_eq!(
+            result.status.code(),
+            Some(if ignored { 0 } else { 1 }),
+            "unexpected ignore behavior for {path}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }
 
