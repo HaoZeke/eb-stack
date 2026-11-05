@@ -538,3 +538,43 @@ fn a_fetched_petsc_line_stays_with_petsc4py_and_the_plan_is_stable() {
         .expect("petsc4py line");
     assert!(petsc_at < py_at, "{shard_text}");
 }
+
+#[test]
+fn line_dependency_filters_are_refused_before_writing_a_plan() {
+    for option in [
+        "--filter-deps=zlib",
+        "--filter-deps zlib",
+        "--filter-dep=zlib",
+        "--filter-d zlib",
+    ] {
+        for source in ["", " --from-commit=0123abcd"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let list = tmp.path().join("build.list");
+            let out = tmp.path().join("out");
+            std::fs::write(&list, format!("# list\nAlpha.eb {option}{source}\n")).unwrap();
+            let run = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+                .env_remove("EASYBUILD_FILTER_DEPS")
+                .args(["stack", "shard", "--build-list"])
+                .arg(&list)
+                .arg("--easyconfigs")
+                .arg(fixture("easyconfigs"))
+                .arg("--out-dir")
+                .arg(&out)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&run.stderr);
+            assert!(!run.status.success(), "{option}{source}: {stderr}");
+            assert!(stderr.contains("line 2: Alpha.eb"), "{stderr}");
+            assert!(stderr.contains("dependency-filter override"), "{stderr}");
+            assert!(!out.exists(), "a refused list wrote {}", out.display());
+        }
+    }
+}
+
+#[test]
+fn other_line_filters_do_not_count_as_dependency_overrides() {
+    for option in ["--filter-ecs=example", "--filter-env-vars=TMP"] {
+        let line = eb_stack::shard::parse_lines(&format!("Alpha.eb {option}"));
+        assert_eq!(line[0].filter_deps_option(), None, "{option}");
+    }
+}

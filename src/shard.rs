@@ -49,6 +49,20 @@ pub struct ShardLine {
     pub source_options: Vec<String>,
 }
 
+impl ShardLine {
+    /// A dependency-filter override that the list-wide closure cannot model.
+    /// EasyBuild accepts unambiguous prefixes of its long option names.
+    pub fn filter_deps_option(&self) -> Option<&str> {
+        const OPTION: &str = "--filter-deps";
+        const SHORTEST_PREFIX: usize = "--filter-d".len();
+        self.text
+            .split_whitespace()
+            .skip(1)
+            .map(|word| word.split('=').next().unwrap_or(word))
+            .find(|key| key.len() >= SHORTEST_PREFIX && OPTION.starts_with(key))
+    }
+}
+
 /// The easyconfig tree a fetched line is resolved against.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LineSource {

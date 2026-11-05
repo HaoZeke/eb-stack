@@ -2408,6 +2408,25 @@ pub fn run_stack_shard_with(
             args.build_list.display()
         )));
     }
+    let overrides: Vec<String> = lines
+        .iter()
+        .filter_map(|line| {
+            line.filter_deps_option().map(|option| {
+                format!(
+                    "line {}: {}: {option} overrides dependency filters for one line; \
+                     pass --filter-deps or EASYBUILD_FILTER_DEPS for the whole list",
+                    line.number, line.file
+                )
+            })
+        })
+        .collect();
+    if !overrides.is_empty() {
+        return Err(anyhow!(
+            "{} dependency-filter override(s); nothing written\n{}",
+            overrides.len(),
+            overrides.join("\n")
+        ));
+    }
     let (weights, weights_digest) = match &args.weights {
         Some(path) => {
             let bytes = std::fs::read(path)
