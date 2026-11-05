@@ -516,7 +516,11 @@ impl AppendReport {
     /// One line for stdout.
     #[must_use]
     pub fn summary(&self) -> String {
-        let status = if self.replayed { "already recorded" } else { "appended" };
+        let status = if self.replayed {
+            "already recorded"
+        } else {
+            "appended"
+        };
         format!(
             "{status} record {} id {}; head size {} root {}",
             self.index, self.id, self.head.size, self.head.root
@@ -669,8 +673,12 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     };
     let previous = if let Some(id) = id {
         let mut matching = entries.iter().filter(|entry| {
-            entry.record.get("build").and_then(|build| build.get("event_id"))
-                .and_then(Value::as_str) == Some(id)
+            entry
+                .record
+                .get("build")
+                .and_then(|build| build.get("event_id"))
+                .and_then(Value::as_str)
+                == Some(id)
         });
         let previous = matching.next().cloned();
         if matching.next().is_some() {
@@ -687,7 +695,10 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         let retry = seal_record(&record, previous.index, original_ts)
             .with_context(|| format!("record {}", request.record.display()))?;
         if retry.line != previous.line {
-            bail!("build.event_id {:?} is already recorded with different content", id);
+            bail!(
+                "build.event_id {:?} is already recorded with different content",
+                id
+            );
         }
         previous
     } else {
@@ -698,7 +709,10 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         let current_leaves = leaves(&entries);
         let prefix_matches = expected.size <= current_leaves.len()
             && expected.root == rfc9162::Head::over(&current_leaves[..expected.size]).root;
-        if expected.domain != DOMAIN || !prefix_matches || (!replayed && expected.size != entries.len()) {
+        if expected.domain != DOMAIN
+            || !prefix_matches
+            || (!replayed && expected.size != entries.len())
+        {
             let head = rfc9162::Head::over(&current_leaves);
             bail!(
                 "ledger is at size {} root {}, not the expected head size {} root {}",

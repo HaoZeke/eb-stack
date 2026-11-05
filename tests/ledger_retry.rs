@@ -21,7 +21,11 @@ fn fixture() -> Fixture {
     }
     let key = root.path().join("keys/key.pem");
     let signing = SigningKey::from_bytes(&[19; 32]);
-    std::fs::write(&key, signing.to_pkcs8_pem(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    std::fs::write(
+        &key,
+        signing.to_pkcs8_pem(LineEnding::LF).unwrap().as_bytes(),
+    )
+    .unwrap();
     Fixture {
         log: root.path().join("ledger/stack.jsonl"),
         record: root.path().join("work/record.json"),
@@ -45,14 +49,24 @@ fn save(fixture: &Fixture, value: &Value) {
 
 fn command(fixture: &Fixture, head: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
-    command.args(["ledger", "append"]).arg(&fixture.record)
-        .arg("--log").arg(&fixture.log).arg("--key").arg(&fixture.key)
-        .arg("--head-out").arg(head);
+    command
+        .args(["ledger", "append"])
+        .arg(&fixture.record)
+        .arg("--log")
+        .arg(&fixture.log)
+        .arg("--key")
+        .arg(&fixture.key)
+        .arg("--head-out")
+        .arg(head);
     command
 }
 
 fn success(output: Output) -> String {
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -62,10 +76,14 @@ fn rows(fixture: &Fixture) -> Vec<ledger::Entry> {
 
 fn check_head(fixture: &Fixture, size: usize) {
     let head = SignedHead::read(&fixture.head).unwrap();
-    head.check(&SigningKey::from_bytes(&[19; 32]).verifying_key()).unwrap();
+    head.check(&SigningKey::from_bytes(&[19; 32]).verifying_key())
+        .unwrap();
     assert_eq!(head.size, size);
     let entries = rows(fixture);
-    assert_eq!(head.root, rfc9162::Head::over(&ledger::leaves(&entries)).root);
+    assert_eq!(
+        head.root,
+        rfc9162::Head::over(&ledger::leaves(&entries)).root
+    );
 }
 
 #[test]
@@ -89,7 +107,11 @@ fn reused_event_identifier_with_different_content_is_refused() {
     let original = std::fs::read(&fixture.log).unwrap();
     value["reason"] = json!("different operation");
     save(&fixture, &value);
-    assert!(!command(&fixture, &fixture.head).output().unwrap().status.success());
+    assert!(!command(&fixture, &fixture.head)
+        .output()
+        .unwrap()
+        .status
+        .success());
     assert_eq!(std::fs::read(&fixture.log).unwrap(), original);
     check_head(&fixture, 1);
 }
@@ -99,7 +121,11 @@ fn head_output_failure_can_be_retried_without_appending_again() {
     let fixture = fixture();
     save(&fixture, &record("run/module/finished"));
     let missing = fixture.head.parent().unwrap().join("missing/head.json");
-    assert!(!command(&fixture, &missing).output().unwrap().status.success());
+    assert!(!command(&fixture, &missing)
+        .output()
+        .unwrap()
+        .status
+        .success());
     assert_eq!(rows(&fixture).len(), 1);
     success(command(&fixture, &fixture.head).output().unwrap());
     assert_eq!(rows(&fixture).len(), 1);
@@ -124,7 +150,11 @@ fn event_identifier_requires_a_nonempty_string() {
     let mut value = record("run/module/finished");
     value["build"]["event_id"] = json!(42);
     save(&fixture, &value);
-    assert!(!command(&fixture, &fixture.head).output().unwrap().status.success());
+    assert!(!command(&fixture, &fixture.head)
+        .output()
+        .unwrap()
+        .status
+        .success());
     assert!(rows(&fixture).is_empty());
 }
 
@@ -132,22 +162,44 @@ fn event_identifier_requires_a_nonempty_string() {
 fn acknowledged_retry_checks_the_expected_history_prefix() {
     let fixture = fixture();
     let empty = fixture.head.parent().unwrap().join("empty.json");
-    SignedHead::sign(&[], &SigningKey::from_bytes(&[19; 32]), "2026-11-05T00:00:00Z")
-        .write(&empty).unwrap();
+    SignedHead::sign(
+        &[],
+        &SigningKey::from_bytes(&[19; 32]),
+        "2026-11-05T00:00:00Z",
+    )
+    .write(&empty)
+    .unwrap();
     save(&fixture, &record("first"));
-    success(command(&fixture, &fixture.head).arg("--expect-head").arg(&empty).output().unwrap());
+    success(
+        command(&fixture, &fixture.head)
+            .arg("--expect-head")
+            .arg(&empty)
+            .output()
+            .unwrap(),
+    );
     save(&fixture, &record("second"));
     success(command(&fixture, &fixture.head).output().unwrap());
     save(&fixture, &record("first"));
-    success(command(&fixture, &fixture.head).arg("--expect-head").arg(&empty).output().unwrap());
+    success(
+        command(&fixture, &fixture.head)
+            .arg("--expect-head")
+            .arg(&empty)
+            .output()
+            .unwrap(),
+    );
     assert_eq!(rows(&fixture).len(), 2);
     check_head(&fixture, 2);
     let original = std::fs::read(&fixture.log).unwrap();
     let mut changed = SignedHead::read(&empty).unwrap();
     changed.root = "00".repeat(32);
     changed.write(&empty).unwrap();
-    assert!(!command(&fixture, &fixture.head).arg("--expect-head").arg(&empty)
-        .output().unwrap().status.success());
+    assert!(!command(&fixture, &fixture.head)
+        .arg("--expect-head")
+        .arg(&empty)
+        .output()
+        .unwrap()
+        .status
+        .success());
     assert_eq!(std::fs::read(&fixture.log).unwrap(), original);
 }
 
@@ -160,6 +212,10 @@ fn duplicated_event_identifiers_in_existing_history_are_refused() {
     let original = format!("{}\n{}\n", first.line, second.line);
     std::fs::write(&fixture.log, &original).unwrap();
     save(&fixture, &value);
-    assert!(!command(&fixture, &fixture.head).output().unwrap().status.success());
+    assert!(!command(&fixture, &fixture.head)
+        .output()
+        .unwrap()
+        .status
+        .success());
     assert_eq!(std::fs::read_to_string(&fixture.log).unwrap(), original);
 }
