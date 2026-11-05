@@ -522,9 +522,10 @@ struct LedgerLock {
 
 impl LedgerLock {
     fn acquire(gate: &std::fs::File, log: &Path) -> Result<Self> {
-        let gate = gate.try_clone().context("duplicate ledger lock descriptor")?;
-        FileExt::lock_exclusive(&gate)
-            .with_context(|| format!("lock ledger {}", log.display()))?;
+        let gate = gate
+            .try_clone()
+            .context("duplicate ledger lock descriptor")?;
+        FileExt::lock_exclusive(&gate).with_context(|| format!("lock ledger {}", log.display()))?;
         let mut guard = Self {
             gate,
             record: None,
@@ -558,7 +559,8 @@ impl LedgerLock {
                 }
                 let error = std::io::Error::last_os_error();
                 if error.kind() != std::io::ErrorKind::Interrupted {
-                    return Err(error).with_context(|| format!("record-lock ledger {}", log.display()));
+                    return Err(error)
+                        .with_context(|| format!("record-lock ledger {}", log.display()));
                 }
             }
             guard.record = Some(record);

@@ -15,22 +15,43 @@ fn append_waits_for_the_posix_writer() {
         "ts": "2026-11-05T00:00:00Z", "actor": "lock-test", "stack": "2026.06", "target": "x86_64/amd/zen4",
         "module": "example/1", "location": "/example/1", "action": "install"
     })).unwrap()).unwrap();
-    let holder = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&sidecar).unwrap();
+    let holder = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&sidecar)
+        .unwrap();
     // The file descriptor is live and the initialized flock covers the file.
     let mut lock: libc::flock = unsafe { std::mem::zeroed() };
     lock.l_type = libc::F_WRLCK as _;
     lock.l_whence = libc::SEEK_SET as _;
-    assert_eq!(unsafe { libc::fcntl(holder.as_raw_fd(), libc::F_SETLK, &lock) }, 0);
+    assert_eq!(
+        unsafe { libc::fcntl(holder.as_raw_fd(), libc::F_SETLK, &lock) },
+        0
+    );
     let mut child = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .args(["ledger", "append"])
-        .arg(&record).arg("--log").arg(&log)
-        .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        .arg(&record)
+        .arg("--log")
+        .arg(&log)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    assert!(child.try_wait().unwrap().is_none(), "append bypassed the POSIX writer lock");
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "append bypassed the POSIX writer lock"
+    );
     assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
     drop(holder);
     let result = child.wait_with_output().unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     let lines = std::fs::read_to_string(log).unwrap();
     let entries: Vec<_> = lines.lines().collect();
     assert_eq!(entries.len(), 1);
