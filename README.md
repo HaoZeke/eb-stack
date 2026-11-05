@@ -24,7 +24,7 @@ The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation,
 ## Discovery
 
 - [llms.txt](llms.txt) indexes the manual. [llms-full.txt](llms-full.txt) repeats every page in one file.
-- [AGENTS.md](AGENTS.md) lists the build, test, lint, and docs commands.
+- [Contributing](CONTRIBUTING.md) describes contribution and validation requirements.
 - The skills for inspect, plan, bump, a stack SBOM, pull-request overlap, and the stdio server are under [skills/](skills/).
 - The Model Context Protocol manifest is [server.json](server.json). Client configuration is the manual page [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html).
 
