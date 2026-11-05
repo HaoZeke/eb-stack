@@ -554,7 +554,7 @@ fn line_dependency_filters_are_refused_before_writing_a_plan() {
             std::fs::write(&list, format!("# list\nAlpha.eb {option}{source}\n")).unwrap();
             let run = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
                 .env_remove("EASYBUILD_FILTER_DEPS")
-                .args(["stack", "shard", "--build-list"])
+                .args(["stack", "shard", "--shards", "4", "--build-list"])
                 .arg(&list)
                 .arg("--easyconfigs")
                 .arg(fixture("easyconfigs"))
