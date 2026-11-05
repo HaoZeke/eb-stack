@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Changed
+
+- Rust 1.90 is the minimum. `ordered-float` 5.5.1 sets `rust-version`
+  1.90. `uuid` 1.29.0 sets 1.89.0. The CI minimum job builds every
+  target with that compiler.
+
 ## 0.4.0 - 2026-11-05
 
 ### Changed

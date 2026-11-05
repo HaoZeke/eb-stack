@@ -69,7 +69,7 @@ Report these claims independently:
 ## Install
 
 The crate is `eb_stack` on crates.io; the installed binary is `eb-stack`.
-Rust 1.88 or newer is required when building from source. `rustc` 1.83
+Rust 1.90 or newer is required when building from source. `rustc` 1.83
 stops while reading the crate index: the Cargo feature `edition2024` is
 not stabilized. `rustup toolchain install stable` and `rustup default
 stable` provide a new enough compiler.

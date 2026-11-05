@@ -2,9 +2,9 @@
 name = "eb_stack"
 version = "0.4.0"
 edition = "2021"
-# Floor is 1.88.0: `time` 0.3.55, pulled in by cyclonedx-bom, sets
-# rust-version 1.88.0. Edition 2024 dependencies need Cargo 1.85, below that.
-rust-version = "1.88"
+# Floor is 1.90: `ordered-float` 5.5.1 sets rust-version 1.90.
+# `uuid` 1.29.0 sets 1.89.0. Edition 2024 dependencies need Cargo 1.85.
+rust-version = "1.90"
 description = "Turn conda-forge, Spack, and EasyBuild recipes into Resolvo-solved variants, CycloneDX SBOMs, and build-evaluated package bundles"
 license = "MIT"
 authors = ["Rohit Goswami <rgoswami@ieee.org>"]
