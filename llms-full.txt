@@ -11922,12 +11922,15 @@ jq '.components | length' /tmp/sbom-demo/ck/out/package.sbom.cdx.json
 1
 ```
 
-`recipe lint` reports the doubled percent sign that the recipe uses so a
-later `%` expansion leaves one percent. `recipe check` resolves the
-metadata and counts both checksum slots.
+`recipe lint` also runs `eb --check-contrib` when `eb` is on `PATH`. That
+check rejects the empty arm64 slot until its digest is filled in, so the
+lint below reads `quarto-1.8.26.eb` on develop. It has both digests and the
+same doubled percent sign, which the recipe uses so a later `%` expansion
+leaves one percent. `recipe check` resolves the metadata of the bumped
+recipe and counts both checksum slots.
 
 ```bash
-eb-stack recipe lint /tmp/sbom-demo/ck/out/easyconfigs/q/quarto/quarto-1.8.27.eb | jq -c '{clean, error_free, codes: [.style[].code]}'
+eb-stack recipe lint tests/sbom_recorded/quarto/easybuild/easyconfigs/q/quarto/quarto-1.8.26.eb | jq -c '{clean, error_free, codes: [.style[].code]}'
 ```
 
 ```text
