@@ -112,11 +112,28 @@ fn generated_documentation_builds_stay_out_of_source_packages() {
 #[test]
 fn local_agent_state_stays_out_of_public_commits() {
     let gitignore = std::fs::read_to_string(repo().join(".gitignore")).expect("read .gitignore");
-    for path in [".claude/", ".codex/"] {
-        assert!(
-            gitignore.lines().any(|line| line == path),
-            ".gitignore must exclude {path}"
-        );
+    assert!(gitignore.lines().any(|line| line == ".*/"));
+    assert!(gitignore.lines().any(|line| line == "!/.github/"));
+    let fixture = tempfile::tempdir().expect("temporary repository");
+    std::fs::write(fixture.path().join(".gitignore"), gitignore).expect("write ignore policy");
+    let init = Command::new("git").args(["init", "--quiet"])
+        .arg(fixture.path()).output().expect("initialize temporary repository");
+    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+    for (path, ignored) in [
+        (".working-state/marker", true),
+        (".cache/marker", true),
+        ("nested/.working-state/marker", true),
+        (".github/.working-state/marker", true),
+        (".github/workflows/check.yml", false),
+    ] {
+        let file = fixture.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).expect("create fixture directory");
+        std::fs::write(file, "fixture").expect("write fixture file");
+        let result = Command::new("git").arg("-C").arg(fixture.path())
+            .args(["-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "--", path])
+            .output().expect("check ignore behavior");
+        assert_eq!(result.status.code(), Some(if ignored { 0 } else { 1 }),
+                   "unexpected ignore behavior for {path}: {}", String::from_utf8_lossy(&result.stderr));
     }
 }
 
@@ -586,7 +603,7 @@ fn discovery_metadata_uses_real_index_terms() {
     for needle in [
         "llms.txt",
         "llms-full.txt",
-        "AGENTS.md",
+        "CONTRIBUTING.md",
         "server.json",
         "skills/",
     ] {
@@ -597,7 +614,7 @@ fn discovery_metadata_uses_real_index_terms() {
     for needle in [
         "llms.txt",
         "llms-full.txt",
-        "AGENTS.md",
+        "CONTRIBUTING.md",
         "server.json",
         "skills/",
         "reference/mcp.org",
