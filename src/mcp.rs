@@ -3611,6 +3611,7 @@ fn ledger_append_tool(arguments: &Value) -> Result<Value, String> {
         "size": report.head.size,
         "root": report.head.root,
         "signed": report.signed,
+        "replayed": report.replayed,
     }))
 }
 

@@ -473,3 +473,18 @@ The suite covers foreign syntax adapters, conditions, CycloneDX generation, prof
 ## License
 
 [MIT](LICENSE) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+
+## Ledger event retries
+
+A producer can retain one JSON event packet with a unique `build.event_id`
+and retry `ledger append` with that same packet. An identical retry
+acknowledges the recorded entry and signs the current head without adding
+another line. Different content under the same identifier is refused.
+The identifier belongs to one event, including its operation stage.
+
+A failed signed-head write can occur after the record is durable. Retaining
+the packet makes that failure recoverable without duplicating the event.
+An acknowledged retry accepts `--expect-head` only when it matches a prefix
+of the current history. A new append still requires the exact current head.
+Head signature trust is checked through `ledger verify`; the expected-head
+argument is an optimistic history check.

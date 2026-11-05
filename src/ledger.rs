@@ -142,6 +142,14 @@ pub fn record_id(record: &Map<String, Value>) -> Result<String> {
     Ok(sha256_hex(canonical(&Value::Object(body))?.as_bytes()))
 }
 
+fn event_id(record: &Map<String, Value>) -> Result<Option<&str>> {
+    match record.get("build").and_then(|build| build.get("event_id")) {
+        Some(Value::String(id)) if !id.trim().is_empty() => Ok(Some(id)),
+        Some(_) => bail!("ledger build.event_id must be a non-empty string"),
+        None => Ok(None),
+    }
+}
+
 /// Check a record's fields against the ledger format. `id` and `index` are
 /// not checked here.
 pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
@@ -190,6 +198,7 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     if action == "correction" && !record.contains_key("corrects") {
         bail!("a correction record names the record it corrects in corrects");
     }
+    event_id(record)?;
     Ok(())
 }
 
@@ -499,14 +508,17 @@ pub struct AppendReport {
     pub head: rfc9162::Head,
     /// The signed head, when a key was given.
     pub signed: Option<SignedHead>,
+    /// Whether this acknowledges an identical event that is in the log.
+    pub replayed: bool,
 }
 
 impl AppendReport {
     /// One line for stdout.
     #[must_use]
     pub fn summary(&self) -> String {
+        let status = if self.replayed { "already recorded" } else { "appended" };
         format!(
-            "appended record {} id {}; head size {} root {}",
+            "{status} record {} id {}; head size {} root {}",
             self.index, self.id, self.head.size, self.head.root
         )
     }
@@ -607,6 +619,12 @@ impl Drop for LedgerLock {
 }
 
 /// Append one record to the log under an exclusive lock on the log file.
+///
+/// A producer can persist a unique `build.event_id` for each event packet.
+/// An identical retry acknowledges the existing entry and writes a current
+/// signed head without appending another record. A reused identifier with
+/// different content is refused. An expected head must match the history;
+/// only an acknowledged retry can accept a matching prefix instead of the tip.
 pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     if request.head_out.is_some() != request.key.is_some() {
         return Err(crate::cli_parse::usage(
@@ -645,9 +663,43 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     file.read_to_string(&mut current)?;
     let mut entries =
         parse_log(&current).with_context(|| format!("ledger {}", request.log.display()))?;
+    let id = match record.as_object() {
+        Some(record) => event_id(record)?,
+        None => None,
+    };
+    let previous = if let Some(id) = id {
+        let mut matching = entries.iter().filter(|entry| {
+            entry.record.get("build").and_then(|build| build.get("event_id"))
+                .and_then(Value::as_str) == Some(id)
+        });
+        let previous = matching.next().cloned();
+        if matching.next().is_some() {
+            bail!("ledger contains multiple records for build.event_id {id:?}");
+        }
+        previous
+    } else {
+        None
+    };
+    let replayed = previous.is_some();
+    let now = now_utc();
+    let entry = if let Some(previous) = previous {
+        let original_ts = previous.record["ts"].as_str().unwrap_or(&now);
+        let retry = seal_record(&record, previous.index, original_ts)
+            .with_context(|| format!("record {}", request.record.display()))?;
+        if retry.line != previous.line {
+            bail!("build.event_id {:?} is already recorded with different content", id);
+        }
+        previous
+    } else {
+        seal_record(&record, entries.len(), &now)
+            .with_context(|| format!("record {}", request.record.display()))?
+    };
     if let Some(expected) = &expected {
-        let head = rfc9162::Head::over(&leaves(&entries));
-        if expected.size != head.size || expected.root != head.root {
+        let current_leaves = leaves(&entries);
+        let prefix_matches = expected.size <= current_leaves.len()
+            && expected.root == rfc9162::Head::over(&current_leaves[..expected.size]).root;
+        if expected.domain != DOMAIN || !prefix_matches || (!replayed && expected.size != entries.len()) {
+            let head = rfc9162::Head::over(&current_leaves);
             bail!(
                 "ledger is at size {} root {}, not the expected head size {} root {}",
                 head.size,
@@ -657,9 +709,6 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
             );
         }
     }
-    let now = now_utc();
-    let entry = seal_record(&record, entries.len(), &now)
-        .with_context(|| format!("record {}", request.record.display()))?;
     if let Some(first) = entries.first() {
         if first.record["stack"] != entry.record["stack"] {
             bail!(
@@ -670,10 +719,12 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
             );
         }
     }
-    file.write_all(format!("{}\n", entry.line).as_bytes())
-        .with_context(|| format!("append to ledger {}", request.log.display()))?;
-    file.sync_all()?;
-    entries.push(entry.clone());
+    if !replayed {
+        file.write_all(format!("{}\n", entry.line).as_bytes())
+            .with_context(|| format!("append to ledger {}", request.log.display()))?;
+        file.sync_all()?;
+        entries.push(entry.clone());
+    }
     let signed = key.map(|key| SignedHead::sign(&entries, &key, &now));
     if let (Some(signed), Some(out)) = (&signed, &request.head_out) {
         signed.write(out)?;
@@ -684,6 +735,7 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         line: entry.line,
         head: rfc9162::Head::over(&leaves(&entries)),
         signed,
+        replayed,
     })
 }
 
