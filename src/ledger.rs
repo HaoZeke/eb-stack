@@ -185,7 +185,7 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     }
     for field in LINKS.iter().copied().chain(["stage", "sig"]) {
         if let Some(value) = record.get(field) {
-            if !value.as_str().is_some_and(|text| !text.is_empty()) {
+            if value.as_str().is_none_or(|text| text.is_empty()) {
                 bail!("ledger field {field} must be a non-empty string");
             }
         }
