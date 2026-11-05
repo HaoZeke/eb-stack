@@ -131,7 +131,7 @@ pub struct ResolvedEasyconfig {
     /// easyblock is called.
     #[serde(default)]
     pub has_components: bool,
-    /// Every parsed component artifact carries a nonempty checksum entry.
+    /// Every parsed component source, patch, and postinstall patch carries a checksum.
     #[serde(default)]
     pub component_checksums_complete: bool,
 }
@@ -3960,10 +3960,20 @@ fn component_checksums_complete(
                 .ok()
                 .map(<[Value]>::len)
         };
-        let (Some(sources), Some(patches)) = (count("sources"), count("patches")) else {
+        // EasyBuild's check_checksums_for counts sources, then patches, then
+        // postinstallpatches. A component dict may spell that last list
+        // post_install_patches, and only when postinstallpatches is absent.
+        let postinstall_key = if fields.contains_key("postinstallpatches") {
+            "postinstallpatches"
+        } else {
+            "post_install_patches"
+        };
+        let (Some(sources), Some(patches), Some(postinstall)) =
+            (count("sources"), count("patches"), count(postinstall_key))
+        else {
             return false;
         };
-        let expected = sources + patches;
+        let expected = sources + patches + postinstall;
         let Ok(checksums) = value_list_as_slice(fields.get("checksums")) else {
             return false;
         };
