@@ -512,6 +512,72 @@ impl AppendReport {
     }
 }
 
+/// A local gate keeps contenders from opening the process-scoped record-lock
+/// inode. Closing any descriptor for that inode releases the process's lock.
+struct LedgerLock {
+    gate: std::fs::File,
+    record: Option<std::fs::File>,
+    owner: u32,
+}
+
+impl LedgerLock {
+    fn acquire(gate: &std::fs::File, log: &Path) -> Result<Self> {
+        let gate = gate.try_clone().context("duplicate ledger lock descriptor")?;
+        FileExt::lock_exclusive(&gate)
+            .with_context(|| format!("lock ledger {}", log.display()))?;
+        let mut guard = Self {
+            gate,
+            record: None,
+            owner: std::process::id(),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            let canonical = log.canonicalize().context("resolve ledger lock path")?;
+            let mut name = canonical.into_os_string();
+            name.push(".posix-lock");
+            let record = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(PathBuf::from(name))
+                .with_context(|| format!("open record lock for ledger {}", log.display()))?;
+            // All-zero offsets cover the whole file; flock's scalar fields
+            // have valid zero representations on the supported Unix targets.
+            let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+            lock.l_type = libc::F_WRLCK as _;
+            lock.l_whence = libc::SEEK_SET as _;
+            loop {
+                // The descriptor stays open in this guard and lock points to
+                // a fully initialized flock for the duration of fcntl.
+                let result = unsafe { libc::fcntl(record.as_raw_fd(), libc::F_SETLKW, &lock) };
+                if result != -1 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error).with_context(|| format!("record-lock ledger {}", log.display()));
+                }
+            }
+            guard.record = Some(record);
+        }
+        Ok(guard)
+    }
+}
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        // Closing the sidecar releases the record lock before another local
+        // contender can open it. A forked child must not unlock its parent.
+        drop(self.record.take());
+        if self.owner == std::process::id() {
+            let _ = FileExt::unlock(&self.gate);
+        }
+    }
+}
+
 /// Append one record to the log under an exclusive lock on the log file.
 pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     if request.head_out.is_some() != request.key.is_some() {
@@ -541,8 +607,7 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         .create(true)
         .open(&request.log)
         .with_context(|| format!("open ledger {}", request.log.display()))?;
-    file.lock_exclusive()
-        .with_context(|| format!("lock ledger {}", request.log.display()))?;
+    let _lock = LedgerLock::acquire(&file, &request.log)?;
     let mut current = String::new();
     file.seek(SeekFrom::Start(0))?;
     file.read_to_string(&mut current)?;
@@ -581,7 +646,6 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     if let (Some(signed), Some(out)) = (&signed, &request.head_out) {
         signed.write(out)?;
     }
-    FileExt::unlock(&file)?;
     Ok(AppendReport {
         index: entry.index,
         id: entry.id,
