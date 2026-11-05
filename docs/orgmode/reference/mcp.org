@@ -20,7 +20,7 @@ and the client then runs that binary by name.
 
 * Build the binary
 
-Rust 1.88 or newer builds this tree. The binary that the snippets below
+Rust 1.90 or newer builds this tree. The binary that the snippets below
 call is ~eb-stack~.
 
 #+begin_src bash

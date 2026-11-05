@@ -370,7 +370,7 @@ def render_index(pages: list[dict[str, str]]) -> str:
         + "Raku, and EasyBuild recipes into one package plan, a planned "
         + "CycloneDX SBOM, Resolvo locks, and conventional EasyBuild recipes.",
         "",
-        "The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or "
+        "The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or "
         "newer builds it from source. Each link below is the markdown form "
         "of a page on https://eb-stack.rgoswami.me/. `llms-full.txt` repeats "
         "those pages in one file. Contribution guidelines are in CONTRIBUTING.md. "

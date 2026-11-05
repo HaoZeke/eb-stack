@@ -43,16 +43,16 @@ jobs:
         run: cargo test --locked --test ledger --test ledger_posix_lock --test ledger_lock_aliases --test ledger_retry --test ledger_durability
 
   msrv:
-    name: Rust 1.88 minimum
+    name: Rust 1.90 minimum
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.90.0
       - uses: Swatinem/rust-cache@v2
-      # `time` 0.3.55 (cyclonedx-bom) declares rust-version 1.88.0. Cargo
-      # 1.83 cannot parse the edition2024 manifests those crates ship.
+      # `ordered-float` 5.5.1 declares rust-version 1.90. `uuid` 1.29.0
+      # declares 1.89.0. Cargo 1.89 rejects the lockfile on ordered-float.
       - name: Locked all-targets build
         run: cargo build --locked --all-targets
 

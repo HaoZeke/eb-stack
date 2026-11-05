@@ -161,12 +161,12 @@ fn local_agent_state_stays_out_of_public_commits() {
 #[test]
 fn ci_enforces_the_declared_msrv_and_quality_gates() {
     let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
-    assert!(cargo.contains("rust-version = \"1.88\""));
+    assert!(cargo.contains("rust-version = \"1.90\""));
 
     let ci = std::fs::read_to_string(repo().join(".github/workflows/ci_test.yml"))
         .expect("read test workflow");
     for command in [
-        "toolchain: 1.88.0",
+        "toolchain: 1.90.0",
         "cargo build --locked --all-targets",
         "cargo fmt --all --check",
         "cargo clippy --locked --all-targets -- -D warnings",

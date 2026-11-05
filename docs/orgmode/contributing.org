@@ -7,7 +7,7 @@ repo root; keep them aligned when you change either.
 
 * Development environment
 
-Rust 1.88 is the minimum supported toolchain; current stable runs the main test
+Rust 1.90 is the minimum supported toolchain; current stable runs the main test
 and lint gates. Documentation uses [[https://pixi.sh][pixi]]:
 
 #+begin_src bash

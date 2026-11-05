@@ -32,7 +32,7 @@ This file is the manual in one document. The short index is llms.txt.
 
 # Install
 
-  Rust 1.88 or newer. `rustc` 1.83 stops while reading the crate index:
+  Rust 1.90 or newer. `rustc` 1.83 stops while reading the crate index:
   the Cargo feature `edition2024` is not stabilized. With rustup:
 
 ```bash
@@ -8376,7 +8376,7 @@ and the client then runs that binary by name.
 
 # Build the binary
 
-Rust 1.88 or newer builds this tree. The binary that the snippets below
+Rust 1.90 or newer builds this tree. The binary that the snippets below
 call is `eb-stack`.
 
 ```bash
@@ -12515,7 +12515,7 @@ repo root; keep them aligned when you change either.
 
 # Development environment
 
-Rust 1.88 is the minimum supported toolchain; current stable runs the main test
+Rust 1.90 is the minimum supported toolchain; current stable runs the main test
 and lint gates. Documentation uses [pixi](https://pixi.sh):
 
 ```bash

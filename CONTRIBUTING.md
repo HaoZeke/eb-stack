@@ -7,7 +7,7 @@ win.
 
 ## Development environment
 
-Rust 1.88 is the minimum supported toolchain; current stable is used for the
+Rust 1.90 is the minimum supported toolchain; current stable is used for the
 main test and lint gates. [pixi](https://pixi.sh) provides docs and optional
 dev tasks:
 
