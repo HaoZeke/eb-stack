@@ -190,7 +190,7 @@ fn safe_relative(path: &str) -> Result<PathBuf, String> {
 }
 
 /// Extract the `.eb` files under `easybuild/easyconfigs/` of a GitHub
-/// archive (`<repo>-<sha>/` first) into `dest`, at the same relative paths.
+/// archive (``<repo>-<sha>/`` first) into `dest`, at the same relative paths.
 /// Returns how many were written.
 pub fn extract_easyconfigs(archive: &[u8], dest: &Path) -> Result<usize, String> {
     use sha2::{Digest, Sha256};
