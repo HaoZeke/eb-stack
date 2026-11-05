@@ -458,7 +458,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_shard",
-            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line that cannot be resolved is a tool error and nothing is written.",
+            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr is resolved against that tree first, then easyconfigs: commit_tree (COMMIT=DIR), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
             &[
                 ("build_list", "string"),
                 ("easyconfigs", "array_min1"),
@@ -466,6 +466,9 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
             &[
+                ("commit_tree", "array"),
+                ("pr_tree", "array"),
+                ("commit_cache", "string"),
                 ("installed", "array"),
                 ("installed_modules_dir", "array"),
                 ("weights", "string"),
@@ -720,6 +723,39 @@ fn tool_catalog() -> Vec<Value> {
             &[("scores", "string")],
             &[("ratchet", "string"), ("json", "boolean")],
         ),
+        tool_with_optional(
+            "eb_ledger_append",
+            "Append one record to a per-stack ledger as a canonical JSON line and, with key and head_out, sign the new head. Same writer as `ledger append`.",
+            &[("log", "string"), ("record", "string")],
+            &[
+                ("expect_head", "string"),
+                ("key", "string"),
+                ("head_out", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_ledger_head",
+            "Sign a ledger's current head with an Ed25519 key kept outside the log's directory. Same as `ledger head`.",
+            &[("log", "string"), ("key", "string"), ("out", "string")],
+            &[("ts", "string")],
+        ),
+        tool_with_optional(
+            "eb_ledger_show",
+            "List ledger records newest first, optionally for one module or software name. Same table as `ledger show`.",
+            &[("log", "string")],
+            &[("package", "string"), ("json", "boolean")],
+        ),
+        tool_with_optional(
+            "eb_ledger_verify",
+            "Check that a ledger record is in a signed head (record and head), or that one signed head extends another (from and to). Same checks as `ledger verify`.",
+            &[("log", "string"), ("public_key", "string")],
+            &[
+                ("record", "integer"),
+                ("head", "string"),
+                ("from", "string"),
+                ("to", "string"),
+            ],
+        ),
     ];
     if let Some(lint) = tools
         .iter_mut()
@@ -860,6 +896,10 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_component_reach" => component_reach_tool(arguments),
         "eb_easyblock_reach" => easyblock_reach_tool(arguments),
         "eb_repro_summary" => repro_summary_tool(arguments),
+        "eb_ledger_append" => ledger_append_tool(arguments),
+        "eb_ledger_head" => ledger_head_tool(arguments),
+        "eb_ledger_show" => ledger_show_tool(arguments),
+        "eb_ledger_verify" => ledger_verify_tool(arguments),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -1284,7 +1324,7 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         && maintainer.ok_for_upstream()
         && easyblock_error.is_none()
         && !source_failed
-        && !(strict && !skipped.is_empty())
+        && (!strict || skipped.is_empty())
         && duplicate_error.is_none()
         && (metadata_only || (dep_ok && toolchain_verified));
     let skipped_text: Vec<String> = skipped.iter().map(ToString::to_string).collect();
@@ -3160,6 +3200,9 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
     let request = crate::site_commands::StackShardRequest {
         build_list: required_path(arguments, "build_list")?,
         easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        pr_trees: string_array(arguments, "pr_tree")?,
+        commit_cache: optional_path(arguments, "commit_cache"),
         installed: path_array(arguments, "installed")?,
         installed_modules_dirs: path_array(arguments, "installed_modules_dir")?,
         shards: usize::try_from(shards).map_err(|error| format!("shards: {error}"))?,
@@ -3175,6 +3218,8 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         "shards": run.shards,
         "prelude": run.prelude,
         "lines": run.lines,
+        "opaque": run.opaque,
+        "warnings": run.warnings,
     }))
 }
 
@@ -3547,6 +3592,89 @@ fn repro_summary_tool(arguments: &Value) -> Result<Value, String> {
     }
     Ok(json!({
         "text": report.stdout(),
+    }))
+}
+
+fn ledger_append_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::ledger::append(&crate::ledger::AppendRequest {
+        log: required_path(arguments, "log")?,
+        record: required_path(arguments, "record")?,
+        expect_head: optional_path(arguments, "expect_head"),
+        key: optional_path(arguments, "key"),
+        head_out: optional_path(arguments, "head_out"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.summary(),
+        "index": report.index,
+        "id": report.id,
+        "size": report.head.size,
+        "root": report.head.root,
+        "signed": report.signed,
+        "replayed": report.replayed,
+    }))
+}
+
+fn ledger_head_tool(arguments: &Value) -> Result<Value, String> {
+    let out = required_path(arguments, "out")?;
+    let head = crate::ledger::sign_head(&crate::ledger::HeadRequest {
+        log: required_path(arguments, "log")?,
+        key: required_path(arguments, "key")?,
+        out: out.clone(),
+        ts: optional_string(arguments, "ts"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": format!(
+            "signed head size {} root {} at {} to {}",
+            head.size,
+            head.root,
+            head.ts,
+            out.display()
+        ),
+        "head": head,
+    }))
+}
+
+fn ledger_show_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::ledger::show(&crate::ledger::ShowRequest {
+        log: required_path(arguments, "log")?,
+        package: optional_string(arguments, "package"),
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "records": report.records,
+    }))
+}
+
+fn ledger_verify_tool(arguments: &Value) -> Result<Value, String> {
+    let record = optional_u64(arguments, "record")?
+        .map(|value| usize::try_from(value).map_err(|_| "argument record is too large".to_string()))
+        .transpose()?;
+    let mode = match (
+        record,
+        optional_path(arguments, "head"),
+        optional_path(arguments, "from"),
+        optional_path(arguments, "to"),
+    ) {
+        (Some(record), Some(head), None, None) => {
+            crate::ledger::VerifyMode::Inclusion { record, head }
+        }
+        (None, None, Some(from), Some(to)) => crate::ledger::VerifyMode::Consistency { from, to },
+        _ => return Err("pass record and head, or from and to".to_string()),
+    };
+    let report = crate::ledger::verify(&crate::ledger::VerifyRequest {
+        log: required_path(arguments, "log")?,
+        public_key: required_path(arguments, "public_key")?,
+        mode,
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "kind": report.kind,
+        "proof": report.proof,
     }))
 }
 

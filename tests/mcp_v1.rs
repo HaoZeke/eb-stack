@@ -169,10 +169,14 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_component_reach",
         "eb_easyblock_reach",
         "eb_repro_summary",
+        "eb_ledger_append",
+        "eb_ledger_head",
+        "eb_ledger_show",
+        "eb_ledger_verify",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 51, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 55, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2565,6 +2569,10 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_stack_bot_classify", "stack bot-classify"),
         ("eb_package_latest", "package latest"),
         ("eb_repro_summary", "repro summary"),
+        ("eb_ledger_append", "ledger append"),
+        ("eb_ledger_head", "ledger head"),
+        ("eb_ledger_show", "ledger show"),
+        ("eb_ledger_verify", "ledger verify"),
         ("eb_component_reach", "component-reach"),
         ("eb_target_list", "target list"),
         ("eb_target_doctor", "target doctor"),
@@ -3836,6 +3844,10 @@ fn every_cli_subcommand_has_an_mcp_tool() {
             &["campaign", "finding", "resolve"],
         ),
         ("eb_repro_summary", &["repro", "summary"]),
+        ("eb_ledger_append", &["ledger", "append"]),
+        ("eb_ledger_head", &["ledger", "head"]),
+        ("eb_ledger_show", &["ledger", "show"]),
+        ("eb_ledger_verify", &["ledger", "verify"]),
         ("eb_pr_overlap", &["pr-overlap"]),
         ("eb_rebuild_set", &["rebuild-set"]),
         ("eb_component_reach", &["component-reach"]),

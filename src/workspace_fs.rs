@@ -893,6 +893,13 @@ pub fn resolve_inside(root: &Path, requested: &Path) -> Result<(PathBuf, PathBuf
     if requested.as_os_str().is_empty() {
         return Err("path is empty".into());
     }
+    let supplied_root = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("current directory: {error}"))?
+            .join(root)
+    };
     let root = root
         .canonicalize()
         .map_err(|error| format!("workspace root {}: {error}", root.display()))?;
@@ -903,7 +910,10 @@ pub fn resolve_inside(root: &Path, requested: &Path) -> Result<(PathBuf, PathBuf
         ));
     }
     let joined = if requested.is_absolute() {
-        requested.to_path_buf()
+        match requested.strip_prefix(&supplied_root) {
+            Ok(relative) => root.join(relative),
+            Err(_) => requested.to_path_buf(),
+        }
     } else {
         root.join(requested)
     };
@@ -1122,6 +1132,34 @@ mod tests {
                 .content,
             "ok\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_paths_resolve_through_a_symlinked_workspace_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let real = temp.path().join("real");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&real).expect("workspace");
+        std::os::unix::fs::symlink(&real, &alias).expect("root symlink");
+        let requested = alias.join("inside.eb");
+        write_workspace(&alias, &requested, "ok\n").expect("write through root alias");
+        assert_eq!(
+            read_workspace(&alias, &requested)
+                .expect("read alias")
+                .content,
+            "ok\n"
+        );
+        let canonical = real.canonicalize().expect("canonical root");
+        assert_eq!(
+            resolve_inside(&alias, &requested).expect("resolve alias"),
+            (canonical.clone(), canonical.join("inside.eb"))
+        );
+        let outside = alias.join("..").join("outside.eb");
+        assert!(resolve_inside(&alias, &outside).is_err());
+        let leak = alias.join("leak");
+        std::os::unix::fs::symlink(temp.path(), &leak).expect("escaping symlink");
+        assert!(resolve_inside(&alias, &leak.join("outside.eb")).is_err());
     }
 
     #[cfg(unix)]

@@ -91,6 +91,14 @@ enum Command {
         #[command(subcommand)]
         command: ReproCommand,
     },
+    /// Append to, list, and verify a per-stack software ledger.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl --key ~/keys/ledger.pem --head-out head.json\n  eb-stack ledger show --log ledger/2026.06.jsonl --package PETSc\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --record 3 --head head.json"
+    )]
+    Ledger {
+        #[command(subcommand)]
+        command: LedgerCommand,
+    },
     /// Serve each CLI workflow over stdio, including pr-overlap, rebuild-set,
     /// component-reach, and easyblock-reach.
     #[command(
@@ -449,6 +457,99 @@ enum ReproCommand {
         /// Print the collected scores as JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum LedgerCommand {
+    /// Append one record to the log and sign the new head.
+    ///
+    /// The record is a JSON object with the ledger fields. It is written as
+    /// one canonical line: keys sorted, no whitespace, integers only, with
+    /// `index` (its leaf number) and `id` (SHA-256 of the record without
+    /// `id` and `sig`) filled in. `ts` defaults to now, in UTC. The log file
+    /// is locked for the append.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl --expect-head head.json --key ~/keys/ledger.pem --head-out head.json"
+    )]
+    Append {
+        /// The record, a JSON object file.
+        record: PathBuf,
+        /// The JSON Lines log. Created when absent.
+        #[arg(long)]
+        log: PathBuf,
+        /// Refuse the append unless the log is still at this head's size and root.
+        #[arg(long)]
+        expect_head: Option<PathBuf>,
+        /// Ed25519 PKCS#8 PEM key that signs the new head. Refused inside the log's directory.
+        #[arg(long, requires = "head_out")]
+        key: Option<PathBuf>,
+        /// File for the signed head after the append.
+        #[arg(long, requires = "key")]
+        head_out: Option<PathBuf>,
+    },
+    /// Sign the log's current head.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger head --log ledger/2026.06.jsonl --key ~/keys/ledger.pem --out anchor.json"
+    )]
+    Head {
+        /// The JSON Lines log.
+        #[arg(long)]
+        log: PathBuf,
+        /// Ed25519 PKCS#8 PEM key. Refused inside the log's directory.
+        #[arg(long)]
+        key: PathBuf,
+        /// File for the signed head.
+        #[arg(long)]
+        out: PathBuf,
+        /// Signing time, RFC 3339 in UTC. Defaults to now.
+        #[arg(long)]
+        ts: Option<String>,
+    },
+    /// List records, newest first.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger show --log ledger/2026.06.jsonl\n  eb-stack ledger show --log ledger/2026.06.jsonl --package PETSc/3.25.0-foss-2026.1 --json"
+    )]
+    Show {
+        /// The JSON Lines log.
+        #[arg(long)]
+        log: PathBuf,
+        /// A module name (`PETSc/3.25.0-foss-2026.1`) or a software name (`PETSc`).
+        #[arg(long)]
+        package: Option<String>,
+        /// Print the records as a JSON array instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check an inclusion or a consistency proof against signed heads.
+    ///
+    /// `--record N --head HEAD` checks that record N is in HEAD.
+    /// `--from HEAD1 --to HEAD2` checks that HEAD2 extends HEAD1. Every head
+    /// must be signed by `--public-key`. Exit status 1 when a proof or a
+    /// signature does not check.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --record 3 --head head.json\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --from anchor-1102.json --to anchor-1103.json",
+        group(clap::ArgGroup::new("proof").required(true).args(["record", "from"]))
+    )]
+    Verify {
+        /// The JSON Lines log.
+        #[arg(long)]
+        log: PathBuf,
+        /// Ed25519 public key heads are signed by: PEM, or 64 hex characters.
+        #[arg(long)]
+        public_key: PathBuf,
+        /// Leaf number of the record to prove.
+        #[arg(long, requires = "head", conflicts_with_all = ["from", "to"])]
+        record: Option<usize>,
+        /// Signed head the record must be in.
+        #[arg(long, requires = "record")]
+        head: Option<PathBuf>,
+        /// The earlier signed head.
+        #[arg(long, requires = "to")]
+        from: Option<PathBuf>,
+        /// The later signed head, which must extend --from.
+        #[arg(long, requires = "from")]
+        to: Option<PathBuf>,
     },
 }
 
@@ -1017,6 +1118,23 @@ struct ShardArgs {
     /// Robot-path easyconfig tree. Repeatable; later trees take precedence.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
+    /// Easyconfigs of one `--from-commit` pin, as `COMMIT=DIR`. A line with
+    /// that pin is resolved against DIR first, then the robot path.
+    /// Repeatable; an abbreviated commit matches.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Easyconfigs one `--from-pr` pull request changes, at its head, as
+    /// `N=DIR`. Repeatable.
+    #[arg(long = "pr-tree")]
+    pr_trees: Vec<String>,
+    /// Directory holding the trees of `--from-commit` and `--from-pr` lines
+    /// that no `--commit-tree` or `--pr-tree` names. A missing commit is
+    /// downloaded from codeload.github.com (easybuilders/easybuild-easyconfigs,
+    /// its `.eb` files only); a pull request's changed easyconfigs from
+    /// api.github.com at its head. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+    /// api.github.com when set.
+    #[arg(long)]
+    commit_cache: Option<PathBuf>,
     /// Installed modules, one `Name/VersionFull` per line. Repeatable.
     #[arg(long)]
     installed: Vec<PathBuf>,
@@ -1316,15 +1434,21 @@ enum StackCommand {
     /// Split one Jenkins build list into shards that can build at once.
     ///
     /// Each line's closure is computed over the robot path minus the
-    /// installed modules, as `pr-overlap` computes a root's set. Lines whose
-    /// own easyconfig another line needs share a shard; any other module the
+    /// installed modules, as `pr-overlap` computes a root's set. A line with
+    /// `--from-commit` or `--from-pr` is resolved against that tree first,
+    /// then the robot path, as EasyBuild resolves it; the trees come from
+    /// `--commit-tree`, `--pr-tree`, or `--commit-cache`. Lines whose own
+    /// easyconfig another line needs share a shard; any other module the
     /// closures of two or more shards need goes to `prelude.list`, which
     /// builds first. Groups are packed into at most `--shards` shards by
     /// weight. Writes `prelude.list`, `shard-NN.list` (input lines verbatim,
-    /// dependencies first), and `plan.json`. A line whose easyconfig or
-    /// dependency cannot be resolved fails the run and nothing is written.
+    /// dependencies first), and `plan.json`. A fetched line that still cannot
+    /// be resolved, or a robot-path easyconfig that does not parse, is
+    /// planned on its own without a closure and reported on stderr. Any other
+    /// line whose easyconfig or dependency cannot be resolved fails the run
+    /// and nothing is written.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards"
+        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
@@ -1919,6 +2043,7 @@ fn dispatch() -> Result<()> {
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
+        Command::Ledger { command } => run_ledger(command),
         Command::Mcp { workspace } => {
             if let Some(workspace) = workspace {
                 std::env::set_var("EB_STACK_WORKSPACE", &workspace);
@@ -1933,6 +2058,74 @@ fn dispatch() -> Result<()> {
         Command::RebuildSet(args) => run_rebuild_set(*args),
         Command::ComponentReach(args) => run_component_reach(*args),
     }
+}
+
+fn run_ledger(command: LedgerCommand) -> Result<()> {
+    use eb_stack::ledger;
+    match command {
+        LedgerCommand::Append {
+            record,
+            log,
+            expect_head,
+            key,
+            head_out,
+        } => {
+            let report = ledger::append(&ledger::AppendRequest {
+                log,
+                record,
+                expect_head,
+                key,
+                head_out,
+            })?;
+            println!("{}", report.summary());
+        }
+        LedgerCommand::Head { log, key, out, ts } => {
+            let head = ledger::sign_head(&ledger::HeadRequest {
+                log,
+                key,
+                out: out.clone(),
+                ts,
+            })?;
+            println!(
+                "signed head size {} root {} at {} to {}",
+                head.size,
+                head.root,
+                head.ts,
+                out.display()
+            );
+        }
+        LedgerCommand::Show { log, package, json } => {
+            let report = ledger::show(&ledger::ShowRequest { log, package, json })?;
+            print!("{}", report.stdout);
+        }
+        LedgerCommand::Verify {
+            log,
+            public_key,
+            record,
+            head,
+            from,
+            to,
+        } => {
+            let mode = match (record, head, from, to) {
+                (Some(record), Some(head), None, None) => {
+                    ledger::VerifyMode::Inclusion { record, head }
+                }
+                (None, None, Some(from), Some(to)) => ledger::VerifyMode::Consistency { from, to },
+                _ => {
+                    return Err(usage(
+                        "pass --record N --head HEAD, or --from HEAD1 --to HEAD2",
+                    ))
+                }
+            };
+            let report = ledger::verify(&ledger::VerifyRequest {
+                log,
+                public_key,
+                mode,
+            })?;
+            print!("{}", report.stdout);
+        }
+    }
+    Ok(())
 }
 
 #[derive(clap::Args, Debug)]
@@ -3111,6 +3304,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let ShardArgs {
                 build_list,
                 easyconfigs,
+                commit_trees,
+                pr_trees,
+                commit_cache,
                 installed,
                 installed_modules_dirs,
                 shards,
@@ -3124,6 +3320,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 &eb_stack::site_commands::StackShardRequest {
                     build_list,
                     easyconfigs,
+                    commit_trees,
+                    pr_trees,
+                    commit_cache,
                     installed,
                     installed_modules_dirs,
                     shards,
@@ -3134,6 +3333,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     out_dir,
                 },
             )?;
+            for warning in &run.warnings {
+                eprintln!("warning: {warning}");
+            }
             println!("{}", run.summary());
             Ok(())
         }

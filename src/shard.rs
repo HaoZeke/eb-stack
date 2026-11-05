@@ -39,6 +39,85 @@ pub struct ShardLine {
     /// Whether EasyBuild fetches the line's easyconfig itself
     /// (`--from-pr` or `--from-commit`), so it need not be on the robot path.
     pub fetched: bool,
+    /// Where EasyBuild fetches the easyconfigs from, when `fetched`.
+    pub source: Option<LineSource>,
+    /// The options that say where the line's easyconfigs and easyblocks come
+    /// from (`--from-commit`, `--from-pr`, `--include-easyblocks-from-commit`,
+    /// `--include-easyblocks-from-pr`), as written. A prelude line for a
+    /// module this line's tree provides carries them, so it builds the same
+    /// easyconfig with the same easyblock.
+    pub source_options: Vec<String>,
+}
+
+impl ShardLine {
+    /// A dependency-filter override that the list-wide closure cannot model.
+    /// EasyBuild accepts unambiguous prefixes of its long option names.
+    pub fn filter_deps_option(&self) -> Option<&str> {
+        const OPTION: &str = "--filter-deps";
+        const SHORTEST_PREFIX: usize = "--filter-d".len();
+        self.text
+            .split_whitespace()
+            .skip(1)
+            .map(|word| word.split('=').next().unwrap_or(word))
+            .find(|key| key.len() >= SHORTEST_PREFIX && OPTION.starts_with(key))
+    }
+}
+
+/// The easyconfig tree a fetched line is resolved against.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LineSource {
+    /// `--from-commit=SHA`: the easyconfigs of that commit.
+    Commit(String),
+    /// `--from-pr=N[,M...]`: the easyconfig files those pull requests change,
+    /// at their heads.
+    Prs(Vec<u64>),
+    /// The option is there but its value cannot be used; the text says why.
+    Invalid(String),
+}
+
+impl LineSource {
+    /// The option as EasyBuild takes it, `--from-commit=SHA` or
+    /// `--from-pr=N,M`.
+    pub fn option(&self) -> String {
+        match self {
+            Self::Commit(sha) => format!("--from-commit={sha}"),
+            Self::Prs(prs) => format!(
+                "--from-pr={}",
+                prs.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
+            ),
+            Self::Invalid(why) => why.clone(),
+        }
+    }
+}
+
+/// A commit as `--from-commit` takes it: 7 to 40 hexadecimal digits.
+pub fn is_commit_sha(value: &str) -> bool {
+    (7..=40).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn line_source(commit: Option<&str>, prs: Option<&str>) -> Option<LineSource> {
+    match (commit, prs) {
+        (None, None) => None,
+        (Some(_), Some(_)) => Some(LineSource::Invalid(
+            "both --from-commit and --from-pr are given".into(),
+        )),
+        (Some(sha), None) if is_commit_sha(sha) => Some(LineSource::Commit(sha.to_string())),
+        (Some(sha), None) => Some(LineSource::Invalid(format!(
+            "--from-commit wants a commit sha, got '{sha}'"
+        ))),
+        (None, Some(list)) => {
+            let parsed: Option<Vec<u64>> = list
+                .split(',')
+                .map(|n| n.trim().parse::<u64>().ok().filter(|n| *n > 0))
+                .collect();
+            match parsed {
+                Some(prs) if !prs.is_empty() => Some(LineSource::Prs(prs)),
+                _ => Some(LineSource::Invalid(format!(
+                    "--from-pr wants pull request numbers, got '{list}'"
+                ))),
+            }
+        }
+    }
 }
 
 /// Parse a build list. Blank lines and `#` comments are skipped; every other
@@ -55,17 +134,57 @@ pub fn parse_lines(text: &str) -> Vec<ShardLine> {
             }
             let mut words = trimmed.split_whitespace();
             let file = words.next()?.to_string();
-            let keys: Vec<&str> = words.map(|w| w.split('=').next().unwrap_or(w)).collect();
+            let words: Vec<&str> = words.collect();
+            let keys: Vec<&str> = words
+                .iter()
+                .map(|w| w.split('=').next().unwrap_or(w))
+                .collect();
             let forced = keys.iter().any(|k| *k == "--rebuild" || *k == "--force");
             let fetched = keys
                 .iter()
                 .any(|k| *k == "--from-pr" || *k == "--from-commit");
+            // An option's value is after `=`, or the next word when the
+            // option is written on its own, as EasyBuild's parser takes both.
+            let mut commit = None;
+            let mut prs = None;
+            let mut source_options = Vec::new();
+            let mut j = 0;
+            while j < words.len() {
+                let key = keys[j];
+                let sourced = matches!(
+                    key,
+                    "--from-commit"
+                        | "--from-pr"
+                        | "--include-easyblocks-from-commit"
+                        | "--include-easyblocks-from-pr"
+                );
+                if !sourced {
+                    j += 1;
+                    continue;
+                }
+                let (value, used) = match words[j].split_once('=') {
+                    Some((_, value)) => (value, 1),
+                    None => match words.get(j + 1).filter(|w| !w.starts_with("--")) {
+                        Some(next) => (*next, 2),
+                        None => ("", 1),
+                    },
+                };
+                source_options.push(format!("{key}={value}"));
+                match key {
+                    "--from-commit" => commit = Some(value),
+                    "--from-pr" => prs = Some(value),
+                    _ => {}
+                }
+                j += used;
+            }
             Some(ShardLine {
                 number: i + 1,
                 text: line.to_string(),
                 file,
                 forced,
                 fetched,
+                source: line_source(commit, prs),
+                source_options,
             })
         })
         .collect()
@@ -272,6 +391,34 @@ pub fn plan(
     }
 }
 
+/// Merge dependency orders into one order every input agrees with: a module
+/// comes after each module that precedes it in any input. A module goes next
+/// when it heads the first input that still has modules and no input has it
+/// further back. Orders that disagree, which closures over one robot path do
+/// not, fall back to the first input's head.
+pub fn merge_orders(orders: &[Vec<String>]) -> Vec<String> {
+    let mut rest: Vec<Vec<&str>> = orders
+        .iter()
+        .map(|o| o.iter().map(String::as_str).collect())
+        .collect();
+    let mut placed: BTreeSet<&str> = BTreeSet::new();
+    let mut out = Vec::new();
+    loop {
+        for order in &mut rest {
+            order.retain(|m| !placed.contains(m));
+        }
+        let heads: Vec<&str> = rest.iter().filter_map(|o| o.first().copied()).collect();
+        let Some(&first) = heads.first() else {
+            break;
+        };
+        let free = |m: &str| rest.iter().all(|o| !o.iter().skip(1).any(|x| *x == m));
+        let pick = heads.iter().copied().find(|m| free(m)).unwrap_or(first);
+        placed.insert(pick);
+        out.push(pick.to_string());
+    }
+    out
+}
+
 /// Read a weights file: `module`, a tab, then `seconds` per line. `#` comments
 /// and blank lines are skipped. A fractional value rounds up to whole seconds.
 /// A later line for the same module replaces an earlier one.
@@ -344,6 +491,49 @@ mod tests {
             !lines[2].fetched,
             "an easyblock from a PR does not fetch the easyconfig"
         );
+    }
+
+    #[test]
+    fn a_line_names_the_tree_easybuild_fetches() {
+        let lines = parse_lines(
+            "A-1.eb --from-commit=0123abcd --include-easyblocks-from-commit=4567ef01 --include-systems=x\n\
+             B-2.eb --from-pr 27108,26954\n\
+             C-3.eb --from-commit=main\n\
+             D-4.eb --from-pr=1 --from-commit=0123abcd\n\
+             E-5.eb --include-easyblocks-from-pr=4241\n",
+        );
+        assert_eq!(lines[0].source, Some(LineSource::Commit("0123abcd".into())));
+        assert_eq!(
+            lines[0].source_options,
+            [
+                "--from-commit=0123abcd",
+                "--include-easyblocks-from-commit=4567ef01"
+            ]
+        );
+        assert_eq!(lines[1].source, Some(LineSource::Prs(vec![27108, 26954])));
+        assert_eq!(lines[1].source_options, ["--from-pr=27108,26954"]);
+        assert_eq!(
+            lines[1].source.as_ref().unwrap().option(),
+            "--from-pr=27108,26954"
+        );
+        assert!(matches!(lines[2].source, Some(LineSource::Invalid(_))));
+        assert!(matches!(lines[3].source, Some(LineSource::Invalid(_))));
+        assert_eq!(lines[4].source, None);
+        assert_eq!(
+            lines[4].source_options,
+            ["--include-easyblocks-from-pr=4241"]
+        );
+    }
+
+    #[test]
+    fn merged_orders_keep_every_input_order() {
+        let a: Vec<String> = ["M/1", "A/1"].map(String::from).to_vec();
+        let b: Vec<String> = ["N/1", "P/1", "M/1", "B/1"].map(String::from).to_vec();
+        let merged = merge_orders(&[a, b]);
+        let at = |m: &str| merged.iter().position(|x| x == m).unwrap();
+        assert_eq!(merged.len(), 5);
+        assert!(at("N/1") < at("P/1") && at("P/1") < at("M/1"));
+        assert!(at("M/1") < at("A/1") && at("M/1") < at("B/1"));
     }
 
     #[test]

@@ -32,6 +32,16 @@ jobs:
       - name: Cargo source package
         run: cargo package --locked
 
+  ledger:
+    name: ledger proofs and writer exclusion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Records, proofs, and POSIX writer locks
+        run: cargo test --locked --test ledger --test ledger_posix_lock --test ledger_lock_aliases --test ledger_retry --test ledger_durability
+
   msrv:
     name: Rust 1.88 minimum
     runs-on: ubuntu-latest
@@ -88,6 +98,7 @@ jobs:
             --test eon_foss_2026_1 \
             --test qmcpack_foss_2026_1 \
             --test eon_packaging \
+            --test bundle_component_checksums \
             --test goal_scenario \
             -- --nocapture
 

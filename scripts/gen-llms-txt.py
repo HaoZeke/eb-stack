@@ -373,7 +373,7 @@ def render_index(pages: list[dict[str, str]]) -> str:
         "The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or "
         "newer builds it from source. Each link below is the markdown form "
         "of a page on https://eb-stack.rgoswami.me/. `llms-full.txt` repeats "
-        "those pages in one file. Contributor instructions are in AGENTS.md. "
+        "those pages in one file. Contribution guidelines are in CONTRIBUTING.md. "
         "The Model Context Protocol server is `eb-stack mcp`.",
         "",
     ]
@@ -422,12 +422,12 @@ def project_entries() -> list[str]:
         (
             "README",
             f"{REPO}/README.md",
-            "Install, the claim ladder, llms.txt, AGENTS.md, the skills, and the Model Context Protocol server.",
+            "Install, the claim ladder, the skills, and the Model Context Protocol server.",
         ),
         (
-            "AGENTS.md",
-            f"{REPO}/AGENTS.md",
-            "Build, test, lint, and documentation commands for a contributor.",
+            "Contributing",
+            f"{REPO}/CONTRIBUTING.md",
+            "Contribution guidelines and validation commands.",
         ),
     ]
     if (ROOT / "server.json").is_file():

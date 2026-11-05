@@ -42,7 +42,7 @@ fn llms_txt_matches_the_org_manual() {
     assert!(index.contains("https://eb-stack.rgoswami.me/reference/mcp.html.md"));
     assert!(index.contains("server.json"));
     assert!(index.contains("skills/new-package/SKILL.md"));
-    assert!(index.contains("AGENTS.md"));
+    assert!(index.contains("CONTRIBUTING.md"));
 
     // A page summary is already markdown, so summarize() must not re-read it
     // as Org. A regression ran inline_plain() over the markdown and paired
