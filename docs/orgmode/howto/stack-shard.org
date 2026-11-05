@@ -125,8 +125,9 @@ downloads that commit into ~--commit-cache~.
 SHA=0d6b80c34f3553774e93162cf89088e2423ecf89
 MIRROR=${EB_STACK_COMMIT_MIRROR:-/tmp/ec-mirror/${SHA}.tar.gz}
 mkdir -p "$(dirname "$MIRROR")"
+HOST=codeload.github.com
 test -f "$MIRROR" || curl -fsSL -o "$MIRROR" \
-  "https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/${SHA}"
+  "https://${HOST}/easybuilders/easybuild-easyconfigs/tar.gz/${SHA}"
 rm -rf /tmp/ec-robot
 mkdir -p /tmp/ec-robot
 tar -xzf "$MIRROR" -C /tmp/ec-robot

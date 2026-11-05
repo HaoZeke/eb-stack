@@ -834,10 +834,11 @@ then the robot path. ~--commit-tree COMMIT=DIR~ names the easyconfigs
 directory of one commit (an abbreviated commit matches) and
 ~--pr-tree N=DIR~ the easyconfigs one pull request changes; both repeat.
 ~--commit-cache DIR~ holds every other tree. A commit missing there is
-downloaded from
-~https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/SHA~,
-which also serves a fork commit a pull request carries, and only its ~.eb~
-files under ~easybuild/easyconfigs/~ are kept, at ~DIR/SHA/easybuild/easyconfigs~.
+downloaded over https from
+~codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/~
+plus the commit. That address also serves a fork commit a pull request
+carries, and only its ~.eb~ files under ~easybuild/easyconfigs/~ are
+kept, at ~DIR/SHA/easybuild/easyconfigs~.
 A pull request's head commit and changed easyconfigs come from
 ~api.github.com~ and are kept at ~DIR/pr-N-HEAD~, so a pull request that
 moves is read again. ~GITHUB_TOKEN~ or ~GH_TOKEN~ is sent to
