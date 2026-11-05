@@ -131,6 +131,9 @@ pub struct ResolvedEasyconfig {
     /// easyblock is called.
     #[serde(default)]
     pub has_components: bool,
+    /// Every parsed component artifact carries a nonempty checksum entry.
+    #[serde(default)]
+    pub component_checksums_complete: bool,
 }
 
 impl ResolvedEasyconfig {
@@ -2883,6 +2886,11 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
             .skipped
             .iter()
             .any(|stmt| stmt.text.trim_start().starts_with("components"));
+    let component_checksums_complete = component_checksums_complete(&parser.env, &templates)
+        && !parser.skipped.iter().any(|stmt| {
+            let text = stmt.text.trim_start();
+            text.starts_with("components") || text.starts_with("default_component_specs")
+        });
     let local_files = local_files_from(
         src,
         &parser.env,
@@ -2919,6 +2927,7 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
         checksum_entry_keys,
         checksums_by_filename,
         has_components,
+        component_checksums_complete,
     };
     let mut sites = easyblock_sites_from(&parser.env, &templates);
     recover_named_easyblocks(&mut sites, &parser.skipped);
@@ -3920,6 +3929,50 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
     }
 }
 
+fn component_checksums_complete(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> bool {
+    let Some(raw) = env.get("components") else {
+        return false;
+    };
+    let Ok(items) = value_list_as_slice(Some(raw)) else {
+        return false;
+    };
+    let entries = sub_entries(Some(raw), templates);
+    if items.is_empty() || entries.len() != items.len() {
+        return false;
+    }
+    let defaults = match env.get("default_component_specs") {
+        None => Vec::new(),
+        Some(Value::Dict(values)) => values.clone(),
+        _ => return false,
+    };
+    entries.into_iter().all(|(_, _, options)| {
+        let mut fields: HashMap<String, Value> = defaults.iter().cloned().collect();
+        match options {
+            None => {},
+            Some(Value::Dict(values)) => fields.extend(values),
+            _ => return false,
+        }
+        let count = |key| value_list_as_slice(fields.get(key)).ok().map(<[Value]>::len);
+        let (Some(sources), Some(patches)) = (count("sources"), count("patches")) else {
+            return false;
+        };
+        let expected = sources + patches;
+        let Ok(checksums) = value_list_as_slice(fields.get("checksums")) else {
+            return false;
+        };
+        expected > 0 && checksums.len() == expected && checksums.iter().all(|entry| {
+            let tokens = checksum_strings_from_value(entry);
+            !tokens.is_empty() && tokens.iter().all(|token| {
+                matches!(token.len(), 32 | 40 | 64 | 128)
+                    && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        })
+    })
+}
+
 /// Packaging gate: checksums present, moduleclass set, and optional required
 /// configopts substrings (e.g. `-Dwith_tests=false`).
 ///
@@ -3942,7 +3995,11 @@ pub fn packaging_gate(
             recipe.easyblock.as_deref(),
             Some("PythonBundle" | "RPackage" | "Bundle")
         ) && !recipe.exts_list.is_empty();
-        if !extension_bundle {
+        let component_bundle = recipe.easyblock.as_deref() == Some("Bundle")
+            && recipe.sources_count == 0
+            && recipe.patch_names.is_empty()
+            && recipe.component_checksums_complete;
+        if !extension_bundle && !component_bundle {
             errs.push("missing checksums".into());
         }
     }
@@ -5146,6 +5203,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
             has_components: false,
+            component_checksums_complete: false,
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -5857,6 +5915,7 @@ builddependencies = [
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
             has_components: false,
+            component_checksums_complete: false,
         }
     }
 
