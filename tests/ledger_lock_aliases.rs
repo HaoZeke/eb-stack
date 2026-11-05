@@ -6,14 +6,23 @@ use std::process::Command;
 
 fn append(root: &Path, log: &Path) -> std::process::Output {
     let record = root.join("record.json");
-    fs::write(&record, serde_json::to_vec(&serde_json::json!({
-        "ts": "2026-11-05T00:00:00Z", "actor": "lock-test", "stack": "2026.06",
-        "target": "x86_64/amd/zen4", "module": "example/1", "location": "/example/1",
-        "action": "install"
-    })).unwrap()).unwrap();
+    fs::write(
+        &record,
+        serde_json::to_vec(&serde_json::json!({
+            "ts": "2026-11-05T00:00:00Z", "actor": "lock-test", "stack": "2026.06",
+            "target": "x86_64/amd/zen4", "module": "example/1", "location": "/example/1",
+            "action": "install"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     Command::new(env!("CARGO_BIN_EXE_eb-stack"))
-        .args(["ledger", "append"]).arg(record).arg("--log").arg(log)
-        .output().unwrap()
+        .args(["ledger", "append"])
+        .arg(record)
+        .arg("--log")
+        .arg(log)
+        .output()
+        .unwrap()
 }
 
 #[test]

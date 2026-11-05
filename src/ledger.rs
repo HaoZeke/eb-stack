@@ -541,12 +541,18 @@ impl LedgerLock {
 
             let opened = guard.gate.metadata().context("inspect ledger lock inode")?;
             if opened.nlink() != 1 {
-                bail!("ledger requires one link for writer exclusion: {}", log.display());
+                bail!(
+                    "ledger requires one link for writer exclusion: {}",
+                    log.display()
+                );
             }
             let canonical = log.canonicalize().context("resolve ledger lock path")?;
             let resolved = canonical.metadata().context("inspect resolved ledger")?;
             if (opened.dev(), opened.ino()) != (resolved.dev(), resolved.ino()) {
-                bail!("ledger path changed while acquiring its lock: {}", log.display());
+                bail!(
+                    "ledger path changed while acquiring its lock: {}",
+                    log.display()
+                );
             }
             let mut name = canonical.into_os_string();
             name.push(".posix-lock");
@@ -560,7 +566,10 @@ impl LedgerLock {
                 .with_context(|| format!("open record lock for ledger {}", log.display()))?;
             let info = record.metadata().context("inspect ledger record lock")?;
             if !info.is_file() || info.nlink() != 1 {
-                bail!("ledger record lock requires a regular file with one link: {}", log.display());
+                bail!(
+                    "ledger record lock requires a regular file with one link: {}",
+                    log.display()
+                );
             }
             // All-zero offsets cover the whole file; flock's scalar fields
             // have valid zero representations on the supported Unix targets.
