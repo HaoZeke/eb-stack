@@ -522,6 +522,9 @@ struct LedgerLock {
 
 impl LedgerLock {
     fn acquire(gate: &std::fs::File, log: &Path) -> Result<Self> {
+        if !gate.metadata().context("inspect ledger file")?.is_file() {
+            bail!("ledger must be a regular file: {}", log.display());
+        }
         let gate = gate
             .try_clone()
             .context("duplicate ledger lock descriptor")?;
@@ -534,8 +537,17 @@ impl LedgerLock {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
+            let opened = guard.gate.metadata().context("inspect ledger lock inode")?;
+            if opened.nlink() != 1 {
+                bail!("ledger requires one link for writer exclusion: {}", log.display());
+            }
             let canonical = log.canonicalize().context("resolve ledger lock path")?;
+            let resolved = canonical.metadata().context("inspect resolved ledger")?;
+            if (opened.dev(), opened.ino()) != (resolved.dev(), resolved.ino()) {
+                bail!("ledger path changed while acquiring its lock: {}", log.display());
+            }
             let mut name = canonical.into_os_string();
             name.push(".posix-lock");
             let record = std::fs::OpenOptions::new()
@@ -543,8 +555,13 @@ impl LedgerLock {
                 .write(true)
                 .create(true)
                 .truncate(false)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                 .open(PathBuf::from(name))
                 .with_context(|| format!("open record lock for ledger {}", log.display()))?;
+            let info = record.metadata().context("inspect ledger record lock")?;
+            if !info.is_file() || info.nlink() != 1 {
+                bail!("ledger record lock requires a regular file with one link: {}", log.display());
+            }
             // All-zero offsets cover the whole file; flock's scalar fields
             // have valid zero representations on the supported Unix targets.
             let mut lock: libc::flock = unsafe { std::mem::zeroed() };
@@ -603,10 +620,14 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         None => None,
     };
 
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
         .open(&request.log)
         .with_context(|| format!("open ledger {}", request.log.display()))?;
     let _lock = LedgerLock::acquire(&file, &request.log)?;
