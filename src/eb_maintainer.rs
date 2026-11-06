@@ -864,14 +864,14 @@ mod tests {
     #[test]
     fn accepts_explicit_dependency_toolchain_in_the_same_generation() {
         let text = r#"
-name = 'SeisSol'
+name = 'Root'
 version = '1.3.2'
 versionsuffix = '-CUDA-13.3.0'
-homepage = 'https://www.seissol.org'
+homepage = 'https://example.org/root'
 description = 'Explicit dependency toolchain regression'
 toolchain = {'name': 'foss', 'version': '2026.1'}
 dependencies = [
-    ('AdaptiveCpp', '25.10.0', versionsuffix, ('llvm-compilers', '21.1.8')),
+    ('Leaf', '25.10.0', versionsuffix, ('llvm-compilers', '21.1.8')),
 ]
 moduleclass = 'geo'
 "#;

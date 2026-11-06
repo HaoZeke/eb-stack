@@ -37,6 +37,8 @@ pub struct EbProvider {
     /// The policy generation, lowest level first, for deciding which levels a
     /// recipe may take an unpinned dependency from.
     hierarchy_members: Vec<crate::domain::Toolchain>,
+    /// Toolchain policy roots must belong to for a non-curated stack solve.
+    policy_toolchain: crate::domain::Toolchain,
     /// Minimal-toolchain hierarchy for every admitted recipe toolchain.
     ///
     /// An explicit dependency tuple may select a recipe outside the policy
@@ -653,23 +655,24 @@ impl EbProvider {
             validate_stack_policy(policy, stack)?;
         }
 
-        // Callers pass the candidate universe they intend to solve. The stack
-        // CLI scopes a complete robot tree before constructing the Universe;
-        // package planning constructs its curated universe directly. Filtering
-        // here a second time loses explicit cross-toolchain dependencies and
-        // the toolchain definitions needed to derive their own hierarchies.
+        // Direct API callers may pass a raw robot tree, while the stack CLI
+        // already supplies a scoped universe. Keep every candidate here:
+        // dependency keys enforce implicit hierarchy constraints, and root
+        // requirements separately enforce policy-root admissibility. Retaining
+        // alternatives also preserves diagnostics and independently
+        // installable versions. Package planning keeps its curated semantics.
         let hierarchy_members =
             crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates_in)
                 .map(|h| h.members)
                 .unwrap_or_default();
-        let filtered: Vec<Candidate> = candidates_in
-            .iter()
+        let expanded_in = crate::provides::expand_extension_provides(candidates_in);
+        let filtered: Vec<Candidate> = expanded_in
+            .into_iter()
             .filter(|candidate| {
                 !policy.forbid.iter().any(|forbidden| {
                     forbidden == &candidate.easyconfig_path || forbidden == &candidate.name
                 })
             })
-            .cloned()
             .collect();
         let candidates = crate::provides::expand_extension_provides(&filtered);
         let mut hierarchy_members_by_toolchain = HashMap::new();
@@ -946,6 +949,7 @@ impl EbProvider {
         Ok(Self {
             keys_by_name,
             hierarchy_members,
+            policy_toolchain: policy.toolchain.clone(),
             hierarchy_members_by_toolchain,
             pool,
             candidates,
@@ -1040,17 +1044,32 @@ impl EbProvider {
             .map(String::as_str)
     }
 
+    fn root_key_is_in_policy_hierarchy(&self, key: &str) -> bool {
+        self.ranks.get(key).is_some_and(|ranked| {
+            ranked.iter().any(|(_, index)| {
+                let candidate = &self.candidates[*index];
+                crate::hierarchy::toolchains_match(&candidate.toolchain, &self.policy_toolchain)
+                    || self.hierarchy_members.iter().any(|member| {
+                        crate::hierarchy::toolchains_match(&candidate.toolchain, member)
+                    })
+            })
+        })
+    }
+
     /// The requirements standing for the application roots.
     pub fn root_requirements(&self, roots: &[String]) -> Vec<resolvo::ConditionalRequirement> {
         roots
             .iter()
             .filter_map(|name| {
                 // A root is a name; the pool holds keys. A package carried at
-                // several levels has one key per level, and asking for the
-                // root means any of them satisfies it, so the requirement is
-                // their union.
+                // several levels has one key per level. Only a key in the
+                // policy hierarchy may satisfy a non-curated policy root;
+                // foreign keys remain available to explicit dependency pins.
                 let mut sets = Vec::new();
                 for key in keys_for_name(&self.ranks, name) {
+                    if !self.curated_toolchains && !self.root_key_is_in_policy_hierarchy(&key) {
+                        continue;
+                    }
                     let Some(&name_id) = self.name_ids.get(&key) else {
                         continue;
                     };
@@ -1821,6 +1840,94 @@ mod tests {
         }
     }
 
+    fn foreign_tc() -> Toolchain {
+        Toolchain {
+            name: "llvm-compilers".into(),
+            version: "20.1.8".into(),
+        }
+    }
+
+    fn explicit_dep(name: &str, version: &str, toolchain: &Toolchain) -> DepReq {
+        DepReq {
+            name: name.into(),
+            version_req: format!("=={version}"),
+            versionsuffix: None,
+            toolchain: Some(toolchain.clone()),
+        }
+    }
+
+    #[test]
+    fn direct_api_rejects_a_root_available_only_at_a_foreign_toolchain() {
+        let mut leaf = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        leaf.toolchain = foreign_tc();
+
+        let error = solve_with_resolvo(&[leaf], &policy(vec!["Leaf"], vec![]), None)
+            .expect_err("a policy root must belong to the policy hierarchy");
+        assert!(
+            error.contains("root") || error.contains("candidate"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn explicit_foreign_dependency_does_not_replace_same_named_policy_root() {
+        let foreign = foreign_tc();
+        let mut foreign_leaf = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        foreign_leaf.toolchain = foreign.clone();
+        let candidates = vec![
+            cand("Leaf", "1.0", None, "Leaf-1.0-foss.eb", vec![]),
+            foreign_leaf,
+            cand(
+                "RootA",
+                "1.0",
+                None,
+                "RootA-1.0.eb",
+                vec![explicit_dep("Leaf", "1.0", &foreign)],
+            ),
+        ];
+
+        let selected =
+            solve_with_resolvo(&candidates, &policy(vec!["RootA", "Leaf"], vec![]), None)
+                .expect("the policy root and explicit foreign dependency coexist");
+        let mut leaf_toolchains: Vec<String> = selected
+            .iter()
+            .filter(|candidate| candidate.name == "Leaf")
+            .map(|candidate| candidate.toolchain.label())
+            .collect();
+        leaf_toolchains.sort();
+        assert_eq!(leaf_toolchains, vec!["foss-2025b", "llvm-compilers-20.1.8"]);
+    }
+
+    #[test]
+    fn incompatible_explicit_pins_on_one_foreign_toolchain_stay_unsatisfiable() {
+        let foreign = foreign_tc();
+        let mut leaf_one = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        leaf_one.toolchain = foreign.clone();
+        let mut leaf_two = cand("Leaf", "2.0", None, "Leaf-2.0-LLVM.eb", vec![]);
+        leaf_two.toolchain = foreign.clone();
+        let candidates = vec![
+            leaf_one,
+            leaf_two,
+            cand(
+                "RootA",
+                "1.0",
+                None,
+                "RootA-1.0.eb",
+                vec![explicit_dep("Leaf", "1.0", &foreign)],
+            ),
+            cand(
+                "RootB",
+                "1.0",
+                None,
+                "RootB-1.0.eb",
+                vec![explicit_dep("Leaf", "2.0", &foreign)],
+            ),
+        ];
+
+        solve_with_resolvo(&candidates, &policy(vec!["RootA", "RootB"], vec![]), None)
+            .expect_err("incompatible explicit pins must not become co-installable");
+    }
+
     /// Same name + version with different versionsuffix must get distinct ranks.
     #[test]
     fn versionsuffix_distinguishes_candidate_identity() {
@@ -2100,9 +2207,9 @@ mod tests {
 
     #[test]
     fn a_build_dependency_may_differ_from_the_runtime_version() {
-        // SeisSol builds its generators with Eigen 3.4 while pybind11 in the
-        // same closure uses Eigen 5 at runtime. Build-only modules are scoped
-        // to their requesting recipe, so both versions coexist.
+        // Root builds a generator with BuildLib 3.4 while Library in the same
+        // closure uses BuildLib 5 at runtime. Build-only modules are scoped to
+        // their requesting recipe, so both versions coexist.
         let need = |name: &str, version: &str| DepReq {
             name: name.into(),
             version_req: version.into(),
@@ -2116,28 +2223,28 @@ mod tests {
             "App-1.0.eb",
             vec![need("Library", "1.0")],
         );
-        app.builddependencies = vec![need("Eigen", "3.4.1")];
+        app.builddependencies = vec![need("BuildLib", "3.4.1")];
         let candidates = vec![
-            cand("Eigen", "3.4.1", None, "Eigen-3.4.1.eb", vec![]),
-            cand("Eigen", "5.0.0", None, "Eigen-5.0.0.eb", vec![]),
+            cand("BuildLib", "3.4.1", None, "BuildLib-3.4.1.eb", vec![]),
+            cand("BuildLib", "5.0.0", None, "BuildLib-5.0.0.eb", vec![]),
             cand(
                 "Library",
                 "1.0",
                 None,
                 "Library-1.0.eb",
-                vec![need("Eigen", "5.0.0")],
+                vec![need("BuildLib", "5.0.0")],
             ),
             app,
         ];
         let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
-            .expect("build and runtime Eigen versions coexist");
-        let mut eigen: Vec<&str> = selected
+            .expect("build and runtime BuildLib versions coexist");
+        let mut versions: Vec<&str> = selected
             .iter()
-            .filter(|candidate| candidate.name == "Eigen")
+            .filter(|candidate| candidate.name == "BuildLib")
             .map(|candidate| candidate.version.as_str())
             .collect();
-        eigen.sort();
-        assert_eq!(eigen, vec!["3.4.1", "5.0.0"]);
+        versions.sort();
+        assert_eq!(versions, vec!["3.4.1", "5.0.0"]);
     }
 
     #[test]
