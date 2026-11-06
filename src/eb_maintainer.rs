@@ -133,6 +133,21 @@ fn dep_in_recipe_hierarchy(recipe_tc: &Toolchain, dep_tc: &Toolchain) -> bool {
     true
 }
 
+/// Whether both toolchains are known members of the same release generation.
+///
+/// A compiler family can be outside another family's hierarchy while still
+/// belonging to the same generation. `llvm-compilers-21.1.8`, for example,
+/// is the compiler-only LLVM toolchain for 2026.1. EasyBuild permits a
+/// dependency to select it explicitly from a foss/2026.1 recipe.
+fn in_same_known_generation(recipe_tc: &Toolchain, dep_tc: &Toolchain) -> bool {
+    let Ok(generations) = crate::generation_lint::GenerationTable::bundled() else {
+        return false;
+    };
+    let recipe_generation = generations.generation_of(&recipe_tc.label());
+    let dependency_generation = generations.generation_of(&dep_tc.label());
+    recipe_generation.is_some() && recipe_generation == dependency_generation
+}
+
 /// Cross-generation dependency pins: hard error (#26435).
 pub fn check_cross_generation_pins(recipe: &ResolvedEasyconfig) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
@@ -150,6 +165,12 @@ pub fn check_cross_generation_pins(recipe: &ResolvedEasyconfig) -> Vec<Maintaine
             }
             // Plain GCCcore under foss is fine when hierarchy admits it.
             if dep_in_recipe_hierarchy(parent, dep_tc) {
+                continue;
+            }
+            // An explicit dependency may select another compiler family in the
+            // same generation. It is outside the parent's hierarchy by design,
+            // not a cross-generation pin.
+            if in_same_known_generation(parent, dep_tc) {
                 continue;
             }
             // High-level toolchain with a different generation is always wrong.
@@ -838,6 +859,30 @@ mod tests {
             report
         );
         assert!(!report.ok_for_upstream());
+    }
+
+    #[test]
+    fn accepts_explicit_dependency_toolchain_in_the_same_generation() {
+        let text = r#"
+name = 'SeisSol'
+version = '1.3.2'
+versionsuffix = '-CUDA-13.3.0'
+homepage = 'https://www.seissol.org'
+description = 'Explicit dependency toolchain regression'
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('AdaptiveCpp', '25.10.0', versionsuffix, ('llvm-compilers', '21.1.8')),
+]
+moduleclass = 'geo'
+"#;
+        let recipe = resolve_easyconfig_str(text).expect("recipe");
+        let findings = check_cross_generation_pins(&recipe);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.code != "EB_MAINT_CROSS_GEN"),
+            "{findings:?}"
+        );
     }
 
     #[test]
