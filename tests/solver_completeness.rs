@@ -11,6 +11,8 @@
 
 use eb_stack::domain::{Candidate, DepReq, Policy, Toolchain, Universe};
 use eb_stack::select_stack;
+use std::fs;
+use std::process::Command;
 
 const PACKAGES: [&str; 3] = ["Alpha", "Beta", "Gamma"];
 const VERSIONS: [&str; 3] = ["1.0", "2.0", "3.0"];
@@ -153,4 +155,91 @@ fn every_solvable_universe_is_solved_and_every_unsolvable_one_is_refused() {
     assert!(solvable > 0, "no solvable case was generated");
     assert!(unsolvable > 0, "no unsolvable case was generated");
     assert_eq!(solvable + unsolvable, 25);
+}
+
+#[test]
+fn explicit_dependency_toolchain_outside_root_hierarchy_resolves() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("easyconfigs");
+    fs::create_dir_all(&robot).expect("robot directory");
+
+    let root_easyconfig = robot.join("Root-1.0-foss-2026.1.eb");
+    fs::write(
+        &root_easyconfig,
+        r#"
+easyblock = 'Bundle'
+name = 'Root'
+version = '1.0'
+homepage = 'https://example.org/root'
+description = 'Explicit dependency toolchain regression root'
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('Leaf', '1.0', '-CUDA-13.3.0', ('llvm-compilers', '21.1.8')),
+]
+moduleclass = 'tools'
+"#,
+    )
+    .expect("root easyconfig");
+    fs::write(
+        robot.join("Leaf-1.0-llvm-compilers-21.1.8-CUDA-13.3.0.eb"),
+        r#"
+easyblock = 'Bundle'
+name = 'Leaf'
+version = '1.0'
+versionsuffix = '-CUDA-13.3.0'
+homepage = 'https://example.org/leaf'
+description = 'Explicit dependency toolchain regression leaf'
+toolchain = {'name': 'llvm-compilers', 'version': '21.1.8'}
+moduleclass = 'tools'
+"#,
+    )
+    .expect("leaf easyconfig");
+
+    let parsed = eb_stack::eb_parse::parse_easyconfig_file(&root_easyconfig).expect("parse root");
+    let dependency = parsed.dependencies.first().expect("root dependency");
+    assert_eq!(dependency.versionsuffix.as_deref(), Some("-CUDA-13.3.0"));
+    assert_eq!(
+        dependency.toolchain.as_ref(),
+        Some(&Toolchain {
+            name: "llvm-compilers".into(),
+            version: "21.1.8".into(),
+        })
+    );
+
+    let lock = temp.path().join("stack.lock.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args([
+            "stack",
+            "solve",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--toolchain",
+            "foss/2026.1",
+            "--root",
+            "Root",
+            "--lock-out",
+            lock.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run stack solve");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let lock: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(lock).expect("lock")).expect("lock JSON");
+    let leaf = lock["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .find(|package| package["name"] == "Leaf")
+        .expect("Leaf package");
+    assert_eq!(leaf["version"], "1.0");
+    assert_eq!(leaf["versionsuffix"], "-CUDA-13.3.0");
+    assert_eq!(leaf["toolchain"]["name"], "llvm-compilers");
+    assert_eq!(leaf["toolchain"]["version"], "21.1.8");
 }
