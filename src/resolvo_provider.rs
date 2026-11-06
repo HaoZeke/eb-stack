@@ -37,6 +37,15 @@ pub struct EbProvider {
     /// The policy generation, lowest level first, for deciding which levels a
     /// recipe may take an unpinned dependency from.
     hierarchy_members: Vec<crate::domain::Toolchain>,
+    /// Toolchain policy roots must belong to for a non-curated stack solve.
+    policy_toolchain: crate::domain::Toolchain,
+    /// Minimal-toolchain hierarchy for every admitted recipe toolchain.
+    ///
+    /// An explicit dependency tuple may select a recipe outside the policy
+    /// hierarchy. Dependencies of that recipe inherit its toolchain, so they
+    /// must be resolved through that toolchain's hierarchy rather than through
+    /// the policy hierarchy.
+    hierarchy_members_by_toolchain: HashMap<String, Vec<crate::domain::Toolchain>>,
     /// pin: name -> allowed ranks
     pin_ranks: HashMap<String, Vec<u32>>,
     /// require_upgrade: name -> rank must be > this
@@ -70,6 +79,159 @@ fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
     }
 }
 
+fn candidate_satisfies_dependency(
+    candidate: &Candidate,
+    dependency: &crate::domain::DepReq,
+) -> bool {
+    if candidate.name != dependency.name {
+        return false;
+    }
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    let with_suffix = format!("{}{suffix}", candidate.version);
+    let with_toolchain = if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+        with_suffix.clone()
+    } else {
+        format!(
+            "{}-{}-{}{suffix}",
+            candidate.version, candidate.toolchain.name, candidate.toolchain.version
+        )
+    };
+    if !matches_req(&candidate.version, &dependency.version_req)
+        && !matches_req(&with_suffix, &dependency.version_req)
+        && !matches_req(&with_toolchain, &dependency.version_req)
+    {
+        return false;
+    }
+    if dependency.toolchain.as_ref().is_some_and(|toolchain| {
+        !crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+    }) {
+        return false;
+    }
+    dependency
+        .versionsuffix
+        .as_deref()
+        .is_none_or(|wanted| wanted == suffix)
+}
+
+fn candidates_for_dependency<'a>(
+    recipe: &Candidate,
+    dependency: &crate::domain::DepReq,
+    candidates: &'a [Candidate],
+) -> Vec<&'a Candidate> {
+    let matching = |candidate: &&Candidate| candidate_satisfies_dependency(candidate, dependency);
+    if dependency.toolchain.is_some() {
+        return candidates.iter().filter(matching).collect();
+    }
+
+    let hierarchy =
+        crate::hierarchy::hierarchy_for_with_tree(&recipe.toolchain, None, candidates).ok();
+    let mut levels = hierarchy
+        .map(|hierarchy| hierarchy.members)
+        .unwrap_or_else(|| vec![recipe.toolchain.clone()]);
+    levels.reverse();
+    for level in levels {
+        if crate::hierarchy::is_system_toolchain(&level)
+            && !crate::hierarchy::is_system_toolchain(&recipe.toolchain)
+        {
+            continue;
+        }
+        let at_level: Vec<&Candidate> = candidates
+            .iter()
+            .filter(matching)
+            .filter(|candidate| crate::hierarchy::toolchains_match(&candidate.toolchain, &level))
+            .collect();
+        if !at_level.is_empty() {
+            return at_level;
+        }
+    }
+    Vec::new()
+}
+
+/// Policy hierarchy plus exact dependency candidates reachable from its roots.
+///
+/// EasyBuild's four-element tuple may select a recipe outside the policy
+/// hierarchy. Admit that exact recipe and walk its dependencies through its
+/// own hierarchy. Unrelated recipes on the foreign toolchain stay out: letting
+/// them affect install-slot classification can create conflicts between build
+/// tools that no selected package uses.
+pub(crate) fn dependency_candidate_scope(
+    policy: &Policy,
+    candidates: &[Candidate],
+    policy_hierarchy: &[crate::domain::Toolchain],
+) -> Vec<Candidate> {
+    let in_policy_hierarchy = |candidate: &Candidate| {
+        crate::hierarchy::toolchains_match(&candidate.toolchain, &policy.toolchain)
+            || policy_hierarchy.iter().any(|toolchain| {
+                crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+            })
+    };
+    let mut admitted: Vec<Candidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            in_policy_hierarchy(candidate)
+                && policy.roots.iter().any(|root| root == &candidate.name)
+        })
+        .cloned()
+        .collect();
+    // Preserve the solver's root-missing diagnostic path. The surrounding
+    // generation may be present even when no requested root exists on it; an
+    // empty universe turns that into the less useful "no easyconfigs for
+    // toolchain" error before nearest-candidate reporting can run.
+    if admitted.is_empty() {
+        return candidates
+            .iter()
+            .filter(|candidate| in_policy_hierarchy(candidate))
+            .cloned()
+            .collect();
+    }
+    let mut known: HashSet<String> = admitted
+        .iter()
+        .map(|candidate| candidate.easyconfig_path.clone())
+        .collect();
+    let mut queued = HashSet::new();
+    let mut queue: Vec<Candidate> = admitted
+        .iter()
+        .filter(|candidate| queued.insert(candidate.easyconfig_path.clone()))
+        .cloned()
+        .collect();
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let recipe = queue[cursor].clone();
+        // Building a recipe also needs the toolchain module and its own
+        // dependency closure. Keeping the definition in the scoped universe
+        // lets the provider derive this recipe's minimal-toolchain hierarchy.
+        if !crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
+            for candidate in candidates.iter().filter(|candidate| {
+                candidate.name == recipe.toolchain.name
+                    && candidate.version == recipe.toolchain.version
+            }) {
+                if known.insert(candidate.easyconfig_path.clone()) {
+                    admitted.push(candidate.clone());
+                }
+                if queued.insert(candidate.easyconfig_path.clone()) {
+                    queue.push(candidate.clone());
+                }
+            }
+        }
+        for dependency in recipe
+            .dependencies
+            .iter()
+            .chain(recipe.builddependencies.iter())
+        {
+            for candidate in candidates_for_dependency(&recipe, dependency, candidates) {
+                if known.insert(candidate.easyconfig_path.clone()) {
+                    admitted.push(candidate.clone());
+                }
+                if queued.insert(candidate.easyconfig_path.clone()) {
+                    queue.push(candidate.clone());
+                }
+            }
+        }
+        cursor += 1;
+    }
+    admitted
+}
+
 /// A name is qualified by toolchain once it is carried at this many labels.
 ///
 /// One label keeps the plain package name. A second label is a different
@@ -84,7 +246,8 @@ const TOOLCHAIN_LEVELS_THAT_QUALIFY: usize = 2;
 const SYSTEM_VERSIONS_THAT_SPLIT: usize = 2;
 
 /// Build-dependency versions are split into their own packages once a name
-/// is required at this many versions and runtime references still agree.
+/// is required at this many build versions, or one build version differs
+/// from the sole runtime version.
 const BUILD_VERSIONS_THAT_SPLIT: usize = 2;
 
 /// Several build-dependency versions stay co-installable only when the
@@ -149,8 +312,12 @@ impl InstallSlots {
         let build_multi = build_versions
             .into_iter()
             .filter(|(name, versions)| {
-                versions.len() >= BUILD_VERSIONS_THAT_SPLIT
-                    && runtime_versions.get(name).is_none_or(|versions| {
+                let runtime = runtime_versions.get(name);
+                let build_differs_from_runtime = runtime.is_some_and(|runtime| {
+                    versions.iter().any(|version| !runtime.contains(version))
+                });
+                (versions.len() >= BUILD_VERSIONS_THAT_SPLIT || build_differs_from_runtime)
+                    && runtime.is_none_or(|versions| {
                         versions.len() <= MAX_RUNTIME_VERSION_STRINGS_FOR_BUILD_SPLIT
                     })
             })
@@ -248,18 +415,21 @@ impl EbProvider {
     /// level and every level under it, lowest first, then its own if the
     /// hierarchy does not list it.
     fn admissible_levels(&self, recipe: &Candidate) -> Vec<String> {
-        let recipe_at = self
-            .hierarchy_members
+        let own = toolchain_label(&recipe.toolchain);
+        let hierarchy_members = self
+            .hierarchy_members_by_toolchain
+            .get(&own)
+            .unwrap_or(&self.hierarchy_members);
+        let recipe_at = hierarchy_members
             .iter()
             .position(|m| crate::hierarchy::toolchains_match(m, &recipe.toolchain));
         // The hierarchy is ordered lowest level first, so a recipe may take a
         // dependency from its own level and anything under it, never above.
         let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
-            Some(at) => self.hierarchy_members[..=at].iter().collect(),
-            None => self.hierarchy_members.iter().collect(),
+            Some(at) => hierarchy_members[..=at].iter().collect(),
+            None => hierarchy_members.iter().collect(),
         };
         let mut labels: Vec<String> = admissible.into_iter().map(toolchain_label).collect();
-        let own = toolchain_label(&recipe.toolchain);
         if !labels.contains(&own) {
             labels.push(own);
         }
@@ -485,33 +655,41 @@ impl EbProvider {
             validate_stack_policy(policy, stack)?;
         }
 
-        // A recipe's dependencies do not all live at its own toolchain: an app
-        // at GCC takes CMake from GCCcore and licence bits from SYSTEM, which
-        // is EasyBuild's minimal-toolchain search. Admitting only the policy
-        // toolchain here drops those candidates before they are ever interned,
-        // so the solver reports a missing *package* rather than an
-        // unsatisfiable constraint, and the caller cannot tell the difference.
+        // Direct API callers may pass a raw robot tree, while the stack CLI
+        // already supplies a scoped universe. Keep every candidate here:
+        // dependency keys enforce implicit hierarchy constraints, and root
+        // requirements separately enforce policy-root admissibility. Retaining
+        // alternatives also preserves diagnostics and independently
+        // installable versions. Package planning keeps its curated semantics.
         let hierarchy_members =
             crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates_in)
                 .map(|h| h.members)
                 .unwrap_or_default();
-        let in_generation = |c: &Candidate| {
-            let same =
-                |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
-            same(&policy.toolchain) || hierarchy_members.iter().any(same)
-        };
-        let filtered: Vec<Candidate> = candidates_in
-            .iter()
-            .filter(|c| {
-                (curated_toolchains || in_generation(c))
-                    && !policy
-                        .forbid
-                        .iter()
-                        .any(|f| f == &c.easyconfig_path || f == &c.name)
+        let expanded_in = crate::provides::expand_extension_provides(candidates_in);
+        let filtered: Vec<Candidate> = expanded_in
+            .into_iter()
+            .filter(|candidate| {
+                !policy.forbid.iter().any(|forbidden| {
+                    forbidden == &candidate.easyconfig_path || forbidden == &candidate.name
+                })
             })
-            .cloned()
             .collect();
         let candidates = crate::provides::expand_extension_provides(&filtered);
+        let mut hierarchy_members_by_toolchain = HashMap::new();
+        for candidate in &candidates {
+            let label = toolchain_label(&candidate.toolchain);
+            hierarchy_members_by_toolchain
+                .entry(label)
+                .or_insert_with(|| {
+                    crate::hierarchy::hierarchy_for_with_tree(
+                        &candidate.toolchain,
+                        None,
+                        candidates_in,
+                    )
+                    .map(|hierarchy| hierarchy.members)
+                    .unwrap_or_else(|_| vec![candidate.toolchain.clone()])
+                });
+        }
 
         // A generation carries some packages at more than one level, and they
         // are different modules: EasyBuild installs Perl at GCCcore and Perl at
@@ -771,6 +949,8 @@ impl EbProvider {
         Ok(Self {
             keys_by_name,
             hierarchy_members,
+            policy_toolchain: policy.toolchain.clone(),
+            hierarchy_members_by_toolchain,
             pool,
             candidates,
             name_ids,
@@ -867,17 +1047,32 @@ impl EbProvider {
             .map(String::as_str)
     }
 
+    fn root_key_is_in_policy_hierarchy(&self, key: &str) -> bool {
+        self.ranks.get(key).is_some_and(|ranked| {
+            ranked.iter().any(|(_, index)| {
+                let candidate = &self.candidates[*index];
+                crate::hierarchy::toolchains_match(&candidate.toolchain, &self.policy_toolchain)
+                    || self.hierarchy_members.iter().any(|member| {
+                        crate::hierarchy::toolchains_match(&candidate.toolchain, member)
+                    })
+            })
+        })
+    }
+
     /// The requirements standing for the application roots.
     pub fn root_requirements(&self, roots: &[String]) -> Vec<resolvo::ConditionalRequirement> {
         roots
             .iter()
             .filter_map(|name| {
                 // A root is a name; the pool holds keys. A package carried at
-                // several levels has one key per level, and asking for the
-                // root means any of them satisfies it, so the requirement is
-                // their union.
+                // several levels has one key per level. Only a key in the
+                // policy hierarchy may satisfy a non-curated policy root;
+                // foreign keys remain available to explicit dependency pins.
                 let mut sets = Vec::new();
                 for key in keys_for_name(&self.ranks, name) {
+                    if !self.curated_toolchains && !self.root_key_is_in_policy_hierarchy(&key) {
+                        continue;
+                    }
                     let Some(&name_id) = self.name_ids.get(&key) else {
                         continue;
                     };
@@ -1649,6 +1844,94 @@ mod tests {
         }
     }
 
+    fn foreign_tc() -> Toolchain {
+        Toolchain {
+            name: "llvm-compilers".into(),
+            version: "20.1.8".into(),
+        }
+    }
+
+    fn explicit_dep(name: &str, version: &str, toolchain: &Toolchain) -> DepReq {
+        DepReq {
+            name: name.into(),
+            version_req: format!("=={version}"),
+            versionsuffix: None,
+            toolchain: Some(toolchain.clone()),
+        }
+    }
+
+    #[test]
+    fn direct_api_rejects_a_root_available_only_at_a_foreign_toolchain() {
+        let mut leaf = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        leaf.toolchain = foreign_tc();
+
+        let error = solve_with_resolvo(&[leaf], &policy(vec!["Leaf"], vec![]), None)
+            .expect_err("a policy root must belong to the policy hierarchy");
+        assert!(
+            error.contains("root") || error.contains("candidate"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn explicit_foreign_dependency_does_not_replace_same_named_policy_root() {
+        let foreign = foreign_tc();
+        let mut foreign_leaf = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        foreign_leaf.toolchain = foreign.clone();
+        let candidates = vec![
+            cand("Leaf", "1.0", None, "Leaf-1.0-foss.eb", vec![]),
+            foreign_leaf,
+            cand(
+                "RootA",
+                "1.0",
+                None,
+                "RootA-1.0.eb",
+                vec![explicit_dep("Leaf", "1.0", &foreign)],
+            ),
+        ];
+
+        let selected =
+            solve_with_resolvo(&candidates, &policy(vec!["RootA", "Leaf"], vec![]), None)
+                .expect("the policy root and explicit foreign dependency coexist");
+        let mut leaf_toolchains: Vec<String> = selected
+            .iter()
+            .filter(|candidate| candidate.name == "Leaf")
+            .map(|candidate| candidate.toolchain.label())
+            .collect();
+        leaf_toolchains.sort();
+        assert_eq!(leaf_toolchains, vec!["foss-2025b", "llvm-compilers-20.1.8"]);
+    }
+
+    #[test]
+    fn incompatible_explicit_pins_on_one_foreign_toolchain_stay_unsatisfiable() {
+        let foreign = foreign_tc();
+        let mut leaf_one = cand("Leaf", "1.0", None, "Leaf-1.0-LLVM.eb", vec![]);
+        leaf_one.toolchain = foreign.clone();
+        let mut leaf_two = cand("Leaf", "2.0", None, "Leaf-2.0-LLVM.eb", vec![]);
+        leaf_two.toolchain = foreign.clone();
+        let candidates = vec![
+            leaf_one,
+            leaf_two,
+            cand(
+                "RootA",
+                "1.0",
+                None,
+                "RootA-1.0.eb",
+                vec![explicit_dep("Leaf", "1.0", &foreign)],
+            ),
+            cand(
+                "RootB",
+                "1.0",
+                None,
+                "RootB-1.0.eb",
+                vec![explicit_dep("Leaf", "2.0", &foreign)],
+            ),
+        ];
+
+        solve_with_resolvo(&candidates, &policy(vec!["RootA", "RootB"], vec![]), None)
+            .expect_err("incompatible explicit pins must not become co-installable");
+    }
+
     /// Same name + version with different versionsuffix must get distinct ranks.
     #[test]
     fn versionsuffix_distinguishes_candidate_identity() {
@@ -1925,6 +2208,48 @@ mod tests {
             .collect();
         cmake.sort();
         assert_eq!(cmake, vec!["3.31.11", "4.2.1"]);
+    }
+
+    #[test]
+    fn a_build_dependency_may_differ_from_the_runtime_version() {
+        // Root builds a generator with BuildLib 3.4 while Library in the same
+        // closure uses BuildLib 5 at runtime. Build-only modules are scoped to
+        // their requesting recipe, so both versions coexist.
+        let need = |name: &str, version: &str| DepReq {
+            name: name.into(),
+            version_req: version.into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let mut app = cand(
+            "App",
+            "1.0",
+            None,
+            "App-1.0.eb",
+            vec![need("Library", "1.0")],
+        );
+        app.builddependencies = vec![need("BuildLib", "3.4.1")];
+        let candidates = vec![
+            cand("BuildLib", "3.4.1", None, "BuildLib-3.4.1.eb", vec![]),
+            cand("BuildLib", "5.0.0", None, "BuildLib-5.0.0.eb", vec![]),
+            cand(
+                "Library",
+                "1.0",
+                None,
+                "Library-1.0.eb",
+                vec![need("BuildLib", "5.0.0")],
+            ),
+            app,
+        ];
+        let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
+            .expect("build and runtime BuildLib versions coexist");
+        let mut versions: Vec<&str> = selected
+            .iter()
+            .filter(|candidate| candidate.name == "BuildLib")
+            .map(|candidate| candidate.version.as_str())
+            .collect();
+        versions.sort();
+        assert_eq!(versions, vec!["3.4.1", "5.0.0"]);
     }
 
     #[test]

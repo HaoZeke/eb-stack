@@ -774,7 +774,17 @@ pub fn solve_with_baseline_source(
         crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, &all)
             .map(|h| h.members)
             .unwrap_or_default();
-    let universe_cands = filter_toolchain_hierarchy(&all, &policy.toolchain, &hierarchy_members);
+    // EasyBuild permits a dependency tuple to name its own toolchain. Such a
+    // tuple deliberately reaches outside the policy hierarchy, and the
+    // selected recipe's implicit dependencies then use that toolchain's
+    // hierarchy. Keep that dependency closure in the universe; the resolver
+    // still prevents bare tuples from falling into unrelated generations.
+    let expanded_all = crate::provides::expand_extension_provides(&all);
+    let universe_cands = crate::resolvo_provider::dependency_candidate_scope(
+        &policy,
+        &expanded_all,
+        &hierarchy_members,
+    );
     if universe_cands.is_empty() {
         let roots_disp = easyconfigs_roots
             .iter()
