@@ -704,6 +704,81 @@ fn a_record_with_an_unknown_route_is_refused() {
     assert!(!fixture.tiles.exists(), "no tile log is written");
 }
 
+/// A backfill record as the Snellius build jobs write it: a staged install
+/// through KVM on an accelerator target, with the build and easyconfig
+/// references.
+fn backfill_record(module: &str, route: &str, target: &str, job: &str) -> Value {
+    json!({
+        "ts": "2026-11-05T22:14:09Z",
+        "actor": "jenkins/eessi-2026.06/1187",
+        "stack": "2026.06",
+        "target": target,
+        "module": module,
+        "location": format!(
+            "/cvmfs/software.eessi.io/host_injections/2026.06/software/linux/{target}/software/{module}"
+        ),
+        "action": "install",
+        "stage": "finished",
+        "route": route,
+        "build": {
+            "job": job,
+            "phase": "build",
+            "status": "succeeded",
+            "summary_log": format!("{job}/summary.log"),
+            "summary_sha256": "11".repeat(32),
+            "node": "gcn42",
+            "duration_s": 5311,
+        },
+        "easyconfig": {"file": format!("{}.eb", module.replace('/', "-"))},
+        "reason": {"text": "2026.06 backfill", "refs": ["software-layer#1234"]},
+    })
+}
+
+#[test]
+fn backfill_records_with_route_and_accelerator_targets_are_found() {
+    let fixture = fixture();
+    let icelake = "x86_64/intel/icelake+accel/nvidia/cc80";
+    let head = fixture.work.join("head.json");
+    for (module, route, target, job) in [
+        ("GROMACS/2026.1-foss-2026.1-CUDA-13.0.2", "kvm", icelake, "snellius/4411"),
+        ("GROMACS/2026.1-foss-2026.1", "native", "x86_64/intel/icelake", "snellius/4412"),
+        ("LAMMPS/2Aug2025-foss-2026.1-kokkos-CUDA-13.0.2", "kvm", icelake, "snellius/4413"),
+        ("LAMMPS/2Aug2025-foss-2026.1-kokkos", "kvm", "x86_64/amd/zen4", "snellius/4414"),
+    ] {
+        ok(&append_signed(
+            &fixture,
+            &backfill_record(module, route, target, job),
+            &head,
+        ));
+    }
+    let hits = ok(&find(
+        &fixture,
+        &["--key", "route=kvm", "--key", &format!("target={icelake}")],
+    ));
+    let rows = hits.lines().collect::<Vec<_>>();
+    assert_eq!(rows.len(), 3, "{hits}");
+    assert!(rows[0].starts_with("0	"), "{hits}");
+    assert!(rows[1].starts_with("2	"), "{hits}");
+    assert!(rows[2].starts_with("2 of 4 records match;"), "{hits}");
+    assert!(rows[0].contains("\"route\":\"kvm\""), "{hits}");
+    let kvm = ok(&find(&fixture, &["--key", "route=kvm"]));
+    assert!(kvm.contains("\n3 of 4 records match;"), "{kvm}");
+    let job = ok(&find(&fixture, &["--key", "job=snellius/4414", "--json"]));
+    let found: Value = serde_json::from_str(&job).unwrap();
+    assert_eq!(found[0]["module"], "LAMMPS/2Aug2025-foss-2026.1-kokkos");
+    assert_eq!(found[0]["build"]["status"], "succeeded");
+    let shown = ok(&eb(&[
+        "ledger",
+        "show",
+        "--log",
+        s(&fixture.log),
+        "--package",
+        "GROMACS",
+    ]));
+    assert!(shown.contains("2 of 4 records"), "{shown}");
+    ok(&verify_record(&fixture, 3, &head));
+}
+
 fn mcp(name: &str, arguments: Value) -> Value {
     let response = eb_stack::mcp::handle_message(&json!({
         "jsonrpc": "2.0",
