@@ -1494,7 +1494,8 @@ dependencies = [
 [[package]]
 name = "rfc9162"
 version = "0.6.1"
-source = "git+https://github.com/leidarljos/deedar?rev=a749a63ebd085274b998efa12541bdd6abb7e176#a749a63ebd085274b998efa12541bdd6abb7e176"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f6b7b360bcedb2e33a854b954831909f4b9b5546d3ea3451f60d9ca71272961"
 dependencies = [
  "sha2 0.10.9",
 ]

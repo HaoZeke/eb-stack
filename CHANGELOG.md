@@ -9,6 +9,10 @@ All notable changes to this project are documented here.
 - Rust 1.90 is the minimum. `ordered-float` 5.5.1 sets `rust-version`
   1.90. `uuid` 1.29.0 sets 1.89.0. The CI minimum job builds every
   target with that compiler.
+- `rfc9162` comes from crates.io at exactly 0.6.1 instead of a git
+  revision of `leidarljos/deedar`. The published crate has the same
+  source as revision `a749a63`, so leaf hashes, roots, and signed heads
+  do not change.
 
 ## 0.4.0 - 2026-11-05
 

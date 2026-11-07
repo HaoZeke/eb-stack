@@ -58,9 +58,9 @@ flate2 = "1"
 tar = "0.4"
 object = { version = "0.40.0", default-features = false, features = ["std", "read"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
-# RFC 9162 Merkle log for `ledger`. A git dependency until the crate is on
-# crates.io; `cargo package` needs the registry version.
-rfc9162 = { version = "=0.6.1", git = "https://github.com/leidarljos/deedar", rev = "a749a63ebd085274b998efa12541bdd6abb7e176" }
+# RFC 9162 Merkle log for `ledger`. Pinned exactly: a different tree hash
+# would change every recorded root and signed head.
+rfc9162 = "=0.6.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
