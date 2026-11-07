@@ -2652,7 +2652,8 @@ pub fn run_stack_shard_with_sources(
     }
     if let Some(repo) = &extra.easyconfigs_repo {
         // Git parent discovery must not substitute a different source repository.
-        let bare = crate::easyconfig_tree::git_output(repo, &["rev-parse", "--is-bare-repository"])?;
+        let bare =
+            crate::easyconfig_tree::git_output(repo, &["rev-parse", "--is-bare-repository"])?;
         let root_arg = if bare.as_deref() == Some("true") {
             "--absolute-git-dir"
         } else {
