@@ -140,12 +140,7 @@ fn a_from_commit_entry_is_read_from_its_commit_not_the_tree() {
         let st = Command::new("git")
             .arg("-C")
             .arg(&repo)
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-            ])
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .status()
             .unwrap();
