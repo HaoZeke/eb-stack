@@ -13,7 +13,13 @@ fn eb_stack(args: &[&str]) -> std::process::Output {
         .expect("run eb-stack")
 }
 
-fn admit(quota: &Path, reservations: &Path, job: &str, footprint: &str, live: Option<&str>) -> Value {
+fn admit(
+    quota: &Path,
+    reservations: &Path,
+    job: &str,
+    footprint: &str,
+    live: Option<&str>,
+) -> Value {
     let mut args = vec![
         "stack",
         "admit",
@@ -36,7 +42,8 @@ fn admit(quota: &Path, reservations: &Path, job: &str, footprint: &str, live: Op
     let stdout = String::from_utf8(run.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert_eq!(stdout.lines().count(), 1, "one JSON line: {stdout}{stderr}");
-    let line: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout}"));
+    let line: Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout}"));
     let expected = if line["admitted"] == true { 0 } else { 78 };
     assert_eq!(run.status.code(), Some(expected), "{stdout}{stderr}");
     line
@@ -68,10 +75,9 @@ fn a_lane_is_admitted_then_the_next_is_refused_and_a_stale_reservation_is_droppe
     assert_eq!(first["headroom"], 349_000);
     assert_eq!(first["dropped"], serde_json::json!(["4390"]));
     assert!(!reservations.join("4390.json").exists());
-    let written: Value = serde_json::from_str(
-        &std::fs::read_to_string(reservations.join("4401.json")).unwrap(),
-    )
-    .unwrap();
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(reservations.join("4401.json")).unwrap())
+            .unwrap();
     assert_eq!(written["job"], "4401");
     assert_eq!(written["footprint"], 351_000);
     assert_eq!(written["ts"], "2026-11-07T12:00:00Z");
@@ -124,11 +130,19 @@ fn the_quota_may_come_from_stdin_and_a_bad_job_id_is_a_usage_error() {
         .write_all(br#"{"inodes_available": 200000}"#)
         .unwrap();
     let run = child.wait_with_output().unwrap();
-    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     let line: Value = serde_json::from_str(String::from_utf8_lossy(&run.stdout).trim()).unwrap();
     assert_eq!(line["available"], 200_000);
     assert_eq!(line["headroom"], 39_000);
-    assert!(reservations.join("4410.json").exists(), "the directory is created");
+    assert!(
+        reservations.join("4410.json").exists(),
+        "the directory is created"
+    );
 
     let quota = tmp.path().join("quota.json");
     std::fs::write(&quota, r#"{"inodes_available": 200000}"#).unwrap();
@@ -205,7 +219,10 @@ fn footprints_take_the_ledger_peak_then_the_table_then_the_classes() {
     assert_eq!(document["default"], 60_000);
     assert_eq!(document["footprints"]["CP2K"], 412_345);
     assert_eq!(document["sources"]["CP2K"]["from"], "ledger");
-    assert_eq!(document["sources"]["CP2K"]["module"], "CP2K/2025.2-foss-2025a");
+    assert_eq!(
+        document["sources"]["CP2K"]["module"],
+        "CP2K/2025.2-foss-2025a"
+    );
     assert_eq!(document["sources"]["CP2K"]["records"], 2);
     // The table's 5000 beats the ledger's 1100 for zlib.
     assert_eq!(document["footprints"]["zlib"], 5_000);

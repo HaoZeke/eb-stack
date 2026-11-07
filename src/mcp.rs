@@ -3304,7 +3304,8 @@ fn stack_admit_tool(arguments: &Value) -> Result<Value, String> {
         ts: optional_string(arguments, "ts"),
     };
     let report = crate::inode_budget::run_stack_admit(&request).map_err(workflow_error)?;
-    let mut result: Value = serde_json::from_str(&report.line).map_err(|error| error.to_string())?;
+    let mut result: Value =
+        serde_json::from_str(&report.line).map_err(|error| error.to_string())?;
     result["text"] = Value::String(report.line.clone());
     Ok(result)
 }

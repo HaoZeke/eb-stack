@@ -369,7 +369,12 @@ fn an_inode_quota_caps_the_concurrent_shards_without_changing_the_lists() {
         "shards=3 prelude=3 lines=4 max_concurrent=2\n"
     );
     // The shard and prelude lists are the ones the plain run wrote.
-    for name in ["prelude.list", "shard-01.list", "shard-02.list", "shard-03.list"] {
+    for name in [
+        "prelude.list",
+        "shard-01.list",
+        "shard-02.list",
+        "shard-03.list",
+    ] {
         assert_eq!(read(plain.join(name)), read(capped.join(name)), "{name}");
     }
     let plan: Value = serde_json::from_str(&read(capped.join("plan.json"))).unwrap();

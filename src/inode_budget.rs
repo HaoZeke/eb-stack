@@ -269,9 +269,7 @@ pub fn derive(
     for (name, (peak, module, records)) in peaks {
         let source = match table.get(&name) {
             Some(tabled) => {
-                footprints
-                    .packages
-                    .insert(name.clone(), peak.max(*tabled));
+                footprints.packages.insert(name.clone(), peak.max(*tabled));
                 Source::LedgerAndTable { module, records }
             }
             None => {
@@ -331,8 +329,9 @@ pub fn run_stack_footprints(args: &FootprintsRequest) -> Result<FootprintsRun> {
     for path in &args.tables {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("--table {}: not readable", path.display()))?;
-        let parsed = parse_table(&text)
-            .map_err(|error| crate::cli_parse::usage(format!("--table {}: {error}", path.display())))?;
+        let parsed = parse_table(&text).map_err(|error| {
+            crate::cli_parse::usage(format!("--table {}: {error}", path.display()))
+        })?;
         table.extend(parsed);
     }
     let stamp = crate::site_commands::generated_at(args.generated_at.clone(), true)?;
@@ -370,8 +369,7 @@ pub fn read_footprints(path: &Path) -> Result<Footprints> {
         .with_context(|| format!("--inode-footprints {}: not readable", path.display()))?;
     let value: Value = serde_json::from_str(&text)
         .with_context(|| format!("--inode-footprints {}: not JSON", path.display()))?;
-    Footprints::from_json(&value)
-        .with_context(|| format!("--inode-footprints {}", path.display()))
+    Footprints::from_json(&value).with_context(|| format!("--inode-footprints {}", path.display()))
 }
 
 /// The inodes one shard holds on scratch while it runs.
@@ -642,10 +640,7 @@ pub fn read_reservations(dir: &Path) -> Result<Vec<Reservation>> {
             .and_then(|s| s.to_str())
             .unwrap_or_default();
         if stem != job {
-            bail!(
-                "reservation {} names job {job}, not {stem}",
-                path.display()
-            );
+            bail!("reservation {} names job {job}, not {stem}", path.display());
         }
         out.push(Reservation {
             job: job.to_string(),
@@ -709,11 +704,10 @@ pub fn decide(
         }
     }
     let reserved = counted.iter().map(|r| r.footprint).sum::<u64>();
-    let headroom = i128::from(available)
-        - i128::from(reserved)
-        - i128::from(footprint)
-        - i128::from(margin);
-    let headroom = i64::try_from(headroom).unwrap_or(if headroom < 0 { i64::MIN } else { i64::MAX });
+    let headroom =
+        i128::from(available) - i128::from(reserved) - i128::from(footprint) - i128::from(margin);
+    let headroom =
+        i64::try_from(headroom).unwrap_or(if headroom < 0 { i64::MIN } else { i64::MAX });
     Decision {
         admitted: headroom >= 0,
         available,
@@ -765,9 +759,8 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
             .context("read --quota-json from stdin")?;
         text
     } else {
-        std::fs::read_to_string(&args.quota_json).with_context(|| {
-            format!("--quota-json {}: not readable", args.quota_json.display())
-        })?
+        std::fs::read_to_string(&args.quota_json)
+            .with_context(|| format!("--quota-json {}: not readable", args.quota_json.display()))?
     };
     let quota_value: Value = serde_json::from_str(&quota_text)
         .with_context(|| format!("--quota-json {}: not JSON", args.quota_json.display()))?;
@@ -878,12 +871,22 @@ mod tests {
     fn derive_prefers_the_ledger_and_the_table_over_the_classes() {
         let entries = [
             entry("CP2K/2025.2-foss-2025a", Some(410_000), 0),
-            entry("LAMMPS/2Aug2023-foss-2025a-kokkos-CUDA-12.8.0", Some(90_000), 1),
+            entry(
+                "LAMMPS/2Aug2023-foss-2025a-kokkos-CUDA-12.8.0",
+                Some(90_000),
+                1,
+            ),
         ];
         let table = parse_table("# name\tinodes\nSeisSol\t200000\nLAMMPS 120000\n").unwrap();
         let (footprints, sources) = derive(&entries, &table);
         assert_eq!(footprints.of_package("CP2K"), 410_000);
-        assert_eq!(sources["CP2K"], Source::Ledger { module: "CP2K/2025.2-foss-2025a".into(), records: 1 });
+        assert_eq!(
+            sources["CP2K"],
+            Source::Ledger {
+                module: "CP2K/2025.2-foss-2025a".into(),
+                records: 1
+            }
+        );
         // The larger of the ledger peak and the table wins.
         assert_eq!(footprints.of_package("LAMMPS"), 120_000);
         assert!(matches!(sources["LAMMPS"], Source::LedgerAndTable { .. }));
@@ -903,7 +906,10 @@ mod tests {
         footprints.packages.insert("SciPy".into(), 65_000);
         assert_eq!(footprints.of_module("CP2K/2025.2-foss-2025a"), 350_000);
         assert_eq!(footprints.of_module("CP2K-2025.2-foss-2025a.eb"), 350_000);
-        assert_eq!(footprints.of_module("SciPy-bundle-2026.03-gfbf-2026a.eb"), 70_000);
+        assert_eq!(
+            footprints.of_module("SciPy-bundle-2026.03-gfbf-2026a.eb"),
+            70_000
+        );
         assert_eq!(footprints.of_module("SciPy-1.16.0-gfbf-2026a.eb"), 65_000);
         assert_eq!(footprints.of_module("CP2Kplus-1.eb"), DEFAULT_FOOTPRINT);
         assert_eq!(footprints.of_module("zlib/1.3.1"), DEFAULT_FOOTPRINT);
@@ -932,11 +938,18 @@ mod tests {
     #[test]
     fn a_shard_costs_its_largest_module_plus_the_line_overhead() {
         let footprints = Footprints::builtin();
-        let modules = ["CP2K/2025.2-foss-2025a", "zlib/1.3.1", "Libint/2.9.0-GCC-14.2.0"]
-            .map(String::from);
+        let modules = [
+            "CP2K/2025.2-foss-2025a",
+            "zlib/1.3.1",
+            "Libint/2.9.0-GCC-14.2.0",
+        ]
+        .map(String::from);
         let footprint = shard_footprint(&modules, 2, &footprints, DEFAULT_LINE_OVERHEAD);
         assert_eq!(footprint.peak, 350_000);
-        assert_eq!(footprint.peak_module.as_deref(), Some("CP2K/2025.2-foss-2025a"));
+        assert_eq!(
+            footprint.peak_module.as_deref(),
+            Some("CP2K/2025.2-foss-2025a")
+        );
         assert_eq!(footprint.overhead, 2_000);
         assert_eq!(footprint.inodes, 352_000);
         let empty = shard_footprint(&[], 1, &footprints, DEFAULT_LINE_OVERHEAD);
@@ -1141,6 +1154,8 @@ mod tests {
         .unwrap();
         let error = read_reservations(dir.path()).unwrap_err().to_string();
         assert!(error.contains("names job 4402, not 4401"), "{error}");
-        assert!(read_reservations(&dir.path().join("absent")).unwrap().is_empty());
+        assert!(read_reservations(&dir.path().join("absent"))
+            .unwrap()
+            .is_empty());
     }
 }
