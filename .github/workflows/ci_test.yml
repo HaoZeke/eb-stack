@@ -130,6 +130,7 @@ jobs:
             --test target_config \
             --test campaign \
             --test ledger \
+            --test ledger_tiles \
             --test mcp_v1
 
   package-closure:
