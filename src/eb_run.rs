@@ -1223,7 +1223,24 @@ fn descendants(root: u32) -> Vec<u32> {
     found
 }
 
-/// Send `signal` (a name `kill -s` takes) to `pids` with the system `kill`.
+/// Send a supported stop-tree signal to every process id.
+#[cfg(unix)]
+fn signal_all(signal: &str, pids: &[u32]) {
+    let number = match signal {
+        "STOP" => libc::SIGSTOP,
+        "KILL" => libc::SIGKILL,
+        _ => return,
+    };
+    for pid in pids {
+        // SAFETY: kill only receives a signal constant and a process id
+        // collected from /proc or returned by Child.
+        unsafe {
+            libc::kill(*pid as libc::pid_t, number);
+        }
+    }
+}
+
+#[cfg(not(unix))]
 fn signal_all(signal: &str, pids: &[u32]) {
     if pids.is_empty() {
         return;
@@ -1246,6 +1263,9 @@ fn signal_all(signal: &str, pids: &[u32]) {
 /// process in it and the child get SIGKILL.
 fn stop_tree(child: &mut std::process::Child) {
     let mut tree: Vec<u32> = Vec::new();
+    // Freeze the root before the termination snapshots so it cannot fork a
+    // child that is reparented after the snapshot and before the root dies.
+    signal_all("STOP", &[child.id()]);
     for _ in 0..5 {
         let found: Vec<u32> = descendants(child.id())
             .into_iter()
@@ -2402,6 +2422,39 @@ configure:9999: $? = 1\n";
             gone_within(child, Duration::from_secs(3)),
             "child {child} still runs"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_forking_probe_leaves_no_child_after_the_root_is_stopped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        write_executable(
+            &fake,
+            "#!/bin/sh\nwhile :; do sleep 300 & echo $! >> children.pid; sleep 0.02; done\n",
+        )
+        .expect("fake eb");
+        let error = configured_robot_paths(
+            &fake,
+            &dir.path().join("show-config.out"),
+            Deadline::after(Duration::from_secs(1)),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("did not finish within"), "{error}");
+        let children: std::collections::BTreeSet<u32> =
+            std::fs::read_to_string(dir.path().join("children.pid"))
+                .expect("children")
+                .lines()
+                .map(|line| line.parse().expect("child pid"))
+                .collect();
+        assert!(!children.is_empty(), "probe spawned no child");
+        for child in children {
+            assert!(
+                gone_within(child, Duration::from_secs(3)),
+                "child {child} still runs"
+            );
+        }
     }
 
     #[cfg(unix)]
