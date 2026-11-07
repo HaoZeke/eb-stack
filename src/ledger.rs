@@ -854,20 +854,22 @@ enum LockMode {
 
 /// Resolve an output namespace through its existing ancestor without creating it.
 fn resolve_namespace_path(path: &Path) -> Result<PathBuf> {
-    let mut ancestor = std::path::absolute(path)
-        .with_context(|| format!("resolve path {}", path.display()))?;
+    let mut ancestor =
+        std::path::absolute(path).with_context(|| format!("resolve path {}", path.display()))?;
     let mut missing = Vec::new();
     let mut resolved = loop {
         match ancestor.canonicalize() {
             Ok(resolved) => break resolved,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let name = ancestor.file_name()
+                let name = ancestor
+                    .file_name()
                     .ok_or_else(|| anyhow!("cannot resolve path {}", path.display()))?;
                 missing.push(name.to_os_string());
                 ancestor.pop();
             }
-            Err(error) => return Err(error)
-                .with_context(|| format!("resolve path {}", path.display())),
+            Err(error) => {
+                return Err(error).with_context(|| format!("resolve path {}", path.display()))
+            }
         }
     };
     for name in missing.into_iter().rev() {
@@ -897,7 +899,8 @@ fn check_tile_namespace(
         if resolved.starts_with(&root) || resolved == gate || resolved == record_gate {
             bail!(
                 "{kind} {} conflicts with tile namespace {}; choose a separate path",
-                path.display(), dir.display()
+                path.display(),
+                dir.display()
             );
         }
         Ok(())
@@ -932,9 +935,7 @@ pub(crate) struct LedgerLock {
 /// needs no new files in its directory. Its record lock also excludes writers
 /// on hosts that do not share a local flock implementation.
 pub(crate) fn tile_writer_lock(dir: &Path) -> Result<LedgerLock> {
-    if std::fs::symlink_metadata(dir)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
+    if std::fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
         bail!("tile directory {} is a symbolic link", dir.display());
     }
     std::fs::create_dir_all(dir)

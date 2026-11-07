@@ -297,5 +297,8 @@ fn sign_head_key_at_tiles_checkpoint_refused_without_replacing_key() {
         String::from_utf8_lossy(&output.stderr)
     );
     let after = std::fs::read(&checkpoint).expect("after");
-    assert_eq!(before, after, "key material at checkpoint must not be replaced");
+    assert_eq!(
+        before, after,
+        "key material at checkpoint must not be replaced"
+    );
 }
