@@ -171,12 +171,14 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_repro_summary",
         "eb_ledger_append",
         "eb_ledger_head",
+        "eb_ledger_tiles",
+        "eb_ledger_find",
         "eb_ledger_show",
         "eb_ledger_verify",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 55, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 57, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2585,6 +2587,8 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_repro_summary", "repro summary"),
         ("eb_ledger_append", "ledger append"),
         ("eb_ledger_head", "ledger head"),
+        ("eb_ledger_tiles", "ledger tiles"),
+        ("eb_ledger_find", "ledger find"),
         ("eb_ledger_show", "ledger show"),
         ("eb_ledger_verify", "ledger verify"),
         ("eb_component_reach", "component-reach"),
@@ -2696,6 +2700,11 @@ fn mcp_schemas_cover_cli_flags() {
             "eb_stack_bot_classify",
             "json",
             "the tool always returns JSON",
+        ),
+        (
+            "eb_ledger_find",
+            "key",
+            "repeatable field=value flag, schema key keys",
         ),
     ];
     assert!(allow.iter().all(|(_, _, reason)| !reason.is_empty()));
@@ -3860,6 +3869,8 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         ("eb_repro_summary", &["repro", "summary"]),
         ("eb_ledger_append", &["ledger", "append"]),
         ("eb_ledger_head", &["ledger", "head"]),
+        ("eb_ledger_tiles", &["ledger", "tiles"]),
+        ("eb_ledger_find", &["ledger", "find"]),
         ("eb_ledger_show", &["ledger", "show"]),
         ("eb_ledger_verify", &["ledger", "verify"]),
         ("eb_pr_overlap", &["pr-overlap"]),

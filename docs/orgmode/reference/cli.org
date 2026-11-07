@@ -61,10 +61,12 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding claim~ | Claim an open finding for one worker |
 | ~campaign finding resolve~ | Resolve a claimed finding with an action, evidence, and the paths it changed |
-| ~ledger append~ | Append one event record to a per-stack ledger as a canonical JSON line and sign the new head |
-| ~ledger head~ | Sign a ledger's current head, for a published anchor |
+| ~ledger append~ | Append one event record to a per-stack ledger as a canonical JSON line and to its tile log, and sign the new head |
+| ~ledger head~ | Sign a ledger's current head and the tile log's checkpoint, for a published anchor |
+| ~ledger tiles~ | Write the tile log beside a ledger, or bring it up to date |
+| ~ledger find~ | Find records by ~field=value~ keys through the tile log's sidecars, each proven in the checkpoint |
 | ~ledger show~ | List ledger records newest first, for one module or software name |
-| ~ledger verify~ | Check that a record is in a signed head, or that one signed head extends another |
+| ~ledger verify~ | Check that a record is in a signed head, or that one signed head extends another, and that the tile log agrees |
 | ~mcp [--workspace]~ | Serve each CLI workflow over stdio, including ~pr-overlap~, ~rebuild-set~, ~component-reach~, and ~easyblock-reach~, with recipe file tools rooted at ~--workspace~ |
 | ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
@@ -1816,20 +1818,29 @@ state, claim ladder, class/disposition table, and repair protocol.
 eb-stack ledger append RECORD.json \
   --log ledger/2026.06.jsonl \
   [--expect-head HEAD.json] \
-  [--key KEY.pem --head-out HEAD.json]
+  [--key KEY.pem --head-out HEAD.json] \
+  [--tiles DIR] [--origin ORIGIN]
 
 eb-stack ledger head \
-  --log ledger/2026.06.jsonl --key KEY.pem --out HEAD.json [--ts RFC3339]
+  --log ledger/2026.06.jsonl --key KEY.pem --out HEAD.json \
+  [--ts RFC3339] [--tiles DIR] [--origin ORIGIN]
+
+eb-stack ledger tiles --log ledger/2026.06.jsonl [--tiles DIR]
+
+eb-stack ledger find \
+  --log ledger/2026.06.jsonl --public-key KEY.pub \
+  --key pkg=PETSc [--key route=kvm ...] \
+  [--tiles DIR] [--origin ORIGIN] [--json]
 
 eb-stack ledger show --log ledger/2026.06.jsonl [--package NAME] [--json]
 
 eb-stack ledger verify \
   --log ledger/2026.06.jsonl --public-key KEY.pub \
-  --record N --head HEAD.json
+  --record N --head HEAD.json [--tiles DIR] [--origin ORIGIN]
 
 eb-stack ledger verify \
   --log ledger/2026.06.jsonl --public-key KEY.pub \
-  --from HEAD1.json --to HEAD2.json
+  --from HEAD1.json --to HEAD2.json [--tiles DIR] [--origin ORIGIN]
 #+end_src
 
 A ledger is one append-only JSON Lines file per stack. Each line is one
@@ -1857,6 +1868,7 @@ order and spacing append the same line.
 | ~location~ | The installation path that RPATHs use |
 | ~action~ | ~install~, ~rebuild-inplace~, ~rebuild-bump~, ~retire~, ~unretire~, ~move~, ~access~, ~remove~, ~finding~, or ~correction~ |
 | ~stage~ | Optional: ~started~, ~finished~, or ~aborted~, for an operation that runs in steps |
+| ~route~ | Optional: ~native~, ~kvm~, or ~qemu~, where the build ran |
 | ~reason~, ~easyconfig~, ~sources~, ~sbom~, ~modulefile~, ~build~ | Optional JSON: free text or an object of references and SHA-256 sums |
 | ~supersedes~, ~superseded_by~, ~moved_from~, ~moved_to~, ~corrects~ | Optional ~id~ of a related record. A ~correction~ needs ~corrects~ |
 | ~index~ | Leaf number. Written by ~append~; a record that carries another value is refused |
@@ -1885,8 +1897,10 @@ file beside the log. ~--public-key~ is the matching PEM (~openssl pkey
 ~append~ locks the log file, checks the log, refuses the record when the
 log is not at the size and root of ~--expect-head~, writes the line, and,
 with ~--key~ and ~--head-out~, writes the signed head after the append. It
-prints ~appended record N id ID; head size S root ROOT~. ~head~ signs the
-log's current head into ~--out~, at ~--ts~ or now.
+prints ~appended record N id ID; head size S root ROOT~, then the tile
+log line below. ~head~ signs the
+log's current head into ~--out~, at ~--ts~ or now, and the tile log's
+checkpoint.
 
 *Locking and crashes.* Writers take an exclusive POSIX record lock on
 ~LOG.posix-lock~ beside the log; ~head~ takes a shared lock on the same
@@ -1918,7 +1932,62 @@ log, or any line changed, makes the root differ. ~verify --from HEAD1 --to
 HEAD2~ checks both signatures, computes the consistency proof from HEAD1's
 size to HEAD2's size, and checks that it yields both roots. A log rewritten
 under HEAD1 and signed again fails, because no proof yields the old root
-and the new one.
+and the new one. After the proof, ~verify~ checks the tile log as
+described next, and prints ~tile log size S root ROOT extends the head
+and holds the same lines~.
+
+*Tile log.* Beside the file, ~append~ keeps the same lines as a
+[[https://c2sp.org/tlog-tiles][C2SP tlog-tiles]] log through the
+~rfc9162-tiles~ crate: ~--tiles DIR~, or the log's path with ~.tiles~
+(~ledger/2026.06.jsonl.tiles~). The leaves are the same bytes, so the
+root over the tile log at size ~N~ is the root of the first ~N~ lines, and
+any tlog-tiles client reads the tree. Hash tiles live under ~tile/<L>/~,
+entry bundles of 256 lines under ~tile/entries/~, one key sidecar per
+sealed bundle under ~tile/index/~, a ~manifest~ of the sidecars, the
+writer's tree state under ~.state/~, and the ~checkpoint~. A line over
+65535 bytes does not fit a bundle and the append fails.
+
+The JSON Lines file is the ledger. The tile log follows it: ~append~ adds
+the new line, and ~tiles~ adds every line the tile log lacks, so an
+existing log gets a tile log with one ~ledger tiles --log LOG~. A tile
+log whose entries disagree with the ledger is moved to
+~DIR.stale-<time>~ and rebuilt from the ledger; the command prints a
+warning on stderr that names the old directory. The old directory keeps
+its checkpoint, which a consistency check against a later head or
+checkpoint still fails.
+
+*Keys.* Each entry's lookup keys are read from its line: ~module=~ (the
+whole module name), ~pkg=~ (the software name before the slash),
+~target=~, ~action=~, ~route=~, ~actor=~, ~id=~ (the record ~id~), and
+~job=~ from a ~job~ string inside ~build~, each for a field the record
+carries. ~find --key FIELD=VALUE~ reads the sidecars and the unsealed
+tail for each key and prints the records that carry every key, one
+~index<TAB>line~ per record in index order, then ~K of N records match;
+checkpoint ORIGIN size N root ROOT~. ~--json~ prints the records as a JSON
+array. A record past the checkpoint is counted in a last line, ~M more
+past the checkpoint, not shown; ledger head signs them~, and is not
+printed. A ~--key~ without ~=~ is status 2.
+
+*Checkpoints.* ~head~, and ~append~ with ~--key~, sign the tile log's size
+and root as a C2SP checkpoint (an Ed25519 signed note) at
+~DIR/checkpoint~, with the same key as the head file. The origin line is
+~--origin~, or ~eb-stack-ledger/<stack>/<year>~ from the first record's
+~stack~ and the year of its ~ts~, so it is the same for the life of the
+log; an origin with whitespace or a plus is status 2. The key name on the
+signature line is the origin, as the checkpoint specification asks. A
+checkpoint published for a larger size is never replaced. ~find~ reads
+the checkpoint, checks its signature against ~--public-key~ under the
+same origin, checks that the tile log's tree extends the checkpoint, and
+checks the inclusion proof of every record it prints against the tree,
+so a record it prints is in the signed checkpoint. ~verify~ checks that
+the tile log's tree extends the signed head (a consistency proof read
+from the tiles, each tile checked against the tree), that the tile log's
+entries are the ledger's lines for every record the head covers, and,
+when ~DIR/checkpoint~ exists, that it is signed by ~--public-key~ as the
+origin and is a prefix of the tree too. A changed tile, a changed
+bundle, a rewritten tree state, a tile log of another ledger, a missing
+tile log, or a tile log behind the head is status 1, and the message
+names the tile log and the file.
 
 * ~repro summary~
 
@@ -2010,8 +2079,8 @@ plus sandboxed recipe and easyblock tools:
   ~--kind easyconfigs~, a merge order, and ~--impact~),
   ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~;
 - ~eb_repro_summary~;
-- ~eb_ledger_append~, ~eb_ledger_head~, ~eb_ledger_show~,
-  ~eb_ledger_verify~.
+- ~eb_ledger_append~, ~eb_ledger_head~, ~eb_ledger_tiles~,
+  ~eb_ledger_find~, ~eb_ledger_show~, ~eb_ledger_verify~.
 
 ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and
 ~eb_recipe_grep~ resolve every path inside that root. A ~..~ component, an
@@ -2102,12 +2171,21 @@ known-failures and oom warnings.
 ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~.
 ~eb_ledger_append~ requires ~log~ and ~record~ and takes ~expect_head~,
-~key~ and ~head_out~; it also returns ~index~, ~id~, ~size~, ~root~ and the
-signed head. ~eb_ledger_head~ requires ~log~, ~key~ and ~out~ and takes ~ts~.
+~key~, ~head_out~, ~tiles~ and ~origin~; it also returns ~index~, ~id~,
+~size~, ~root~, the signed head, the tile log's state under ~tiles~ and
+the ~checkpoint~ when a key signed one. ~eb_ledger_head~ requires ~log~,
+~key~ and ~out~ and takes ~ts~, ~tiles~ and ~origin~; it returns the
+~head~, ~tiles~ and ~checkpoint~. ~eb_ledger_tiles~ requires ~log~ and
+takes ~tiles~. ~eb_ledger_find~ requires ~log~, ~public_key~ and ~keys~
+(an array of ~field=value~ strings, at least one) and takes ~tiles~,
+~origin~ and ~json~; it returns ~found~ (index and record per hit),
+~unsigned~, ~checkpoint_size~ and ~checkpoint_root~.
 ~eb_ledger_show~ requires ~log~ and takes ~package~ and ~json~, and returns
 the records. ~eb_ledger_verify~ requires ~log~ and ~public_key~, and either
-~record~ (an integer) with ~head~, or ~from~ with ~to~; it returns the proof
-nodes, and a proof that does not check is a tool error. Each of these tools
+~record~ (an integer) with ~head~, or ~from~ with ~to~, and takes ~tiles~
+and ~origin~; it returns the proof nodes and the tile log's ~tiles_size~
+and ~tiles_root~, and a proof or a tile log that does not check is a
+tool error. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.
 

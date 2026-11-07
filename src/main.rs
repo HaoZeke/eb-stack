@@ -93,7 +93,7 @@ enum Command {
     },
     /// Append to, list, and verify a per-stack software ledger.
     #[command(
-        after_long_help = "Examples:\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl --key ~/keys/ledger.pem --head-out head.json\n  eb-stack ledger show --log ledger/2026.06.jsonl --package PETSc\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --record 3 --head head.json"
+        after_long_help = "Examples:\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl --key ~/keys/ledger.pem --head-out head.json\n  eb-stack ledger show --log ledger/2026.06.jsonl --package PETSc\n  eb-stack ledger find --log ledger/2026.06.jsonl --public-key ledger.pub --key pkg=PETSc --key route=kvm\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --record 3 --head head.json"
     )]
     Ledger {
         #[command(subcommand)]
@@ -462,13 +462,14 @@ enum ReproCommand {
 
 #[derive(Subcommand, Debug)]
 enum LedgerCommand {
-    /// Append one record to the log and sign the new head.
+    /// Append one record to the log and its tile log, and sign the new head.
     ///
     /// The record is a JSON object with the ledger fields. It is written as
     /// one canonical line: keys sorted, no whitespace, integers only, with
     /// `index` (its leaf number) and `id` (SHA-256 of the record without
     /// `id` and `sig`) filled in. `ts` defaults to now, in UTC. The log file
-    /// is locked for the append.
+    /// is locked for the append. The same line goes into the tile log beside
+    /// the file, and with `--key` its checkpoint is signed too.
     #[command(
         after_long_help = "Examples:\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl\n  eb-stack ledger append record.json --log ledger/2026.06.jsonl --expect-head head.json --key ~/keys/ledger.pem --head-out head.json"
     )]
@@ -487,8 +488,14 @@ enum LedgerCommand {
         /// File for the signed head after the append.
         #[arg(long, requires = "key")]
         head_out: Option<PathBuf>,
+        /// The tile log directory. Defaults to the log's path with `.tiles`.
+        #[arg(long)]
+        tiles: Option<PathBuf>,
+        /// Checkpoint origin for the tile log. Defaults to `eb-stack-ledger/<stack>/<year>`.
+        #[arg(long, requires = "key")]
+        origin: Option<String>,
     },
-    /// Sign the log's current head.
+    /// Sign the log's current head and the tile log's checkpoint.
     #[command(
         after_long_help = "Examples:\n  eb-stack ledger head --log ledger/2026.06.jsonl --key ~/keys/ledger.pem --out anchor.json"
     )]
@@ -505,6 +512,58 @@ enum LedgerCommand {
         /// Signing time, RFC 3339 in UTC. Defaults to now.
         #[arg(long)]
         ts: Option<String>,
+        /// The tile log directory. Defaults to the log's path with `.tiles`.
+        #[arg(long)]
+        tiles: Option<PathBuf>,
+        /// Checkpoint origin. Defaults to `eb-stack-ledger/<stack>/<year>` from the first record.
+        #[arg(long)]
+        origin: Option<String>,
+    },
+    /// Write the tile log beside the ledger, or bring it up to date.
+    ///
+    /// Appends the lines the tile log lacks. A tile log whose entries
+    /// disagree with the ledger is moved to `<tiles>.stale-<time>` and
+    /// rebuilt from the ledger.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger tiles --log ledger/2026.06.jsonl\n  eb-stack ledger tiles --log ledger/2026.06.jsonl --tiles /srv/tiles/2026.06"
+    )]
+    Tiles {
+        /// The JSON Lines log.
+        #[arg(long)]
+        log: PathBuf,
+        /// The tile log directory. Defaults to the log's path with `.tiles`.
+        #[arg(long)]
+        tiles: Option<PathBuf>,
+    },
+    /// Find records by key through the tile log's sidecars.
+    ///
+    /// A record matches when it carries every `--key`. Keys are
+    /// `module=NAME`, `pkg=SOFTWARE`, `target=T`, `action=A`, `route=R`,
+    /// `actor=WHO`, `id=HEX`, and `job=J` from `build.job`. Each match is
+    /// proven in the signed checkpoint before it is printed; matches past
+    /// the checkpoint are counted and left out.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack ledger find --log ledger/2026.06.jsonl --public-key ledger.pub --key pkg=PETSc\n  eb-stack ledger find --log ledger/2026.06.jsonl --public-key ledger.pub --key pkg=VASP --key route=kvm --json"
+    )]
+    Find {
+        /// The JSON Lines log; its first line gives the checkpoint origin.
+        #[arg(long)]
+        log: PathBuf,
+        /// The tile log directory. Defaults to the log's path with `.tiles`.
+        #[arg(long)]
+        tiles: Option<PathBuf>,
+        /// A `field=value` key; repeat to match every one.
+        #[arg(long = "key", value_name = "FIELD=VALUE", required = true)]
+        key: Vec<String>,
+        /// Ed25519 public key the checkpoint is signed by: PEM, or 64 hex characters.
+        #[arg(long)]
+        public_key: PathBuf,
+        /// Checkpoint origin. Defaults to `eb-stack-ledger/<stack>/<year>` from the first record.
+        #[arg(long)]
+        origin: Option<String>,
+        /// Print the records as a JSON array instead of index and line.
+        #[arg(long)]
+        json: bool,
     },
     /// List records, newest first.
     #[command(
@@ -525,8 +584,10 @@ enum LedgerCommand {
     ///
     /// `--record N --head HEAD` checks that record N is in HEAD.
     /// `--from HEAD1 --to HEAD2` checks that HEAD2 extends HEAD1. Every head
-    /// must be signed by `--public-key`. Exit status 1 when a proof or a
-    /// signature does not check.
+    /// must be signed by `--public-key`. The tile log must extend the head
+    /// and hold the same lines, and a checkpoint it holds must be signed by
+    /// the same key. Exit status 1 when a proof, a signature or the tile
+    /// log does not check.
     #[command(
         after_long_help = "Examples:\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --record 3 --head head.json\n  eb-stack ledger verify --log ledger/2026.06.jsonl --public-key ledger.pub --from anchor-1102.json --to anchor-1103.json",
         group(clap::ArgGroup::new("proof").required(true).args(["record", "from"]))
@@ -550,6 +611,12 @@ enum LedgerCommand {
         /// The later signed head, which must extend --from.
         #[arg(long, requires = "from")]
         to: Option<PathBuf>,
+        /// The tile log directory. Defaults to the log's path with `.tiles`.
+        #[arg(long)]
+        tiles: Option<PathBuf>,
+        /// Checkpoint origin. Defaults to `eb-stack-ledger/<stack>/<year>` from the first record.
+        #[arg(long)]
+        origin: Option<String>,
     },
 }
 
@@ -2101,6 +2168,8 @@ fn run_ledger(command: LedgerCommand) -> Result<()> {
             expect_head,
             key,
             head_out,
+            tiles,
+            origin,
         } => {
             let report = ledger::append(&ledger::AppendRequest {
                 log,
@@ -2108,23 +2177,72 @@ fn run_ledger(command: LedgerCommand) -> Result<()> {
                 expect_head,
                 key,
                 head_out,
+                tiles,
+                origin,
             })?;
             println!("{}", report.summary());
+            println!("{}", report.tiles.summary());
+            if let Some(checkpoint) = &report.checkpoint {
+                println!("{}", checkpoint.summary());
+            }
+            if let Some(warning) = report.tiles.warning() {
+                eprintln!("{warning}");
+            }
         }
-        LedgerCommand::Head { log, key, out, ts } => {
-            let head = ledger::sign_head(&ledger::HeadRequest {
+        LedgerCommand::Head {
+            log,
+            key,
+            out,
+            ts,
+            tiles,
+            origin,
+        } => {
+            let report = ledger::sign_head(&ledger::HeadRequest {
                 log,
                 key,
                 out: out.clone(),
                 ts,
+                tiles,
+                origin,
             })?;
             println!(
                 "signed head size {} root {} at {} to {}",
-                head.size,
-                head.root,
-                head.ts,
+                report.head.size,
+                report.head.root,
+                report.head.ts,
                 out.display()
             );
+            println!("{}", report.checkpoint.summary());
+            if let Some(warning) = report.tiles.warning() {
+                eprintln!("{warning}");
+            }
+        }
+        LedgerCommand::Tiles { log, tiles } => {
+            let entries = ledger::read_log(&log)?;
+            let dir = eb_stack::ledger_tiles::tiles_dir(&log, tiles.as_deref());
+            let report = eb_stack::ledger_tiles::sync(&entries, &dir)?;
+            println!("{}", report.summary());
+            if let Some(warning) = report.warning() {
+                eprintln!("{warning}");
+            }
+        }
+        LedgerCommand::Find {
+            log,
+            tiles,
+            key,
+            public_key,
+            origin,
+            json,
+        } => {
+            let report = eb_stack::ledger_tiles::find(&eb_stack::ledger_tiles::FindRequest {
+                log,
+                tiles,
+                keys: key,
+                public_key,
+                origin,
+                json,
+            })?;
+            print!("{}", report.stdout);
         }
         LedgerCommand::Show { log, package, json } => {
             let report = ledger::show(&ledger::ShowRequest { log, package, json })?;
@@ -2137,6 +2255,8 @@ fn run_ledger(command: LedgerCommand) -> Result<()> {
             head,
             from,
             to,
+            tiles,
+            origin,
         } => {
             let mode = match (record, head, from, to) {
                 (Some(record), Some(head), None, None) => {
@@ -2153,6 +2273,8 @@ fn run_ledger(command: LedgerCommand) -> Result<()> {
                 log,
                 public_key,
                 mode,
+                tiles,
+                origin,
             })?;
             print!("{}", report.stdout);
         }

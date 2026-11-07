@@ -58,9 +58,11 @@ flate2 = "1"
 tar = "0.4"
 object = { version = "0.40.0", default-features = false, features = ["std", "read"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
-# RFC 9162 Merkle log for `ledger`. Pinned exactly: a different tree hash
-# would change every recorded root and signed head.
-rfc9162 = "=0.6.1"
+# RFC 9162 Merkle log for `ledger`, plus tiled/indexed storage.
+# A shared source gives both crates the same Merkle tree types.
+# Exact versions define registry dependencies, and the revision fixes development source.
+rfc9162 = { version = "=0.6.1", git = "https://github.com/leidarljos/rfc9162", rev = "efe31c32a8a7026c4c6d975cac9f35ed2bee2e53" }
+rfc9162-tiles = { version = "=0.6.1", git = "https://github.com/leidarljos/rfc9162", rev = "efe31c32a8a7026c4c6d975cac9f35ed2bee2e53" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

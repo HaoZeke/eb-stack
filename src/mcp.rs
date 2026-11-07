@@ -729,19 +729,33 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_ledger_append",
-            "Append one record to a per-stack ledger as a canonical JSON line and, with key and head_out, sign the new head. Same writer as `ledger append`.",
+            "Append one record to a per-stack ledger as a canonical JSON line and to its tile log, and, with key and head_out, sign the new head and the tile log's checkpoint. Same writer as `ledger append`.",
             &[("log", "string"), ("record", "string")],
             &[
                 ("expect_head", "string"),
                 ("key", "string"),
                 ("head_out", "string"),
+                ("tiles", "string"),
+                ("origin", "string"),
             ],
         ),
         tool_with_optional(
             "eb_ledger_head",
-            "Sign a ledger's current head with an Ed25519 key kept outside the log's directory. Same as `ledger head`.",
+            "Sign a ledger's current head and its tile log's C2SP checkpoint with an Ed25519 key kept outside the log's directory. Same as `ledger head`.",
             &[("log", "string"), ("key", "string"), ("out", "string")],
-            &[("ts", "string")],
+            &[("ts", "string"), ("tiles", "string"), ("origin", "string")],
+        ),
+        tool_with_optional(
+            "eb_ledger_tiles",
+            "Write the tile log beside a ledger or bring it up to date; a tile log that disagrees with the ledger is moved aside and rebuilt. Same as `ledger tiles`.",
+            &[("log", "string")],
+            &[("tiles", "string")],
+        ),
+        tool_with_optional(
+            "eb_ledger_find",
+            "Find ledger records carrying every field=value key through the tile log's sidecars, each proven in the signed checkpoint. Same as `ledger find`.",
+            &[("log", "string"), ("public_key", "string"), ("keys", "array_min1")],
+            &[("tiles", "string"), ("origin", "string"), ("json", "boolean")],
         ),
         tool_with_optional(
             "eb_ledger_show",
@@ -751,13 +765,15 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_ledger_verify",
-            "Check that a ledger record is in a signed head (record and head), or that one signed head extends another (from and to). Same checks as `ledger verify`.",
+            "Check that a ledger record is in a signed head (record and head), or that one signed head extends another (from and to), and that the tile log extends the head with the same lines. Same checks as `ledger verify`.",
             &[("log", "string"), ("public_key", "string")],
             &[
                 ("record", "integer"),
                 ("head", "string"),
                 ("from", "string"),
                 ("to", "string"),
+                ("tiles", "string"),
+                ("origin", "string"),
             ],
         ),
     ];
@@ -902,6 +918,8 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_repro_summary" => repro_summary_tool(arguments),
         "eb_ledger_append" => ledger_append_tool(arguments),
         "eb_ledger_head" => ledger_head_tool(arguments),
+        "eb_ledger_tiles" => ledger_tiles_tool(arguments),
+        "eb_ledger_find" => ledger_find_tool(arguments),
         "eb_ledger_show" => ledger_show_tool(arguments),
         "eb_ledger_verify" => ledger_verify_tool(arguments),
         _ => Err(format!("unknown tool: {name}")),
@@ -3635,37 +3653,81 @@ fn ledger_append_tool(arguments: &Value) -> Result<Value, String> {
         expect_head: optional_path(arguments, "expect_head"),
         key: optional_path(arguments, "key"),
         head_out: optional_path(arguments, "head_out"),
+        tiles: optional_path(arguments, "tiles"),
+        origin: optional_string(arguments, "origin"),
     })
     .map_err(workflow_error)?;
+    let mut text = format!("{}\n{}", report.summary(), report.tiles.summary());
+    if let Some(checkpoint) = &report.checkpoint {
+        text.push('\n');
+        text.push_str(&checkpoint.summary());
+    }
     Ok(json!({
-        "text": report.summary(),
+        "text": text,
         "index": report.index,
         "id": report.id,
         "size": report.head.size,
         "root": report.head.root,
         "signed": report.signed,
         "replayed": report.replayed,
+        "tiles": report.tiles,
+        "checkpoint": report.checkpoint,
     }))
 }
 
 fn ledger_head_tool(arguments: &Value) -> Result<Value, String> {
     let out = required_path(arguments, "out")?;
-    let head = crate::ledger::sign_head(&crate::ledger::HeadRequest {
+    let report = crate::ledger::sign_head(&crate::ledger::HeadRequest {
         log: required_path(arguments, "log")?,
         key: required_path(arguments, "key")?,
         out: out.clone(),
         ts: optional_string(arguments, "ts"),
+        tiles: optional_path(arguments, "tiles"),
+        origin: optional_string(arguments, "origin"),
     })
     .map_err(workflow_error)?;
     Ok(json!({
         "text": format!(
-            "signed head size {} root {} at {} to {}",
-            head.size,
-            head.root,
-            head.ts,
-            out.display()
+            "signed head size {} root {} at {} to {}\n{}",
+            report.head.size,
+            report.head.root,
+            report.head.ts,
+            out.display(),
+            report.checkpoint.summary()
         ),
-        "head": head,
+        "head": report.head,
+        "tiles": report.tiles,
+        "checkpoint": report.checkpoint,
+    }))
+}
+
+fn ledger_tiles_tool(arguments: &Value) -> Result<Value, String> {
+    let log = required_path(arguments, "log")?;
+    let entries = crate::ledger::read_log(&log).map_err(workflow_error)?;
+    let dir = crate::ledger_tiles::tiles_dir(&log, optional_path(arguments, "tiles").as_deref());
+    let report = crate::ledger_tiles::sync(&entries, &dir).map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.summary(),
+        "tiles": report,
+    }))
+}
+
+fn ledger_find_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::ledger_tiles::find(&crate::ledger_tiles::FindRequest {
+        log: required_path(arguments, "log")?,
+        tiles: optional_path(arguments, "tiles"),
+        keys: string_array(arguments, "keys")?,
+        public_key: required_path(arguments, "public_key")?,
+        origin: optional_string(arguments, "origin"),
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "found": report.found,
+        "unsigned": report.unsigned,
+        "checkpoint_size": report.checkpoint_size,
+        "checkpoint_root": report.checkpoint_root,
     }))
 }
 
@@ -3702,12 +3764,16 @@ fn ledger_verify_tool(arguments: &Value) -> Result<Value, String> {
         log: required_path(arguments, "log")?,
         public_key: required_path(arguments, "public_key")?,
         mode,
+        tiles: optional_path(arguments, "tiles"),
+        origin: optional_string(arguments, "origin"),
     })
     .map_err(workflow_error)?;
     Ok(json!({
         "text": report.stdout,
         "kind": report.kind,
         "proof": report.proof,
+        "tiles_size": report.tiles_size,
+        "tiles_root": report.tiles_root,
     }))
 }
 

@@ -536,6 +536,8 @@ fn in_process_signers_keep_cross_process_writers_out() {
                         key: fixture.key.clone(),
                         out: head.clone(),
                         ts: None,
+                        tiles: None,
+                        origin: None,
                     })
                     .unwrap_or_else(|error| panic!("signer {n}: {error:#}"));
                 }
@@ -551,6 +553,8 @@ fn in_process_signers_keep_cross_process_writers_out() {
                         expect_head: None,
                         key: Some(fixture.key.clone()),
                         head_out: Some(head.clone()),
+                        tiles: None,
+                        origin: None,
                     })
                     .unwrap_or_else(|error| panic!("writer: {error:#}"));
                 }
