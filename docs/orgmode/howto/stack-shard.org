@@ -74,3 +74,64 @@ filename, a tab, then seconds. A module the file does not list weighs
 A line whose easyconfig is not on the robot path exits 1 and writes
 nothing. ~eb_stack_shard~ is the same command. See
 [[file:../reference/cli.org][the CLI reference]].
+
+* Plan around a scratch inode quota
+
+A native build job keeps its build tree on scratch while it runs, and a
+GPFS scratch has an inode quota. Seven lanes at once, three of them
+CP2K-sized, put a campaign over a three-million-inode quota, and a check
+that only reads the free count at start time admits one lane too many.
+The planner decides the cap instead, and the controller reserves what
+each lane will hold.
+
+First the footprint table. A ledger record whose ~build~ object carries
+~inodes_peak~ says what one build reached; a static table covers
+packages the ledger has not seen; the built-in classes cover the rest
+(CP2K 350000; LAMMPS, PyTorch, SeisSol, NVHPC, intel 150000; else
+60000):
+
+#+begin_src bash
+eb-stack stack footprints \
+  --ledger ledger/2025.jsonl \
+  --table site-footprints.tsv \
+  --out footprints.json
+#+end_src
+
+Then the plan, with the quota the scratch has and the margin to keep
+free:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list genoa.list \
+  --easyconfigs easyconfigs \
+  --shards 7 \
+  --inode-quota 3000000 --inode-margin 100000 \
+  --inode-footprints footprints.json \
+  --out-dir shards
+#+end_src
+
+Each shard in ~shards/plan.json~ now carries ~inode_footprint~, its
+largest module footprint plus 1000 inodes per line, and the plan carries
+~max_concurrent_shards~, the most shards, largest first, that fit under
+2900000 at once. The shard lists are the ones the command writes without
+the flags.
+
+Before the controller starts a lane it asks the quota and the scheduler,
+and lets ~stack admit~ decide:
+
+#+begin_src bash
+eb-stack stack admit \
+  --quota-json quota.json \
+  --footprint "$(jq '.shards[] | select(.name=="shard-01") | .inode_footprint' shards/plan.json)" \
+  --job "$SLURM_JOB_ID" \
+  --reservations reservations \
+  --live-jobs "$(squeue -h -o %i -u jenkins | paste -sd,)"
+#+end_src
+
+~quota.json~ is ~{"inodes_used": U, "inodes_soft": S, "inodes_hard": H}~
+from the site's quota command. The lane starts when the available inodes
+minus the reservations of the live jobs cover its footprint plus the
+margin; the command then writes ~reservations/<job>.json~ and exits 0.
+Otherwise it exits 78 and the controller waits. A reservation of a job
+no longer in the live list is dropped on the way. ~eb_stack_footprints~
+and ~eb_stack_admit~ are the same commands over MCP.
