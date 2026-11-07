@@ -175,7 +175,7 @@ impl SyncReport {
     }
 
     /// The warning a rebuild earns, for stderr.
-    #[must_use]
+    #[must_use = "tile rebuild warnings must be surfaced"]
     pub fn warning(&self) -> Option<String> {
         self.rebuilt_from.as_ref().map(|stale| {
             format!(
