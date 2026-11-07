@@ -148,6 +148,8 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_stack_shadow",
         "eb_stack_batch",
         "eb_stack_shard",
+        "eb_stack_footprints",
+        "eb_stack_admit",
         "eb_stack_arch",
         "eb_stack_files",
         "eb_stack_generation",
@@ -178,7 +180,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 57, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 59, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()

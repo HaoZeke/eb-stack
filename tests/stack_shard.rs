@@ -333,3 +333,100 @@ fn the_mcp_tool_writes_the_same_files_as_the_command() {
         assert_eq!(read(cli.join(&name)), read(mcp.join(&name)), "{name}");
     }
 }
+
+#[test]
+fn an_inode_quota_caps_the_concurrent_shards_without_changing_the_lists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = tmp.path().join("plain");
+    assert!(shard("wave1.list", &plain, &["--shards", "4"])
+        .status
+        .success());
+    let capped = tmp.path().join("capped");
+    let footprints = fixture("footprints.json");
+    // PETSc is 240,000 in the table; the rest default to 60,000. Shard
+    // footprints: the PETSc shard 240,000 + 2 lines * 1000 = 242,000; the
+    // ParaView and OpenFOAM shards 61,000 each. The quota 450,000 minus the
+    // margin 100,000 fits the two largest (303,000), not all three (364,000).
+    let run = shard(
+        "wave1.list",
+        &capped,
+        &[
+            "--shards",
+            "4",
+            "--inode-quota",
+            "450000",
+            "--inode-footprints",
+            &footprints,
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "shards=3 prelude=3 lines=4 max_concurrent=2\n"
+    );
+    // The shard and prelude lists are the ones the plain run wrote.
+    for name in ["prelude.list", "shard-01.list", "shard-02.list", "shard-03.list"] {
+        assert_eq!(read(plain.join(name)), read(capped.join(name)), "{name}");
+    }
+    let plan: Value = serde_json::from_str(&read(capped.join("plan.json"))).unwrap();
+    assert_eq!(plan["max_concurrent_shards"], 2);
+    assert_eq!(plan["inode_budget"]["quota"], 450_000);
+    assert_eq!(plan["inode_budget"]["margin"], 100_000);
+    assert_eq!(plan["inode_budget"]["budget"], 350_000);
+    assert_eq!(plan["inode_budget"]["default_footprint"], 60_000);
+    assert_eq!(plan["inode_budget"]["line_overhead"], 1_000);
+    assert_eq!(
+        plan["inode_budget"]["footprints_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    let shards = plan["shards"].as_array().unwrap();
+    assert_eq!(shards[0]["inode_footprint"], 242_000);
+    assert_eq!(
+        shards[0]["inode_peak_module"],
+        "PETSc/3.23.0-GCCcore-15.2.0"
+    );
+    assert_eq!(shards[0]["inode_overhead"], 2_000);
+    assert_eq!(shards[1]["inode_footprint"], 61_000);
+    assert_eq!(shards[2]["inode_footprint"], 61_000);
+    // The prelude builds three modules in one job: 60,000 + 1,000.
+    assert_eq!(plan["prelude"]["inode_footprint"], 61_000);
+    // The digest changes with the budget; the plain plan has none.
+    let plain_plan: Value = serde_json::from_str(&read(plain.join("plan.json"))).unwrap();
+    assert_ne!(plain_plan["inputs"]["sha256"], plan["inputs"]["sha256"]);
+    assert_eq!(plain_plan["max_concurrent_shards"], 3);
+    assert!(plain_plan["inode_budget"]["quota"].is_null());
+    assert_eq!(plain_plan["shards"][0]["inode_footprint"], 62_000);
+
+    // A quota the largest shard does not fit under exits 1 and writes nothing.
+    let small = tmp.path().join("small");
+    let run = shard(
+        "wave1.list",
+        &small,
+        &[
+            "--shards",
+            "4",
+            "--inode-quota",
+            "300000",
+            "--inode-footprints",
+            &footprints,
+        ],
+    );
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("shard-01 needs 242000 inodes"), "{stderr}");
+    assert!(!small.exists());
+    // A margin at or above the quota is a usage error.
+    let run = shard(
+        "wave1.list",
+        &small,
+        &["--shards", "4", "--inode-quota", "100000"],
+    );
+    assert_eq!(run.status.code(), Some(2));
+}
