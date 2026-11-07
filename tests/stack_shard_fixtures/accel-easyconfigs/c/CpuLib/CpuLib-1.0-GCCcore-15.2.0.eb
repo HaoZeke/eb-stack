@@ -1,0 +1,15 @@
+easyblock = 'ConfigureMake'
+
+name = 'CpuLib'
+version = '1.0'
+
+homepage = 'https://example.org/CpuLib'
+description = "Fixture CPU-only shared library for stack shard CPU lift."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'lib'

@@ -503,6 +503,7 @@ eb-stack stack shard \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
   [--filter-deps NAME,NAME...] \
+  [--lift-cpu-prerequisites] \
   [--generated-at 2026-11-03T00:00:00Z] \
   --out-dir SHARDS
 
@@ -865,13 +866,24 @@ carries that line's ~--from-commit~, ~--from-pr~ and
 ~--include-easyblocks-from-*~ options, so it builds the same easyconfig
 with the same easyblock.
 
+~--lift-cpu-prerequisites~ is opt-in. It writes CPU-only prerequisites
+(including CPU-only build-list roots and their missing CPU closure) to
+~cpu-prerequisites.list~, keeps shared accelerator packages in
+~prelude.list~, and leaves accelerator-only work on the CUDA shards.
+Off by default: only modules two or more shards share go to the prelude.
+EESSI refuses to install a CPU-only package into an ~/accel/~ prefix; build
+the CPU list under the CPU install path first, then the accelerator
+prelude, then the shards.
+
 ~--out-dir~ gets ~prelude.list~ (the prelude as easyconfig filenames in
 dependency order; empty when nothing is shared), ~shard-NN.list~ (the input
 lines verbatim, dependencies first), and ~plan.json~ (each line's closure,
 group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
-easyconfig a closure reached). A ~shard-NN.list~ that an earlier run left
-and this run does not write is removed.
+easyconfig a closure reached). With ~--lift-cpu-prerequisites~, it also
+gets ~cpu-prerequisites.list~ when any CPU-only module or root was lifted.
+A ~shard-NN.list~ that an earlier run left and this run does not write is
+removed.
 
 ~--materialize~ also writes, for each ~--from-commit~ source, the directory
 ~sources/v1/SHA/~ and its manifest ~sources/v1/SHA.json~ (schema version 1:

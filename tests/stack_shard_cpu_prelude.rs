@@ -2,9 +2,11 @@
 //!
 //! Synthetic tree covers: two CUDA roots sharing a GPU dependency plus an
 //! unshared CPU dependency; build-only CUDA (public DualSPHysics / Triton
-//! builddep pattern); filtered CUDA; an installed CPU provider; and
-//! from-commit materialization of a lifted CPU recipe. Default `stack shard`
-//! keeps legacy prelude semantics.
+//! builddep pattern); filtered CUDA; an installed CPU provider; from-commit
+//! materialization of a lifted CPU recipe; and two CPU roots sharing a CPU
+//! dependency beside an accelerator root. Also runs the committed
+//! `tests/stack_shard_fixtures/accel*.list` howto fixtures. Default
+//! `stack shard` keeps legacy prelude semantics.
 
 use serde_json::Value;
 use std::fs;
@@ -498,5 +500,134 @@ fn lifted_from_commit_cpu_recipe_keeps_source_options_on_cpu_list() {
     assert!(
         prelude.contains("GpuLib"),
         "shared accelerator dep stays in ordinary prelude: {prelude}"
+    );
+}
+
+/// Two CPU roots sharing CpuLib plus one accelerator root: the shared CPU
+/// dependency and both roots belong to the CPU phase; the accelerator prelude
+/// / shard contain only accelerator packages.
+#[test]
+fn two_cpu_roots_sharing_cpu_dep_with_accel_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out-cpu-roots");
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "stack",
+            "shard",
+            "--build-list",
+            "tests/stack_shard_fixtures/accel-with-cpu-roots.list",
+            "--easyconfigs",
+            "tests/stack_shard_fixtures/accel-easyconfigs",
+            "--installed",
+            "tests/stack_shard_fixtures/accel-installed.txt",
+            "--shards",
+            "4",
+            "--lift-cpu-prerequisites",
+            "--generated-at",
+            "2026-11-07T00:00:00Z",
+            "--out-dir",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let plan = plan_json(&out);
+    let cpu = modules(&plan, "cpu");
+    assert!(
+        cpu.iter().any(|m| m.starts_with("CpuLib/")),
+        "shared CpuLib is owned by the CPU phase: {cpu:?}"
+    );
+    let roots = plan["cpu_prerequisites"]["roots"].as_array().unwrap();
+    let root_names: Vec<&str> = roots
+        .iter()
+        .map(|r| r["module"].as_str().unwrap())
+        .collect();
+    assert!(
+        root_names.iter().any(|m| m.starts_with("CpuApp/")),
+        "{root_names:?}"
+    );
+    assert!(
+        root_names.iter().any(|m| m.starts_with("CpuPeer/")),
+        "{root_names:?}"
+    );
+    let cpu_list = fs::read_to_string(out.join("cpu-prerequisites.list")).unwrap();
+    assert!(cpu_list.contains("CpuLib-1.0-GCCcore-15.2.0.eb"));
+    assert!(cpu_list.contains("CpuApp-1.0-GCCcore-15.2.0.eb"));
+    assert!(cpu_list.contains("CpuPeer-1.0-GCCcore-15.2.0.eb"));
+
+    let prelude = modules(&plan, "prelude");
+    assert!(
+        prelude
+            .iter()
+            .all(|m| m.contains("CUDA") || m.starts_with("GpuLib/") || m.starts_with("ROCm")),
+        "accelerator prelude must not hold CPU packages: {prelude:?}"
+    );
+    assert!(
+        prelude.iter().all(|m| !m.starts_with("CpuLib/")
+            && !m.starts_with("CpuApp/")
+            && !m.starts_with("CpuPeer/")),
+        "CpuLib must not remain in ordinary prelude: {prelude:?}"
+    );
+    for shard in plan["shards"].as_array().unwrap() {
+        for m in shard["modules"].as_array().unwrap() {
+            let name = m.as_str().unwrap();
+            assert!(
+                name.contains("CUDA") || name.starts_with("GpuLib/") || name.starts_with("Accel"),
+                "accelerator shard holds non-accelerator module {name}"
+            );
+        }
+    }
+}
+
+/// The howto fixture (`accel.list`) is runnable and splits CpuLib from GpuLib.
+#[test]
+fn howto_accel_fixture_lifts_cpu_lib_from_shared_gpu_prelude() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out-howto");
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "stack",
+            "shard",
+            "--build-list",
+            "tests/stack_shard_fixtures/accel.list",
+            "--easyconfigs",
+            "tests/stack_shard_fixtures/accel-easyconfigs",
+            "--installed",
+            "tests/stack_shard_fixtures/accel-installed.txt",
+            "--shards",
+            "4",
+            "--lift-cpu-prerequisites",
+            "--generated-at",
+            "2026-11-07T00:00:00Z",
+            "--out-dir",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("cpu_prerequisites=1"),
+        "howto summary: {stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(out.join("cpu-prerequisites.list"))
+            .unwrap()
+            .trim(),
+        "CpuLib-1.0-GCCcore-15.2.0.eb"
+    );
+    assert_eq!(
+        fs::read_to_string(out.join("prelude.list")).unwrap().trim(),
+        "GpuLib-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb"
     );
 }

@@ -430,7 +430,7 @@ pub(crate) fn installed_module_version(candidate: &Candidate) -> String {
 ///
 /// The rules are EasyBuild's: a version requirement, an optional toolchain that
 /// names one build and no other, and an optional versionsuffix.
-fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
+pub(crate) fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
     if candidate.name != dep.name {
         return false;
     }

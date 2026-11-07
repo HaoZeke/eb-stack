@@ -5620,25 +5620,55 @@ must not share a list that runs under the CPU prefix.
 `--lift-cpu-prerequisites` is opt-in. It writes CPU-only prerequisites to
 `cpu-prerequisites.list` (and `cpu-prerequisites.local.list` with
 `--materialize`), keeps shared accelerator packages in `prelude.list`, and
-leaves accelerator-only dependencies on the CUDA shards. Default
-`stack shard` behaviour is unchanged. A lifted recipe from a
-`--from-commit` tree keeps that line's source options for hashing and
-materialization. Invocation order:
+leaves accelerator-only dependencies on the CUDA shards. CPU-only
+build-list roots and their missing CPU closure join that CPU list too, so
+a shared CPU dependency of two CPU roots is not left in the accelerator
+prelude. Default `stack shard` behaviour is unchanged. A lifted recipe
+from a `--from-commit` tree keeps that line's source options for hashing
+and materialization. Invocation order:
 
 1. `cpu-prerequisites.list` under the CPU install path
 2. `prelude.list` under accelerator settings
 3. `shard-NN.list` under accelerator settings
 
+`tests/stack_shard_fixtures/accel.list` is two CUDA roots: AccelApp and
+AccelPeer. Both need GpuLib; only AccelApp needs CpuLib. CUDA and
+GCCcore are already installed.
+
 ```bash
 eb-stack stack shard \
-  --build-list accel.list \
-  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
-  --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all \
-  --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/accel/nvidia/cc80/modules/all \
+  --build-list tests/stack_shard_fixtures/accel.list \
+  --easyconfigs tests/stack_shard_fixtures/accel-easyconfigs \
+  --installed tests/stack_shard_fixtures/accel-installed.txt \
   --shards 4 \
   --lift-cpu-prerequisites \
+  --generated-at 2026-11-07T00:00:00Z \
   --out-dir build/accel-shards
 ```
+
+That command printed:
+
+```
+shards=2 prelude=1 cpu_prerequisites=1 lines=2
+```
+
+`build/accel-shards/cpu-prerequisites.list` is the CPU-only dependency,
+built under the CPU prefix first:
+
+```
+CpuLib-1.0-GCCcore-15.2.0.eb
+```
+
+`build/accel-shards/prelude.list` keeps the shared accelerator package
+under accelerator settings:
+
+```
+GpuLib-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb
+```
+
+The shard files keep the CUDA roots verbatim. Without
+`--lift-cpu-prerequisites`, CpuLib would stay in AccelApp's shard closure
+and fail EESSI's install-path check under `/accel/`.
 
 # Resolve lines EasyBuild fetches from GitHub
 
@@ -6831,6 +6861,7 @@ eb-stack stack shard \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
   [--filter-deps NAME,NAME...] \
+  [--lift-cpu-prerequisites] \
   [--generated-at 2026-11-03T00:00:00Z] \
   --out-dir SHARDS
 
@@ -7193,13 +7224,24 @@ carries that line's `--from-commit`, `--from-pr` and
 `--include-easyblocks-from-*` options, so it builds the same easyconfig
 with the same easyblock.
 
+`--lift-cpu-prerequisites` is opt-in. It writes CPU-only prerequisites
+(including CPU-only build-list roots and their missing CPU closure) to
+`cpu-prerequisites.list`, keeps shared accelerator packages in
+`prelude.list`, and leaves accelerator-only work on the CUDA shards.
+Off by default: only modules two or more shards share go to the prelude.
+EESSI refuses to install a CPU-only package into an `/accel/` prefix; build
+the CPU list under the CPU install path first, then the accelerator
+prelude, then the shards.
+
 `--out-dir` gets `prelude.list` (the prelude as easyconfig filenames in
 dependency order; empty when nothing is shared), `shard-NN.list` (the input
 lines verbatim, dependencies first), and `plan.json` (each line's closure,
 group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
-easyconfig a closure reached). A `shard-NN.list` that an earlier run left
-and this run does not write is removed.
+easyconfig a closure reached). With `--lift-cpu-prerequisites`, it also
+gets `cpu-prerequisites.list` when any CPU-only module or root was lifted.
+A `shard-NN.list` that an earlier run left and this run does not write is
+removed.
 
 `--materialize` also writes, for each `--from-commit` source, the directory
 `sources/v1/SHA/` and its manifest `sources/v1/SHA.json` (schema version 1:

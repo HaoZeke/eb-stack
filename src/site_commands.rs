@@ -3154,11 +3154,13 @@ pub fn run_stack_shard_with_sources(
             if opaque[i].is_some() {
                 continue;
             }
-            if !is_accel_module(&closure.root) {
+            let root_is_cpu = !is_accel_module(&closure.root);
+            if root_is_cpu {
                 // CPU-only build-list root: emit under CPU settings, not an
-                // accelerator shard.
+                // accelerator shard. Its missing CPU closure joins cpu_lift so
+                // a shared CPU dependency of two CPU roots does not stay in
+                // the ordinary (accelerator) prelude.
                 cpu_root_lines.insert(i);
-                continue;
             }
             for module in &closure.to_build {
                 if module == &closure.root {
@@ -3170,38 +3172,50 @@ pub fn run_stack_shard_with_sources(
             }
         }
         // Refuse planning a CPU package that still needs an uninstalled
-        // accelerator dependency (would install into the wrong prefix).
+        // accelerator dependency from the same resolved closure (identity =
+        // name/version/toolchain/versionsuffix via build_order::satisfies),
+        // not any same-named candidate from an unrelated closure.
+        let mut cpu_modules = cpu_lift.clone();
+        for &i in &cpu_root_lines {
+            cpu_modules.insert(closures[i].root.clone());
+        }
         let mut cpu_problems = Vec::new();
-        for module in &cpu_lift {
+        for module in &cpu_modules {
             let Some(o) = origin.get(module) else {
                 continue;
             };
             let Some(c) = by_path.get(&o.path) else {
                 continue;
             };
+            let home: Vec<_> = closures
+                .iter()
+                .enumerate()
+                .filter(|(i, cl)| opaque[*i].is_none() && cl.to_build.iter().any(|m| m == module))
+                .map(|(_, cl)| cl)
+                .collect();
             for dep in c
                 .dependencies
                 .iter()
                 .chain(c.builddependencies.iter())
                 .filter(|d| !filter.dep_is_filtered(&d.name, d.version_req.as_str()))
             {
-                for (dep_module, dep_origin) in &origin {
-                    let Some(dep_c) = by_path.get(&dep_origin.path) else {
-                        continue;
-                    };
-                    if dep_c.name != dep.name {
-                        continue;
-                    }
-                    if !is_accelerator_candidate_filtered(dep_c, &filter) {
-                        continue;
-                    }
-                    if installed.contains(dep_module) {
-                        continue;
-                    }
-                    let needed = closures
-                        .iter()
-                        .any(|cl| cl.to_build.iter().any(|m| m == dep_module));
-                    if needed {
+                for cl in &home {
+                    for dep_module in &cl.to_build {
+                        if installed.contains(dep_module) {
+                            continue;
+                        }
+                        let Some(dep_origin) = origin.get(dep_module) else {
+                            continue;
+                        };
+                        let Some(dep_c) = by_path.get(&dep_origin.path) else {
+                            continue;
+                        };
+                        if !crate::build_order::satisfies(dep_c, dep) {
+                            continue;
+                        }
+                        if !is_accelerator_candidate_filtered(dep_c, &filter) {
+                            continue;
+                        }
                         cpu_problems.push(format!(
                             "CPU prerequisite {module} needs accelerator module {dep_module} \
                              ({}); install that under the accelerator prefix first",
@@ -3212,6 +3226,8 @@ pub fn run_stack_shard_with_sources(
             }
         }
         if !cpu_problems.is_empty() {
+            cpu_problems.sort();
+            cpu_problems.dedup();
             return Err(anyhow!(
                 "{} CPU/accelerator conflict(s); nothing written\n{}",
                 cpu_problems.len(),

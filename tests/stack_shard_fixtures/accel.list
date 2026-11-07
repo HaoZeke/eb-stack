@@ -1,0 +1,3 @@
+# Accelerator shard fixture: two CUDA roots share GpuLib; AccelApp also needs CpuLib.
+AccelApp-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb
+AccelPeer-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb

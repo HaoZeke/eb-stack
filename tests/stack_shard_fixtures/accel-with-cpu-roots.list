@@ -1,0 +1,4 @@
+# Two CPU roots share CpuLib; one CUDA root shares GpuLib with no CpuLib.
+CpuApp-1.0-GCCcore-15.2.0.eb
+CpuPeer-1.0-GCCcore-15.2.0.eb
+AccelPeer-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb
