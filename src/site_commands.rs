@@ -2409,6 +2409,147 @@ impl SourceView {
     }
 }
 
+/// The build robot path as EasyBuild searches it, after checking it can be
+/// planned over exactly: every path is a directory here, `--easyconfigs`
+/// names the same directories, and no line changes the archive setting the
+/// plan assumes (EasyBuild's default: archived easyconfigs are not searched).
+fn effective_robot_path(
+    paths: &[String],
+    easyconfigs: &[PathBuf],
+    lines: &[crate::shard::ShardLine],
+) -> Result<crate::robot_lookup::RobotPath> {
+    use crate::robot_lookup::{ArchivedEasyconfigs, RobotPath};
+    let robot = RobotPath::new(
+        paths.iter().map(PathBuf::from).collect(),
+        ArchivedEasyconfigs::Ignored,
+    );
+    robot
+        .require_directories()
+        .map_err(|why| usage(format!("--build-robot-path: {why}")))?;
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let build: std::collections::BTreeSet<PathBuf> =
+        robot.roots().iter().map(|p| canonical(p)).collect();
+    let planned: std::collections::BTreeSet<PathBuf> =
+        easyconfigs.iter().map(|p| canonical(p)).collect();
+    if build != planned {
+        return Err(usage(
+            "--build-robot-path must name the same directories as --easyconfigs, so the plan reads the robot path the build searches",
+        ));
+    }
+    for line in lines {
+        let archive = line.text.split_whitespace().skip(1).any(|word| {
+            let key = word
+                .split('=')
+                .next()
+                .unwrap_or(word)
+                .trim_start_matches('-');
+            key.len() >= 3 && "consider-archived-easyconfigs".starts_with(key)
+        });
+        if archive {
+            return Err(usage(format!(
+                "line {}: {}: --consider-archived-easyconfigs changes the robot path the plan reads over --build-robot-path; nothing written",
+                line.number, line.file
+            )));
+        }
+    }
+    Ok(robot)
+}
+
+/// The robot universe EasyBuild reaches over `robot`: each root parsed as a
+/// tree, then only the files its robot finds for their own name and full
+/// version, merged so the first root and layout win. A file whose full
+/// version cannot be told, or that the robot finds but then refuses, is left
+/// out and named in `warnings`.
+fn effective_robot_universe(
+    robot: &crate::robot_lookup::RobotPath,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<crate::domain::Candidate>> {
+    let mut candidates = Vec::new();
+    for root in robot.roots() {
+        let parsed = crate::eb_parse::parse_easyconfig_tree(root)
+            .map_err(|error| anyhow!("--build-robot-path {}: {error}", root.display()))?;
+        candidates.extend(parsed.candidates);
+    }
+    let effective = robot.effective(candidates, |path| std::fs::read_to_string(path).ok());
+    for (path, why) in &effective.undecidable {
+        warnings.push(format!(
+            "robot path: {path}: {why}; EasyBuild's robot lookup for it cannot be told, so it is left out"
+        ));
+    }
+    for (path, why) in &effective.refused {
+        warnings.push(format!(
+            "robot path: {path}: {why}; a build that needs it stops, so it is left out"
+        ));
+    }
+    let mut kept = effective.kept;
+    kept.reverse();
+    Ok(crate::eb_parse::merge_candidates_with_precedence(&[kept]))
+}
+
+/// Keep the fetched-tree candidates EasyBuild reads after the robot path:
+/// a file a line names, or one whose name and full version the robot path
+/// lacks and the tree's own layout reaches (`create_paths` under the tree's
+/// `easybuild/easyconfigs`). `texts` holds the bytes of candidates not on disk.
+fn retain_commit_fallback(
+    layer: &mut Vec<crate::domain::Candidate>,
+    robot: &crate::robot_lookup::RobotPath,
+    trees: &[crate::easyconfig_tree::Tree],
+    named: &std::collections::BTreeSet<String>,
+    texts: &[(String, Vec<u8>)],
+    warnings: &mut Vec<String>,
+) {
+    use crate::robot_lookup::{candidate_full_version, ArchivedEasyconfigs, RobotPath};
+    let in_tree = RobotPath::new(vec![PathBuf::new()], ArchivedEasyconfigs::Ignored);
+    layer.retain(|c| {
+        let file = c.easyconfig_path.rsplit('/').next().unwrap_or_default();
+        if named.contains(file) {
+            return true;
+        }
+        let text = texts
+            .iter()
+            .find(|(path, _)| *path == c.easyconfig_path)
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+            .or_else(|| std::fs::read_to_string(&c.easyconfig_path).ok());
+        let version = match text.as_deref().map(|text| candidate_full_version(c, text)) {
+            Some(Ok(version)) => version,
+            Some(Err(why)) => {
+                warnings.push(format!("{}: {why}; left out", c.easyconfig_path));
+                return false;
+            }
+            None => return false,
+        };
+        if robot.find(&c.name, &version).is_some() {
+            return false;
+        }
+        trees.iter().any(|tree| {
+            let Some(rel) = tree_rel(tree, &c.easyconfig_path) else {
+                return false;
+            };
+            in_tree
+                .find_with(&c.name, &version, |path| {
+                    tree.has(&path.display().to_string())
+                })
+                .is_some_and(|(_, found)| {
+                    found.display().to_string() == rel
+                        && found.file_name().and_then(|f| f.to_str())
+                            == Some(format!("{}-{version}.eb", c.name).as_str())
+                })
+        })
+    });
+}
+
+/// The path of a candidate inside the tree it was parsed from.
+fn tree_rel(tree: &crate::easyconfig_tree::Tree, path: &str) -> Option<String> {
+    let prefix = tree.label("");
+    let prefix = if prefix.ends_with('/') || prefix.ends_with(':') {
+        prefix
+    } else {
+        format!("{prefix}/")
+    };
+    path.strip_prefix(&prefix).map(str::to_string)
+}
+
 /// `--build-robot-path` values, when `--materialize` is set.
 fn build_robot_paths(extra: &StackShardSources) -> Result<Option<Vec<String>>> {
     match (extra.materialize, extra.build_robot_paths.is_empty()) {
@@ -2597,8 +2738,17 @@ pub fn run_stack_shard_with_sources(
         installed.extend(modules_under(dir)?);
     }
 
-    let (robot, _) = load_robot_trees(&args.easyconfigs, &[])?;
-    let mut base = robot.base;
+    // With the build host's robot paths given, the robot universe is what
+    // EasyBuild's robot reaches over them, in their order.
+    let effective_robot = match &build_robot_paths {
+        Some(paths) => Some(effective_robot_path(paths, &args.easyconfigs, &lines)?),
+        None => None,
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let mut base = match &effective_robot {
+        Some(robot) => effective_robot_universe(robot, &mut warnings)?,
+        None => load_robot_trees(&args.easyconfigs, &[])?.0.base,
+    };
     let file_name = |c: &Candidate| -> String {
         c.easyconfig_path
             .rsplit('/')
@@ -2611,11 +2761,20 @@ pub fn run_stack_shard_with_sources(
     let mut selected = Vec::new();
     let mut selected_names: BTreeMap<ModuleKey, String> = BTreeMap::new();
     for line in lines.iter().filter(|line| !line.fetched) {
-        let candidate = base.iter().find(|c| file_name(c) == line.file).cloned();
-        let candidate = candidate.or_else(|| {
-            file_on_robot(&args.easyconfigs, &line.file)
-                .and_then(|path| crate::eb_parse::parse_easyconfig_file(&path).ok())
-        });
+        let candidate = match &effective_robot {
+            Some(robot) => robot
+                .locate_named(&line.file, crate::robot_lookup::DEFAULT_IGNORE_DIRS)
+                .map_err(|why| anyhow!("line {}: {why}; nothing written", line.number))?
+                .and_then(|path| crate::eb_parse::parse_easyconfig_file(&path).ok()),
+            None => base
+                .iter()
+                .find(|c| file_name(c) == line.file)
+                .cloned()
+                .or_else(|| {
+                    file_on_robot(&args.easyconfigs, &line.file)
+                        .and_then(|path| crate::eb_parse::parse_easyconfig_file(&path).ok())
+                }),
+        };
         if let Some(candidate) = candidate {
             if let Some(other) = selected_names.insert(ModuleKey::of(&candidate), line.file.clone())
             {
@@ -2648,7 +2807,6 @@ pub fn run_stack_shard_with_sources(
     let mut contents: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut tree_status: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut source_failure: BTreeMap<LineSource, String> = BTreeMap::new();
-    let mut warnings: Vec<String> = Vec::new();
     let wanted: BTreeSet<&LineSource> = lines
         .iter()
         .filter(|l| l.fetched)
@@ -2732,6 +2890,16 @@ pub fn run_stack_shard_with_sources(
                         let name = file_name(c);
                         !robot_names.contains(&name) || roots.contains(&name)
                     });
+                    if let (Some(robot), LineSource::Commit(_)) = (&effective_robot, source) {
+                        retain_commit_fallback(
+                            &mut layer,
+                            robot,
+                            &view,
+                            &roots,
+                            &[],
+                            &mut warnings,
+                        );
+                    }
                     Ok((
                         layer,
                         SourceView {
@@ -2741,12 +2909,31 @@ pub fn run_stack_shard_with_sources(
                     ))
                 }
                 FetchedTree::Git(tree) => {
-                    let (layer, skipped) = crate::shard_sources::git_overlay(
+                    let (mut layer, skipped) = crate::shard_sources::git_overlay(
                         &tree,
                         &base_digests,
                         &roots,
                         &mut contents,
                     )?;
+                    if let Some(robot) = &effective_robot {
+                        let texts: Vec<(String, Vec<u8>)> = layer
+                            .iter()
+                            .filter_map(|c| {
+                                contents
+                                    .get(&c.easyconfig_path)
+                                    .map(|bytes| (c.easyconfig_path.clone(), bytes.clone()))
+                            })
+                            .collect();
+                        let view = std::slice::from_ref(&tree);
+                        retain_commit_fallback(
+                            &mut layer,
+                            robot,
+                            view,
+                            &roots,
+                            &texts,
+                            &mut warnings,
+                        );
+                    }
                     for file in skipped {
                         warnings.push(format!("{}: does not parse: {file}", source.option()));
                     }

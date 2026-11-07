@@ -80,6 +80,7 @@ pub mod registry;
 pub mod report;
 pub mod repro_report;
 pub mod resolvo_provider;
+pub mod robot_lookup;
 pub mod sbom;
 pub mod select;
 pub mod shadow;
