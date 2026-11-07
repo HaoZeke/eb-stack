@@ -184,7 +184,12 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     if parsed.offset().local_minus_utc() != 0 {
         bail!("ledger ts {ts:?} is not UTC");
     }
-    for field in LINKS.iter().copied().chain(ENUMERATED.iter().copied()).chain(["sig"]) {
+    for field in LINKS
+        .iter()
+        .copied()
+        .chain(ENUMERATED.iter().copied())
+        .chain(["sig"])
+    {
         if let Some(value) = record.get(field) {
             if !value.as_str().is_some_and(|text| !text.is_empty()) {
                 bail!("ledger field {field} must be a non-empty string");
@@ -612,7 +617,8 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
     let (tiles, checkpoint) = match &key {
         Some(key) => {
             let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
-            let (tiles, checkpoint) = crate::ledger_tiles::checkpoint(&entries, &dir, key, &origin)?;
+            let (tiles, checkpoint) =
+                crate::ledger_tiles::checkpoint(&entries, &dir, key, &origin)?;
             (tiles, Some(checkpoint))
         }
         None => (crate::ledger_tiles::sync(&entries, &dir)?, None),

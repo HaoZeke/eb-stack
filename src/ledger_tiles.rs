@@ -128,7 +128,8 @@ pub fn origin_from_log(log: &Path, given: Option<&str>) -> Result<String> {
     if given.is_some() {
         return origin(None, given);
     }
-    let file = std::fs::File::open(log).with_context(|| format!("read ledger {}", log.display()))?;
+    let file =
+        std::fs::File::open(log).with_context(|| format!("read ledger {}", log.display()))?;
     let mut line = String::new();
     std::io::BufReader::new(file)
         .read_line(&mut line)
@@ -139,7 +140,8 @@ pub fn origin_from_log(log: &Path, given: Option<&str>) -> Result<String> {
             log.display()
         );
     };
-    let first = ledger::parse_line(line, 0).with_context(|| format!("ledger {} line 0", log.display()))?;
+    let first =
+        ledger::parse_line(line, 0).with_context(|| format!("ledger {} line 0", log.display()))?;
     origin(Some(&first), None)
 }
 
@@ -241,9 +243,14 @@ fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Writer<PosixStore>, Syn
             .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
         rebuilt_from = Some(stale);
     }
-    let start = usize::try_from(writer.size()).expect("a synced tile log is not longer than the ledger");
+    let start =
+        usize::try_from(writer.size()).expect("a synced tile log is not longer than the ledger");
     let appended = writer
-        .append_batch(entries[start..].iter().map(|entry| entry.line.clone().into_bytes()))
+        .append_batch(
+            entries[start..]
+                .iter()
+                .map(|entry| entry.line.clone().into_bytes()),
+        )
         .map_err(|error| anyhow!("append to tile log {}: {error}", dir.display()))?;
     let report = SyncReport {
         dir: dir.to_path_buf(),
@@ -292,17 +299,32 @@ pub fn checkpoint(
 
 /// The checkpoint the store holds, once `trusted` has signed it and its
 /// origin is `origin`.
-fn read_checkpoint(store: &PosixStore, dir: &Path, origin: &str, trusted: &VerifyingKey) -> Result<Checkpoint> {
-    let bytes = store
-        .get(CHECKPOINT)?
-        .ok_or_else(|| anyhow!("tile log {} has no checkpoint; `ledger head` signs one", dir.display()))?;
-    let text = String::from_utf8(bytes).map_err(|_| anyhow!("checkpoint of {} is not UTF-8", dir.display()))?;
-    let note = Note::parse(&text).map_err(|error| anyhow!("checkpoint of {}: {error}", dir.display()))?;
+fn read_checkpoint(
+    store: &PosixStore,
+    dir: &Path,
+    origin: &str,
+    trusted: &VerifyingKey,
+) -> Result<Checkpoint> {
+    let bytes = store.get(CHECKPOINT)?.ok_or_else(|| {
+        anyhow!(
+            "tile log {} has no checkpoint; `ledger head` signs one",
+            dir.display()
+        )
+    })?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| anyhow!("checkpoint of {} is not UTF-8", dir.display()))?;
+    let note =
+        Note::parse(&text).map_err(|error| anyhow!("checkpoint of {}: {error}", dir.display()))?;
     let verifier = Verifier::new(origin, ED25519_LOG, *trusted)
         .map_err(|error| anyhow!("checkpoint verifier for {origin}: {error}"))?;
-    checkpoint::verify(&note, std::slice::from_ref(&verifier))
-        .map_err(|error| anyhow!("checkpoint of {} is not signed by the trusted key as {origin}: {error}", dir.display()))?;
-    let published = Checkpoint::parse(&note.text).map_err(|error| anyhow!("checkpoint of {}: {error}", dir.display()))?;
+    checkpoint::verify(&note, std::slice::from_ref(&verifier)).map_err(|error| {
+        anyhow!(
+            "checkpoint of {} is not signed by the trusted key as {origin}: {error}",
+            dir.display()
+        )
+    })?;
+    let published = Checkpoint::parse(&note.text)
+        .map_err(|error| anyhow!("checkpoint of {}: {error}", dir.display()))?;
     if published.origin != origin {
         bail!(
             "checkpoint of {} is for {}, not {origin}",
@@ -315,7 +337,13 @@ fn read_checkpoint(store: &PosixStore, dir: &Path, origin: &str, trusted: &Verif
 
 /// Check that the tree `reader` is at extends the tree of `size` and
 /// `root`: the same first `size` leaves.
-fn check_prefix(reader: &Reader<PosixStore>, dir: &Path, size: u64, root: &str, what: &str) -> Result<()> {
+fn check_prefix(
+    reader: &Reader<PosixStore>,
+    dir: &Path,
+    size: u64,
+    root: &str,
+    what: &str,
+) -> Result<()> {
     let current = rfc9162::hex(&reader.root());
     if reader.size() < size {
         bail!(
@@ -336,7 +364,12 @@ fn check_prefix(reader: &Reader<PosixStore>, dir: &Path, size: u64, root: &str, 
     let proof = reader
         .consistency(size)
         .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
-        .ok_or_else(|| anyhow!("tile log {} has no consistency proof from size {size}", dir.display()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "tile log {} has no consistency proof from size {size}",
+                dir.display()
+            )
+        })?;
     let size = usize::try_from(size).map_err(|_| anyhow!("size {size} does not fit"))?;
     let current_size = usize::try_from(reader.size()).map_err(|_| anyhow!("size does not fit"))?;
     if !rfc9162::verify_consistency(size, root, current_size, &current, &proof) {
@@ -376,7 +409,13 @@ pub fn audit(
     check_prefix(&reader, dir, size as u64, root, "head")?;
     if store.exists(CHECKPOINT)? {
         let published = read_checkpoint(&store, dir, origin, trusted)?;
-        check_prefix(&reader, dir, published.size, &rfc9162::hex(&published.root), "checkpoint")?;
+        check_prefix(
+            &reader,
+            dir,
+            published.size,
+            &rfc9162::hex(&published.root),
+            "checkpoint",
+        )?;
     }
     let width = usize::try_from(TILE_WIDTH).expect("256 fits");
     let mut index = 0usize;
@@ -454,10 +493,15 @@ pub struct FindReport {
 /// signed checkpoint.
 pub fn find(request: &FindRequest) -> Result<FindReport> {
     if request.keys.is_empty() {
-        return Err(crate::cli_parse::usage("pass at least one --key field=value"));
+        return Err(crate::cli_parse::usage(
+            "pass at least one --key field=value",
+        ));
     }
     for key in &request.keys {
-        if !key.split_once('=').is_some_and(|(field, value)| !field.is_empty() && !value.is_empty()) {
+        if !key
+            .split_once('=')
+            .is_some_and(|(field, value)| !field.is_empty() && !value.is_empty())
+        {
             return Err(crate::cli_parse::usage(format!(
                 "--key {key:?} is not field=value"
             )));
@@ -477,7 +521,13 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
     let reader = Reader::open(store, key_fn())
         .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
     let checkpoint_root = rfc9162::hex(&published.root);
-    check_prefix(&reader, &dir, published.size, &checkpoint_root, "checkpoint")?;
+    check_prefix(
+        &reader,
+        &dir,
+        published.size,
+        &checkpoint_root,
+        "checkpoint",
+    )?;
 
     let mut hits: Option<BTreeSet<u64>> = None;
     for key in &request.keys {
@@ -507,7 +557,12 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
         let proof = reader
             .inclusion(index)
             .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
-            .ok_or_else(|| anyhow!("tile log {} has no inclusion proof for {index}", dir.display()))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "tile log {} has no inclusion proof for {index}",
+                    dir.display()
+                )
+            })?;
         let at = usize::try_from(index).map_err(|_| anyhow!("index does not fit"))?;
         if !rfc9162::verify_inclusion(&rfc9162::leaf_hash(&entry), at, size, &proof, &root) {
             bail!(
@@ -520,7 +575,8 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
         found.push(Found { index, record });
     }
     let stdout = if request.json {
-        let mut text = serde_json::to_string_pretty(&found.iter().map(|f| &f.record).collect::<Vec<_>>())?;
+        let mut text =
+            serde_json::to_string_pretty(&found.iter().map(|f| &f.record).collect::<Vec<_>>())?;
         text.push('\n');
         text
     } else {
@@ -597,7 +653,10 @@ mod tests {
             "actor=jenkins/run/7",
             "job=snellius/4411",
         ] {
-            assert!(keys.contains(&expected.to_string()), "{keys:?} lacks {expected}");
+            assert!(
+                keys.contains(&expected.to_string()),
+                "{keys:?} lacks {expected}"
+            );
         }
         assert!(keys.contains(&format!("id={}", sealed.id)), "{keys:?}");
         assert_eq!(keys.len(), 8);
@@ -636,7 +695,10 @@ mod tests {
             origin(Some(&sealed), None).unwrap(),
             "eb-stack-ledger/2026.06/2026"
         );
-        assert_eq!(origin(None, Some("example.org/log")).unwrap(), "example.org/log");
+        assert_eq!(
+            origin(None, Some("example.org/log")).unwrap(),
+            "example.org/log"
+        );
         assert!(origin(None, None).is_err());
         assert!(origin(None, Some("has space")).is_err());
         assert!(origin(None, Some("a+b")).is_err());
@@ -649,7 +711,10 @@ mod tests {
             PathBuf::from("ledger/2026.06.jsonl.tiles")
         );
         assert_eq!(
-            tiles_dir(Path::new("ledger/2026.06.jsonl"), Some(Path::new("/var/tiles"))),
+            tiles_dir(
+                Path::new("ledger/2026.06.jsonl"),
+                Some(Path::new("/var/tiles"))
+            ),
             PathBuf::from("/var/tiles")
         );
     }
