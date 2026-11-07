@@ -1,11 +1,12 @@
 //! Easyconfig trees for build-list lines whose easyconfigs EasyBuild fetches
 //! from GitHub.
 //!
-//! `eb --from-commit=SHA` downloads the easybuild-easyconfigs archive of that
-//! commit and puts its `easybuild/easyconfigs` first on the robot path.
-//! `eb --from-pr=N` downloads the easyconfig files pull request N changes, at
-//! its head, and puts them first. `stack shard` resolves such a line the same
-//! way: the line's tree first, then the robot path.
+//! `eb X.eb --from-commit=SHA` downloads the easybuild-easyconfigs archive of
+//! that commit, reads `X.eb` from it, and appends its `easybuild/easyconfigs`
+//! to the robot path. `eb X.eb --from-pr=N` downloads the easyconfig files
+//! pull request N changes, at its head, and appends them the same way. A
+//! dependency comes from the robot path when it is there and from the
+//! fetched files otherwise. `stack shard` resolves such a line the same way.
 //!
 //! A tree is found, in this order, in an explicit `COMMIT=DIR` or `N=DIR`
 //! entry, in the cache directory, or by downloading it into the cache. A
@@ -62,11 +63,8 @@ impl TreeSources<'_> {
         !self.commit_trees.is_empty() || !self.pr_trees.is_empty() || self.cache.is_some()
     }
 
-    /// The easyconfigs directory of `sha`, or why there is none.
-    pub fn commit_tree(&self, sha: &str) -> Result<PathBuf, String> {
-        if !is_commit_sha(sha) {
-            return Err(format!("{sha} is not a commit sha"));
-        }
+    /// The `--commit-tree` directory of `sha`, when one names it.
+    pub fn explicit_commit_tree(&self, sha: &str) -> Option<Result<PathBuf, String>> {
         let given: Vec<&PathBuf> = self
             .commit_trees
             .iter()
@@ -74,9 +72,19 @@ impl TreeSources<'_> {
             .map(|(_, dir)| dir)
             .collect();
         match given.as_slice() {
-            [dir] => return Ok((*dir).clone()),
-            [] => {}
-            _ => return Err(format!("--commit-tree names {sha} more than once")),
+            [dir] => Some(Ok((*dir).clone())),
+            [] => None,
+            _ => Some(Err(format!("--commit-tree names {sha} more than once"))),
+        }
+    }
+
+    /// The easyconfigs directory of `sha`, or why there is none.
+    pub fn commit_tree(&self, sha: &str) -> Result<PathBuf, String> {
+        if !is_commit_sha(sha) {
+            return Err(format!("{sha} is not a commit sha"));
+        }
+        if let Some(given) = self.explicit_commit_tree(sha) {
+            return given;
         }
         let Some(cache) = &self.cache else {
             return Err(format!(

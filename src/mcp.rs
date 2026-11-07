@@ -458,7 +458,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_shard",
-            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr is resolved against that tree first, then easyconfigs: commit_tree (COMMIT=DIR), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
+            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr takes the easyconfig it names from that tree, and its dependencies from easyconfigs first and that tree second, as EasyBuild appends the fetched files to its robot path. Trees come from commit_tree (COMMIT=DIR), easyconfigs_repo (a git repository whose objects hold the commits, read in place), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. With materialize, also writes sources/v1/<commit>/ (the files the plan reads from each commit, with a SHA-256 manifest) and prelude.local.list and shard-NN.local.list, whose --from-commit lines read that directory through --robot-paths set to build_robot_path (the build host's robot paths, in EasyBuild's order) and then the directory; a line that cannot run that way is copied unchanged. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
             &[
                 ("build_list", "string"),
                 ("easyconfigs", "array_min1"),
@@ -469,6 +469,9 @@ fn tool_catalog() -> Vec<Value> {
                 ("commit_tree", "array"),
                 ("pr_tree", "array"),
                 ("commit_cache", "string"),
+                ("easyconfigs_repo", "string"),
+                ("materialize", "boolean"),
+                ("build_robot_path", "array"),
                 ("installed", "array"),
                 ("installed_modules_dir", "array"),
                 ("weights", "string"),
@@ -3212,7 +3215,13 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         generated_at: optional_string(arguments, "generated_at"),
         out_dir: required_path(arguments, "out_dir")?,
     };
-    let run = crate::site_commands::run_stack_shard(&request).map_err(workflow_error)?;
+    let sources = crate::site_commands::StackShardSources {
+        easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
+        materialize: optional_bool(arguments, "materialize"),
+        build_robot_paths: string_array(arguments, "build_robot_path")?,
+    };
+    let run = crate::site_commands::run_stack_shard_sources(&request, &sources)
+        .map_err(workflow_error)?;
     Ok(json!({
         "text": run.summary(),
         "shards": run.shards,

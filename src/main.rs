@@ -1119,8 +1119,9 @@ struct ShardArgs {
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
     /// Easyconfigs of one `--from-commit` pin, as `COMMIT=DIR`. A line with
-    /// that pin is resolved against DIR first, then the robot path.
-    /// Repeatable; an abbreviated commit matches.
+    /// that pin takes the easyconfig it names from DIR; its dependencies come
+    /// from the robot path first and DIR second. Repeatable; an abbreviated
+    /// commit matches.
     #[arg(long = "commit-tree")]
     commit_trees: Vec<String>,
     /// Easyconfigs one `--from-pr` pull request changes, at its head, as
@@ -1135,6 +1136,27 @@ struct ShardArgs {
     /// api.github.com when set.
     #[arg(long)]
     commit_cache: Option<PathBuf>,
+    /// easybuild-easyconfigs git repository (a checkout, a bare repository,
+    /// or a blobless clone) holding the commits of `--from-commit` lines.
+    /// A commit found there is read in place, without writing its tree to
+    /// disk; `--commit-cache` serves only a commit it lacks. A
+    /// `--commit-tree` for the same commit comes first.
+    #[arg(long)]
+    easyconfigs_repo: Option<PathBuf>,
+    /// Also write `sources/v1/<commit>/`, the files the planned closures
+    /// read from each commit, with a SHA-256 manifest `sources/v1/<commit>.json`,
+    /// and `prelude.local.list` and `shard-NN.local.list`. Their
+    /// `--from-commit` lines read that directory instead of fetching the
+    /// commit again. A line that cannot run that way is copied unchanged.
+    #[arg(long)]
+    materialize: bool,
+    /// One robot path EasyBuild uses on the build host, in EasyBuild's
+    /// order, as `eb --show-config` lists `robot-paths`. Repeatable;
+    /// required by `--materialize`. A written line passes these, then its
+    /// sources directory, as `--robot-paths`, because an empty element there
+    /// stands for EasyBuild's built-in default, not a configured value.
+    #[arg(long = "build-robot-path", requires = "materialize")]
+    build_robot_paths: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line. Repeatable.
     #[arg(long)]
     installed: Vec<PathBuf>,
@@ -1435,9 +1457,11 @@ enum StackCommand {
     ///
     /// Each line's closure is computed over the robot path minus the
     /// installed modules, as `pr-overlap` computes a root's set. A line with
-    /// `--from-commit` or `--from-pr` is resolved against that tree first,
-    /// then the robot path, as EasyBuild resolves it; the trees come from
-    /// `--commit-tree`, `--pr-tree`, or `--commit-cache`. Lines whose own
+    /// `--from-commit` or `--from-pr` takes the easyconfig it names from that
+    /// tree, and its dependencies from the robot path first and that tree
+    /// second, as EasyBuild appends the fetched files to its robot path; the
+    /// trees come from `--commit-tree`, `--easyconfigs-repo`, `--pr-tree`, or
+    /// `--commit-cache`. Lines whose own
     /// easyconfig another line needs share a shard; any other module the
     /// closures of two or more shards need goes to `prelude.list`, which
     /// builds first. Groups are packed into at most `--shards` shards by
@@ -1448,7 +1472,7 @@ enum StackCommand {
     /// line whose easyconfig or dependency cannot be resolved fails the run
     /// and nothing is written.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards"
+        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs-repo easybuild-easyconfigs --materialize --build-robot-path /sw/easybuild/easyconfigs --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
@@ -3307,6 +3331,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 commit_trees,
                 pr_trees,
                 commit_cache,
+                easyconfigs_repo,
+                materialize,
+                build_robot_paths,
                 installed,
                 installed_modules_dirs,
                 shards,
@@ -3316,7 +3343,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 generated_at,
                 out_dir,
             } = *args;
-            let run = eb_stack::site_commands::run_stack_shard(
+            let run = eb_stack::site_commands::run_stack_shard_sources(
                 &eb_stack::site_commands::StackShardRequest {
                     build_list,
                     easyconfigs,
@@ -3331,6 +3358,11 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     filter_deps,
                     generated_at,
                     out_dir,
+                },
+                &eb_stack::site_commands::StackShardSources {
+                    easyconfigs_repo,
+                    materialize,
+                    build_robot_paths,
                 },
             )?;
             for warning in &run.warnings {

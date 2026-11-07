@@ -86,8 +86,9 @@ eb-stack stack shard \
   --out-dir /tmp/shards
 #+end_src
 
-The line is then closed over its tree first and the robot path second,
-as EasyBuild closes it. ~petsc4py-3.25.0-foss-2026.1.eb --from-commit=...~
+The line's own easyconfig comes from its tree, and its dependencies from
+the robot path first and the tree second, as EasyBuild 5.4 appends the
+fetched easyconfigs to its robot path. ~petsc4py-3.25.0-foss-2026.1.eb --from-commit=...~
 needs PETSc 3.25.0, which is a line of its own, so the two lines share a
 shard and PETSc builds first. A dependency it shares with another shard
 goes to the prelude. ~--commit-tree SHA=DIR~ and ~--pr-tree N=DIR~ name a
@@ -95,6 +96,28 @@ tree you already have. A fetched line that still cannot be resolved is
 planned on its own without a closure; the command prints a
 ~warning:~ line with the reason, and ~plan.json~ keeps it under
 ~opaque_reason~.
+
+An easybuild-easyconfigs clone serves the same commits without a cache.
+~--easyconfigs-repo~ reads each commit from its objects, and a blobless
+clone (~git clone --filter=blob:none~) is enough:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs-repo easybuild-easyconfigs \
+  --materialize \
+  --build-robot-path /sw/easybuild/easyconfigs \
+  --shards 4 \
+  --out-dir /tmp/shards
+#+end_src
+
+~--materialize~ adds ~sources/v1/SHA/~ with the files the plan reads from
+each commit and ~prelude.local.list~ and ~shard-NN.local.list~, whose
+~--from-commit~ lines read that directory instead of downloading the commit
+again. ~--build-robot-path~ is each robot path ~eb --show-config~ lists on
+the build host; the written lines pass those paths and then the directory as
+~--robot-paths~. A line that cannot run that way is copied as it stands.
 
 A line whose easyconfig is not on the robot path, and that EasyBuild
 does not fetch, exits 1 and writes nothing. A ~--commit-cache~ download

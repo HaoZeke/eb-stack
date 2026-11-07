@@ -5620,8 +5620,9 @@ eb-stack stack shard \
   --out-dir /tmp/shards
 ```
 
-The line is then closed over its tree first and the robot path second,
-as EasyBuild closes it. `petsc4py-3.25.0-foss-2026.1.eb --from-commit=...`
+The line's own easyconfig comes from its tree, and its dependencies from
+the robot path first and the tree second, as EasyBuild 5.4 appends the
+fetched easyconfigs to its robot path. `petsc4py-3.25.0-foss-2026.1.eb --from-commit=...`
 needs PETSc 3.25.0, which is a line of its own, so the two lines share a
 shard and PETSc builds first. A dependency it shares with another shard
 goes to the prelude. `--commit-tree SHA=DIR` and `--pr-tree N=DIR` name a
@@ -5629,6 +5630,28 @@ tree you already have. A fetched line that still cannot be resolved is
 planned on its own without a closure; the command prints a
 `warning:` line with the reason, and `plan.json` keeps it under
 `opaque_reason`.
+
+An easybuild-easyconfigs clone serves the same commits without a cache.
+`--easyconfigs-repo` reads each commit from its objects, and a blobless
+clone (`git clone --filter=blob:none`) is enough:
+
+```bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs-repo easybuild-easyconfigs \
+  --materialize \
+  --build-robot-path /sw/easybuild/easyconfigs \
+  --shards 4 \
+  --out-dir /tmp/shards
+```
+
+`--materialize` adds `sources/v1/SHA/` with the files the plan reads from
+each commit and `prelude.local.list` and `shard-NN.local.list`, whose
+`--from-commit` lines read that directory instead of downloading the commit
+again. `--build-robot-path` is each robot path `eb --show-config` lists on
+the build host; the written lines pass those paths and then the directory as
+`--robot-paths`. A line that cannot run that way is copied as it stands.
 
 A line whose easyconfig is not on the robot path, and that EasyBuild
 does not fetch, exits 1 and writes nothing. A `--commit-cache` download
@@ -6767,6 +6790,8 @@ eb-stack stack shard \
   --build-list NODE-TYPE.list \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
   [--commit-cache DIR] [--commit-tree COMMIT=DIR]... [--pr-tree N=DIR]... \
+  [--easyconfigs-repo EASYBUILD-EASYCONFIGS] \
+  [--materialize --build-robot-path PATH [--build-robot-path PATH]...] \
   [--installed-modules-dir MODULES/all]... [--installed INSTALLED.txt]... \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
@@ -7099,10 +7124,23 @@ list it. `--filter-deps`, or `EASYBUILD_FILTER_DEPS` when the flag is
 absent, drops dependencies the way EasyBuild does.
 
 A line with `--from-commit=SHA` or `--from-pr=N` is resolved the way
-EasyBuild resolves it: that commit's or pull request's easyconfigs first,
-then the robot path. `--commit-tree COMMIT=DIR` names the easyconfigs
+EasyBuild 5.4 resolves it. The easyconfig the line names comes from that
+commit's or pull request's easyconfigs, because EasyBuild replaces a named
+file with the fetched copy. A dependency comes from the robot path when the
+robot path has a file of that name, and from the fetched easyconfigs
+otherwise, because EasyBuild appends them to the robot path after every
+configured path. A fetched easyconfig the robot path also has, with other
+content, therefore loses to the robot path's for a dependency: each such
+module a closure builds is printed as a `warning:` and listed under
+`shadowed` in `plan.json`. `--commit-tree COMMIT=DIR` names the easyconfigs
 directory of one commit (an abbreviated commit matches) and
 `--pr-tree N=DIR` the easyconfigs one pull request changes; both repeat.
+`--easyconfigs-repo DIR` is an easybuild-easyconfigs git repository: a
+checkout, a bare repository, or a blobless clone. A commit it holds is read
+in place: one `git ls-tree` lists the tree, and only the easyconfigs that
+can decide the plan (those the robot path has no file of, and those a line
+names) are read, through one `git cat-file --batch`. Nothing is written to
+disk for it. A `--commit-tree` for the same commit comes first.
 `--commit-cache DIR` holds every other tree. A commit missing there is
 downloaded over https from
 `codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/`
@@ -7126,12 +7164,44 @@ lines verbatim, dependencies first), and `plan.json` (each line's closure,
 group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
 easyconfig a closure reached). A `shard-NN.list` that an earlier run left
-and this run does not write is removed. `--generated-at` fixes the time in
+and this run does not write is removed.
+
+`--materialize` also writes, for each `--from-commit` source, the directory
+`sources/v1/SHA/` and its manifest `sources/v1/SHA.json` (schema version 1:
+each file's path, the commit path it was copied from, its SHA-256 and size,
+and a SHA-256 over the list), and `prelude.local.list` and
+`shard-NN.local.list` beside the verbatim lists. The directory is the part of
+the `files_commit_SHA` directory EasyBuild would build that the planned
+closures read: each named easyconfig at the top, and each easyconfig, patch,
+and local source at its path in the commit, selected wherever EasyBuild's
+lookup finds it first in the commit. In the `.local.list` files such a line
+names that top copy (or keeps its file name when the robot path supplies the
+easyconfig), drops `--from-commit`, keeps every other option, and ends with
+`--robot-paths=` the `--build-robot-path` values and then the directory. Give
+`--build-robot-path` once per robot path EasyBuild uses on the build host, in
+EasyBuild's order, as `eb --show-config` lists `robot-paths`; it is required
+with `--materialize`. An empty element in `--robot-paths` stands for
+EasyBuild's built-in default, not for a value set in `EASYBUILD_ROBOT_PATHS`
+or a configuration file, so the line spells every path out. A line is copied
+unchanged, and listed with the reason under `materialized.unchanged` in
+`plan.json`, when it is opaque or planned over the robot path only, when its
+source is not a commit, when it carries an option that changes how EasyBuild
+finds easyconfigs (`--robot` with a path, `--robot-paths`, `--try-*`,
+`--from-pr`, a second `--from-commit`, a value written as its own word, and
+so on), or when a recipe in its closure names a patch through a template, or
+a patch that is neither on the robot path nor in the commit. A prelude line
+is rewritten only when a rewritten line's closure selected its module.
+`materialized` in `plan.json` lists the build robot paths, the lists, each
+line written and whether its easyconfig came from the commit or the robot
+path, and each source directory with its manifest digest. Without
+`--materialize`, a `prelude.local.list` or `sources/v1` an earlier run left
+is removed. `--generated-at` fixes the time in
 `plan.json`, so the same inputs give identical files. A
 `--commit-cache` download that fails before an HTTP status (the cache has
 no tree and the client never gets a status) exits 1 and writes nothing;
 the message names the cache, the commit, the URL, and the transport
-error. An HTTP error status is not that case. A fetched line
+error. An HTTP error status is not that case, and neither is a commit
+`--easyconfigs-repo` lacks when no cache is given. A fetched line
 that still cannot be resolved (no tree for its commit, its easyconfig in
 neither its tree nor the robot path, or a requirement neither provides),
 and a line whose easyconfig is on the robot path but does not parse, is

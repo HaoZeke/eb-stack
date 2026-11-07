@@ -14,6 +14,33 @@ All notable changes to this project are documented here.
   source as revision `a749a63`, so leaf hashes, roots, and signed heads
   do not change.
 
+### Added
+
+- `stack shard --easyconfigs-repo DIR` reads the commit of a
+  `--from-commit` line from an easybuild-easyconfigs git repository: one
+  `git ls-tree` per commit, and one `git cat-file --batch` for the
+  easyconfigs that can decide the plan. A blobless clone serves it, and
+  nothing is written to disk. `--commit-cache` serves only a commit the
+  repository lacks.
+- `stack shard --materialize --build-robot-path PATH` writes
+  `sources/v1/<commit>/`, the files the planned closures read from each
+  commit at their commit paths with each named easyconfig at the top, a
+  SHA-256 manifest `sources/v1/<commit>.json`, and `prelude.local.list` and
+  `shard-NN.local.list`, whose `--from-commit` lines read that directory
+  through `--robot-paths` instead of fetching the commit. A line that
+  cannot run that way is copied unchanged and listed with the reason.
+  `prelude.list`, `shard-NN.list`, and their lines are unchanged.
+
+### Fixed
+
+- `stack shard` resolves a `--from-commit` or `--from-pr` line as EasyBuild
+  5.4 does: the easyconfig the line names comes from the fetched tree, and
+  a dependency comes from the robot path when it has a file of that name
+  and from the fetched tree otherwise. The fetched tree used to win for
+  dependencies too. A dependency whose fetched easyconfig differs from the
+  robot path's is reported as a warning and under `shadowed` in
+  `plan.json`.
+
 ## 0.4.0 - 2026-11-05
 
 ### Changed

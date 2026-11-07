@@ -2338,6 +2338,86 @@ fn file_under(roots: &[PathBuf], name: &str) -> bool {
     file_on_robot(roots, name).is_some()
 }
 
+/// Where a fetched source's easyconfigs were found.
+enum FetchedTree {
+    /// Directories: a `--commit-tree`, a `--pr-tree`, or a cache entry.
+    Dirs(Vec<PathBuf>),
+    /// A commit in `--easyconfigs-repo`.
+    Git(crate::easyconfig_tree::Tree),
+}
+
+/// The trees of one fetched source, kept for lookups after planning.
+struct SourceView {
+    trees: Vec<crate::easyconfig_tree::Tree>,
+    provider: &'static str,
+}
+
+impl SourceView {
+    /// The path inside the tree of a candidate parsed from it.
+    fn rel(&self, path: &str) -> Option<String> {
+        self.trees.iter().find_map(|tree| {
+            let prefix = tree.label("");
+            let prefix = if prefix.ends_with('/') || prefix.ends_with(':') {
+                prefix
+            } else {
+                format!("{prefix}/")
+            };
+            path.strip_prefix(&prefix).map(str::to_string)
+        })
+    }
+
+    /// The names in `robot` (file name to the robot path's bytes) that a
+    /// tree has an easyconfig of with other content. Each tree is read once.
+    fn differing(
+        &self,
+        robot: &std::collections::BTreeMap<String, Option<Vec<u8>>>,
+    ) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut left: std::collections::BTreeSet<&String> = robot.keys().collect();
+        for tree in &self.trees {
+            let found: Vec<(&String, String)> = left
+                .iter()
+                .filter_map(|name| tree.find_easyconfig(name).map(|rel| (*name, rel)))
+                .collect();
+            let rels: Vec<String> = found.iter().map(|(_, rel)| rel.clone()).collect();
+            let Ok(read) = tree.read_all(&rels) else {
+                continue;
+            };
+            for (name, rel) in found {
+                left.remove(name);
+                if robot[name].as_deref() != Some(read[&rel].as_slice()) {
+                    out.insert(name.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// `--build-robot-path` values, when `--materialize` is set.
+fn build_robot_paths(extra: &StackShardSources) -> Result<Option<Vec<String>>> {
+    match (extra.materialize, extra.build_robot_paths.is_empty()) {
+        (false, true) => Ok(None),
+        (false, false) => Err(usage("--build-robot-path is read only with --materialize")),
+        (true, true) => Err(usage(
+            "--materialize needs --build-robot-path: the robot-paths that `eb --show-config` reports on the build host",
+        )),
+        (true, false) => {
+            for path in &extra.build_robot_paths {
+                if !Path::new(path).is_absolute()
+                    || path.contains([':', ','])
+                    || path.chars().any(char::is_whitespace)
+                {
+                    return Err(usage(format!(
+                        "--build-robot-path {path}: give one absolute path without ':', ',' or spaces"
+                    )));
+                }
+            }
+            Ok(Some(extra.build_robot_paths.clone()))
+        }
+    }
+}
+
 /// Split a build list into shards whose builds do not overlap, plus a prelude
 /// of the dependencies two or more shards need.
 ///
@@ -2358,6 +2438,44 @@ pub fn run_stack_shard_with(
     args: &StackShardRequest,
     http: &dyn pr_overlap::HttpGet,
 ) -> Result<StackShardRun> {
+    run_stack_shard_with_sources(args, &StackShardSources::default(), http)
+}
+
+/// Where `stack shard` reads `--from-commit` trees from besides
+/// [`StackShardRequest`], and whether it writes lists that run without
+/// fetching them again.
+#[derive(Debug, Clone, Default)]
+pub struct StackShardSources {
+    /// easybuild-easyconfigs git repository (a checkout, a bare repository,
+    /// or a blobless clone) whose objects hold the commits of `--from-commit`
+    /// lines. A commit found there is read in place; `--commit-cache` serves
+    /// only a commit it lacks. `--commit-tree` still comes first.
+    pub easyconfigs_repo: Option<PathBuf>,
+    /// Write `sources/v1/<commit>/` with the files the plan reads from each
+    /// commit, its manifest `sources/v1/<commit>.json`, and
+    /// `prelude.local.list` and `shard-NN.local.list`, whose `--from-commit`
+    /// lines read that directory instead of fetching the commit.
+    pub materialize: bool,
+    /// The build host's EasyBuild robot paths, in EasyBuild's order, as
+    /// `eb --show-config` reports `robot-paths`. An executable line passes
+    /// them, then its sources directory, as `--robot-paths`.
+    pub build_robot_paths: Vec<String>,
+}
+
+/// [`run_stack_shard`] with the sources in `sources`.
+pub fn run_stack_shard_sources(
+    args: &StackShardRequest,
+    sources: &StackShardSources,
+) -> Result<StackShardRun> {
+    run_stack_shard_with_sources(args, sources, &pr_overlap::UreqGet)
+}
+
+/// [`run_stack_shard_sources`] with downloads through `http`.
+pub fn run_stack_shard_with_sources(
+    args: &StackShardRequest,
+    extra: &StackShardSources,
+    http: &dyn pr_overlap::HttpGet,
+) -> Result<StackShardRun> {
     use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
     use crate::domain::Candidate;
     use crate::eb_parse::merge_candidates_with_precedence;
@@ -2374,6 +2492,15 @@ pub fn run_stack_shard_with(
     if args.shards == 0 {
         return Err(usage("--shards must be at least 1"));
     }
+    if let Some(repo) = &extra.easyconfigs_repo {
+        if crate::easyconfig_tree::git_output(repo, &["rev-parse", "--git-dir"])?.is_none() {
+            return Err(usage(format!(
+                "--easyconfigs-repo {} is not a git repository",
+                repo.display()
+            )));
+        }
+    }
+    let build_robot_paths = build_robot_paths(extra)?;
     let mut commit_trees = BTreeMap::new();
     for spec in &args.commit_trees {
         let (commit, dir) = spec
@@ -2494,9 +2621,14 @@ pub fn run_stack_shard_with(
     };
 
     // Universe 0 is the robot path. Each fetched source a tree was found for
-    // is one more: its easyconfigs first, then the robot path.
+    // is one more: the robot path first, then that tree, the order EasyBuild
+    // searches after it appends the fetched files to the robot path. The
+    // easyconfig a line names is the tree's, as EasyBuild replaces a named
+    // file with the fetched copy.
     let mut sources: Vec<LineSource> = Vec::new();
     let mut overlays: Vec<Vec<Candidate>> = Vec::new();
+    let mut views: Vec<SourceView> = Vec::new();
+    let mut contents: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut tree_status: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut source_failure: BTreeMap<LineSource, String> = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -2506,7 +2638,17 @@ pub fn run_stack_shard_with(
         .filter_map(|l| l.source.as_ref())
         .filter(|s| !matches!(s, LineSource::Invalid(_)))
         .collect();
-    if !wanted.is_empty() && trees.any() {
+    let mut named_by: BTreeMap<&LineSource, BTreeSet<String>> = BTreeMap::new();
+    for line in lines.iter().filter(|l| l.fetched) {
+        if let Some(source) = &line.source {
+            named_by
+                .entry(source)
+                .or_default()
+                .insert(line.file.clone());
+        }
+    }
+    let base_paths: BTreeSet<String> = base.iter().map(|c| c.easyconfig_path.clone()).collect();
+    if !wanted.is_empty() && (trees.any() || extra.easyconfigs_repo.is_some()) {
         // SHA-256 of the robot path's effective easyconfig of each name, so a
         // tree's unchanged files are not parsed again.
         let mut base_digests: BTreeMap<String, String> = BTreeMap::new();
@@ -2515,40 +2657,97 @@ pub fn run_stack_shard_with(
                 base_digests.insert(file_name(c), sha256_hex(&bytes));
             }
         }
+        let robot_names: BTreeSet<String> = base.iter().map(file_name).collect();
         let mut parsed: BTreeMap<PathBuf, Result<Vec<Candidate>, String>> = BTreeMap::new();
         for source in wanted {
-            let dirs: Result<Vec<PathBuf>, String> = match source {
-                LineSource::Commit(sha) => trees.commit_tree(sha).map(|d| vec![d]),
-                LineSource::Prs(prs) => prs.iter().map(|n| trees.pr_tree(*n)).collect(),
+            let roots = named_by.get(source).cloned().unwrap_or_default();
+            let found: Result<FetchedTree, String> = match source {
+                LineSource::Commit(sha) => {
+                    match (trees.explicit_commit_tree(sha), &extra.easyconfigs_repo) {
+                        (Some(dir), _) => dir.map(|d| FetchedTree::Dirs(vec![d])),
+                        (None, Some(repo)) => match crate::easyconfig_tree::Tree::git(repo, sha)? {
+                            Some(tree) => Ok(FetchedTree::Git(tree)),
+                            None if trees.cache.is_some() => {
+                                trees.commit_tree(sha).map(|d| FetchedTree::Dirs(vec![d]))
+                            }
+                            None => Err(format!(
+                                "commit {sha} is not in --easyconfigs-repo {}",
+                                repo.display()
+                            )),
+                        },
+                        (None, None) => trees.commit_tree(sha).map(|d| FetchedTree::Dirs(vec![d])),
+                    }
+                }
+                LineSource::Prs(prs) => prs
+                    .iter()
+                    .map(|n| trees.pr_tree(*n))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(FetchedTree::Dirs),
                 LineSource::Invalid(_) => unreachable!("invalid sources are not wanted"),
             };
             // A cache miss that never reaches an HTTP status cannot fall back:
             // the tree was requested and the download did not happen. An HTTP
             // status still becomes an opaque line below.
-            if let Err(why) = &dirs {
+            if let Err(why) = &found {
                 if why.starts_with(crate::shard_trees::CACHE_DOWNLOAD_FAILED) {
                     return Err(anyhow!("{why}; nothing written"));
                 }
             }
-            let layers = dirs.and_then(|dirs| {
-                let mut layer = Vec::new();
-                for dir in dirs {
-                    let tree = parsed.entry(dir.clone()).or_insert_with(|| {
-                        let (candidates, skipped) = overlay_candidates(&dir, &base_digests)?;
-                        for file in skipped {
-                            warnings.push(format!("{}: does not parse: {file}", source.option()));
-                        }
-                        Ok(candidates)
+            let layers = found.and_then(|found| match found {
+                FetchedTree::Dirs(dirs) => {
+                    let mut layer = Vec::new();
+                    let mut view = Vec::new();
+                    for dir in dirs {
+                        let tree = parsed.entry(dir.clone()).or_insert_with(|| {
+                            let (candidates, skipped) = overlay_candidates(&dir, &base_digests)?;
+                            for file in skipped {
+                                warnings
+                                    .push(format!("{}: does not parse: {file}", source.option()));
+                            }
+                            Ok(candidates)
+                        });
+                        layer.extend(tree.clone()?);
+                        view.push(crate::easyconfig_tree::Tree::dir(&dir));
+                    }
+                    // A file the robot path also has loses to it, unless a
+                    // line names it.
+                    layer.retain(|c| {
+                        let name = file_name(c);
+                        !robot_names.contains(&name) || roots.contains(&name)
                     });
-                    layer.extend(tree.clone()?);
+                    Ok((
+                        layer,
+                        SourceView {
+                            trees: view,
+                            provider: "directory",
+                        },
+                    ))
                 }
-                Ok(layer)
+                FetchedTree::Git(tree) => {
+                    let (layer, skipped) = crate::shard_sources::git_overlay(
+                        &tree,
+                        &base_digests,
+                        &roots,
+                        &mut contents,
+                    )?;
+                    for file in skipped {
+                        warnings.push(format!("{}: does not parse: {file}", source.option()));
+                    }
+                    Ok((
+                        layer,
+                        SourceView {
+                            trees: vec![tree],
+                            provider: "git",
+                        },
+                    ))
+                }
             });
             match layers {
-                Ok(layer) => {
+                Ok((layer, view)) => {
                     tree_status.insert(source.option(), None);
                     sources.push(source.clone());
                     overlays.push(layer);
+                    views.push(view);
                 }
                 Err(why) => {
                     tree_status.insert(source.option(), Some(why.clone()));
@@ -2557,6 +2756,12 @@ pub fn run_stack_shard_with(
             }
         }
     }
+    let content = |path: &str| -> Option<Vec<u8>> {
+        contents
+            .get(path)
+            .cloned()
+            .or_else(|| std::fs::read(path).ok())
+    };
     let universe_of = |source: &LineSource| -> Option<usize> {
         sources.iter().position(|s| s == source).map(|i| i + 1)
     };
@@ -2578,10 +2783,27 @@ pub fn run_stack_shard_with(
             fetched_roots.push(c.clone());
         }
     }
+    // The easyconfigs the lines of each fetched source name, from its tree.
+    let named_roots: Vec<Vec<Candidate>> = sources
+        .iter()
+        .zip(&overlays)
+        .map(|(source, layer)| {
+            let names = named_by.get(source).cloned().unwrap_or_default();
+            layer
+                .iter()
+                .filter(|c| names.contains(&file_name(c)))
+                .cloned()
+                .collect()
+        })
+        .collect();
     let build_universe = |u: usize| -> Vec<Candidate> {
-        let mut layers = vec![fetched_roots.clone(), base.clone()];
+        let mut layers = vec![fetched_roots.clone()];
         if u > 0 {
             layers.push(overlays[u - 1].clone());
+        }
+        layers.push(base.clone());
+        if u > 0 {
+            layers.push(named_roots[u - 1].clone());
         }
         filtered(merge_candidates_with_precedence(&layers))
     };
@@ -2689,6 +2911,12 @@ pub fn run_stack_shard_with(
     let mut origin: BTreeMap<String, Origin> = BTreeMap::new();
     let mut closures: Vec<Option<LineClosure>> = vec![None; lines.len()];
     let mut orders: Vec<Vec<String>> = Vec::new();
+    // Per line: its own easyconfig, and every easyconfig its closure reads.
+    let mut root_paths: Vec<Option<String>> = vec![None; lines.len()];
+    let mut members: Vec<Vec<String>> = vec![Vec::new(); lines.len()];
+    // Robot-path easyconfigs a closure of a fetched line builds, checked
+    // against that line's tree after the pass: (universe, line, module, path).
+    let mut robot_built: Vec<(usize, usize, String, String)> = Vec::new();
     for &u in &used {
         let universe = build_universe(u);
         let by_key: BTreeMap<ModuleKey, &Candidate> =
@@ -2735,8 +2963,16 @@ pub fn run_stack_shard_with(
                     line.number, line.file
                 ));
             }
+            root_paths[i] = by_key.get(start).map(|c| c.easyconfig_path.clone());
             for key in closure.to_build.iter().chain(&closure.installed) {
                 let Some(c) = by_key.get(key) else { continue };
+                members[i].push(c.easyconfig_path.clone());
+                if u > 0
+                    && closure.to_build.contains(key)
+                    && base_paths.contains(&c.easyconfig_path)
+                {
+                    robot_built.push((u, i, module_name(key), c.easyconfig_path.clone()));
+                }
                 let options = if overlay_paths[u].contains(&c.easyconfig_path) {
                     line.source_options.clone()
                 } else {
@@ -2748,8 +2984,7 @@ pub fn run_stack_shard_with(
                 let module = module_name(key);
                 match origin.get(&module) {
                     Some(known) if known.path != c.easyconfig_path => {
-                        let differs = std::fs::read(&known.path).ok()
-                            != std::fs::read(&c.easyconfig_path).ok();
+                        let differs = content(&known.path) != content(&c.easyconfig_path);
                         if differs && closure.to_build.contains(key) {
                             warnings.push(format!(
                                 "line {}: {}: {module} resolves to {} here and to {} {} for an earlier line; the earlier one is planned",
@@ -2789,6 +3024,35 @@ pub fn run_stack_shard_with(
                 .map(module_name)
                 .collect(),
         );
+    }
+    // A robot-path easyconfig a fetched line builds, where its tree has a
+    // file of the same name with other content.
+    let mut shadowed: Vec<serde_json::Value> = Vec::new();
+    for (u, view) in views.iter().enumerate().map(|(i, v)| (i + 1, v)) {
+        let mut robot: BTreeMap<String, Option<Vec<u8>>> = BTreeMap::new();
+        for (_, _, _, path) in robot_built.iter().filter(|(w, ..)| *w == u) {
+            let name = path.rsplit('/').next().unwrap_or(path).to_string();
+            robot.entry(name).or_insert_with(|| content(path));
+        }
+        let differing = view.differing(&robot);
+        for (_, i, module, path) in robot_built.iter().filter(|(w, ..)| *w == u) {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            if !differing.contains(name) {
+                continue;
+            }
+            let source = sources[u - 1].option();
+            warnings.push(format!(
+                "line {}: {}: {module} builds from the robot path's {name}; the tree of {source} has a different {name}, which EasyBuild reads only for a module the robot path lacks",
+                lines[*i].number, lines[*i].file
+            ));
+            shadowed.push(json!({
+                "line": lines[*i].number,
+                "easyconfig": lines[*i].file,
+                "module": module,
+                "robot_easyconfig": name,
+                "source": source,
+            }));
+        }
     }
     if !problems.is_empty() {
         return Err(anyhow!(
@@ -2852,13 +3116,13 @@ pub fn run_stack_shard_with(
     // (and source, for one a fetched tree provides) and content.
     let mut easyconfig_digests: BTreeMap<String, String> = BTreeMap::new();
     for o in origin.values() {
-        let content = std::fs::read(&o.path).with_context(|| format!("read {}", o.path))?;
+        let bytes = content(&o.path).with_context(|| format!("read {}", o.path))?;
         let key = if o.options.is_empty() {
             o.file.clone()
         } else {
             format!("{} {}", o.file, o.options.join(" "))
         };
-        easyconfig_digests.insert(key, sha256_hex(&content));
+        easyconfig_digests.insert(key, sha256_hex(&bytes));
     }
     let mut digest_input = format!(
         "shards={}\ndefault_weight={}\nbuild_list={}\n",
@@ -2914,6 +3178,247 @@ pub fn run_stack_shard_with(
             "modules": shard.modules,
         }));
     }
+
+    // With --materialize: the files each commit gives the planned closures,
+    // and lists whose --from-commit lines read them instead of the commit.
+    let mut source_writes: Vec<(usize, String, Vec<crate::shard_sources::SourceFile>)> = Vec::new();
+    let mut materialized_json: Option<serde_json::Value> = None;
+    if let Some(robot_paths) = &build_robot_paths {
+        use crate::shard_sources::{
+            executable_line, recipe_needs, unsupported_option, SOURCES_DIR,
+        };
+        let out_abs = std::path::absolute(&args.out_dir)
+            .with_context(|| format!("--out-dir {}", args.out_dir.display()))?;
+        let robot_trees: Vec<crate::easyconfig_tree::Tree> = args
+            .easyconfigs
+            .iter()
+            .map(|p| crate::easyconfig_tree::Tree::dir(p))
+            .collect();
+        let source_dir = |u: usize| -> PathBuf {
+            let LineSource::Commit(sha) = &sources[u - 1] else {
+                unreachable!("only commit sources are written out")
+            };
+            out_abs.join(SOURCES_DIR).join(sha.to_ascii_lowercase())
+        };
+        // Per commit source: path in the sources directory to path in the commit.
+        let mut selected: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
+        let mut local_text: Vec<Option<String>> = vec![None; lines.len()];
+        let mut line_entries = Vec::new();
+        let mut unchanged = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.fetched {
+                continue;
+            }
+            let attempt = (|| -> Result<(usize, BTreeMap<String, String>, bool), String> {
+                if let Some(why) = opaque[i] {
+                    return Err(format!(
+                        "planned without a closure: {}",
+                        opaque_reason[i].as_deref().unwrap_or(why)
+                    ));
+                }
+                if let Some(why) = &fallback[i] {
+                    return Err(format!("no tree: {why}"));
+                }
+                let Some(u) = universe_for[i].filter(|u| *u > 0) else {
+                    return Err("no tree".into());
+                };
+                if !matches!(sources[u - 1], LineSource::Commit(_)) {
+                    return Err(format!(
+                        "{} is not a --from-commit source",
+                        sources[u - 1].option()
+                    ));
+                }
+                if let Some(why) = unsupported_option(&line.text) {
+                    return Err(why);
+                }
+                let view = &views[u - 1];
+                let commit = &view.trees[0];
+                let mut files: BTreeMap<String, String> = BTreeMap::new();
+                // EasyBuild copies the named easyconfig from the commit whenever
+                // the commit has it, even when the robot path has the same bytes,
+                // and looks up its patches beside that copy.
+                let root_from_commit = commit.find_easyconfig(&line.file);
+                if let Some(rel) = &root_from_commit {
+                    files.insert(line.file.clone(), rel.clone());
+                    files.insert(rel.clone(), rel.clone());
+                }
+                for path in &members[i] {
+                    let is_root = Some(path) == root_paths[i].as_ref();
+                    if let (true, Some(rel)) = (is_root, &root_from_commit) {
+                        let text = contents
+                            .get(&commit.label(rel))
+                            .cloned()
+                            .or_else(|| {
+                                commit
+                                    .read_all(std::slice::from_ref(rel))
+                                    .ok()
+                                    .and_then(|mut read| read.remove(rel))
+                            })
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                            .ok_or_else(|| format!("{rel} is not readable text"))?;
+                        let needs = recipe_needs(&text, (commit, ""), commit, &robot_trees)
+                            .map_err(|why| format!("{}: {why}", line.file))?;
+                        for rel in needs {
+                            files.insert(rel.clone(), rel);
+                        }
+                        continue;
+                    }
+                    let text = content(path)
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .ok_or_else(|| format!("{path} is not readable text"))?;
+                    let needs = if overlay_paths[u].contains(path) {
+                        let rel = view
+                            .rel(path)
+                            .ok_or_else(|| format!("{path} is not in the commit tree"))?;
+                        files.insert(rel.clone(), rel.clone());
+                        let dir = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                        recipe_needs(&text, (commit, dir), commit, &robot_trees)
+                    } else if base_paths.contains(path) {
+                        let parent = Path::new(path).parent().unwrap_or(Path::new("."));
+                        let beside = crate::easyconfig_tree::Tree::at(parent);
+                        recipe_needs(&text, (&beside, ""), commit, &robot_trees)
+                    } else {
+                        // Another line's own easyconfig: that line installs it first.
+                        Ok(BTreeSet::new())
+                    }
+                    .map_err(|why| format!("{}: {why}", path.rsplit('/').next().unwrap_or(path)))?;
+                    for rel in needs {
+                        files.insert(rel.clone(), rel);
+                    }
+                }
+                Ok((u, files, root_from_commit.is_some()))
+            })();
+            match attempt {
+                Ok((u, files, root_from_commit)) => {
+                    let known = selected.entry(u).or_default();
+                    if let Some((path, _)) = files
+                        .iter()
+                        .find(|(path, from)| known.get(*path).is_some_and(|k| k != *from))
+                    {
+                        unchanged.push(json!({
+                            "line": line.number,
+                            "easyconfig": line.file,
+                            "reason": format!("two commit files would be written to {path}"),
+                        }));
+                        continue;
+                    }
+                    known.extend(files);
+                    let dir = source_dir(u);
+                    let robot = format!("{}:{}", robot_paths.join(":"), dir.display());
+                    let root = root_from_commit.then(|| dir.join(&line.file).display().to_string());
+                    local_text[i] = Some(executable_line(&line.text, root.as_deref(), &robot));
+                    line_entries.push(json!({
+                        "line": line.number,
+                        "easyconfig": line.file,
+                        "source": sources[u - 1].option(),
+                        "root": if root_from_commit { "commit" } else { "robot path" },
+                    }));
+                }
+                Err(reason) => unchanged.push(json!({
+                    "line": line.number,
+                    "easyconfig": line.file,
+                    "reason": reason,
+                })),
+            }
+        }
+        // A prelude module from a commit runs from its sources directory when
+        // a written line's closure already selected it and what it reads.
+        let mut prelude_local = String::new();
+        let mut prelude_rewritten = Vec::new();
+        for m in &planned.prelude {
+            let rewritten = origin.get(m.as_str()).and_then(|o| {
+                let u = (1..=sources.len()).find(|u| {
+                    matches!(sources[u - 1], LineSource::Commit(_))
+                        && o.options.contains(&sources[u - 1].option())
+                        && overlay_paths[*u].contains(&o.path)
+                })?;
+                let view = &views[u - 1];
+                let rel = view.rel(&o.path)?;
+                let known = selected.get(&u)?;
+                if known.get(&rel) != Some(&rel) {
+                    return None;
+                }
+                let text = prelude_line(m);
+                if unsupported_option(&text).is_some() {
+                    return None;
+                }
+                let bytes = content(&o.path)?;
+                let recipe = String::from_utf8(bytes).ok()?;
+                let needs =
+                    recipe_needs(&recipe, (&view.trees[0], ""), &view.trees[0], &robot_trees)
+                        .ok()?;
+                if known.get(&o.file).is_some_and(|k| *k != rel)
+                    || needs.iter().any(|n| known.get(n).is_some_and(|k| k != n))
+                {
+                    return None;
+                }
+                Some((u, rel, needs, text, o.file.clone()))
+            });
+            match rewritten {
+                Some((u, rel, needs, text, file)) => {
+                    let known = selected.entry(u).or_default();
+                    known.insert(file.clone(), rel);
+                    for n in needs {
+                        known.insert(n.clone(), n);
+                    }
+                    let dir = source_dir(u);
+                    let robot = format!("{}:{}", robot_paths.join(":"), dir.display());
+                    let root = dir.join(&file).display().to_string();
+                    prelude_local.push_str(&executable_line(&text, Some(&root), &robot));
+                    prelude_local.push('\n');
+                    prelude_rewritten.push(m.clone());
+                }
+                None => {
+                    prelude_local.push_str(&prelude_line(m));
+                    prelude_local.push('\n');
+                }
+            }
+        }
+        for dir in selected.keys().map(|u| source_dir(*u)) {
+            let text = dir.display().to_string();
+            if text.contains([':', ',']) || text.chars().any(char::is_whitespace) {
+                return Err(usage(format!(
+                    "--materialize: {text} holds a ':', ',' or space, which a robot path cannot"
+                )));
+            }
+        }
+        let mut lists = vec!["prelude.local.list".to_string()];
+        files.push(("prelude.local.list".into(), prelude_local));
+        for (s, shard) in planned.shards.iter().enumerate() {
+            let name = format!("{}.local.list", shard_name(s));
+            files.push((
+                name.clone(),
+                shard
+                    .lines
+                    .iter()
+                    .map(|&i| format!("{}\n", local_text[i].as_deref().unwrap_or(&lines[i].text)))
+                    .collect(),
+            ));
+            lists.push(name);
+        }
+        for (u, chosen) in &selected {
+            let LineSource::Commit(sha) = &sources[u - 1] else {
+                continue;
+            };
+            let chosen: Vec<crate::shard_sources::SourceFile> = chosen
+                .iter()
+                .map(|(path, from)| crate::shard_sources::SourceFile {
+                    path: path.clone(),
+                    from: from.clone(),
+                })
+                .collect();
+            source_writes.push((*u, sha.to_ascii_lowercase(), chosen));
+        }
+        materialized_json = Some(json!({
+            "schema_version": crate::shard_sources::SOURCES_SCHEMA_VERSION,
+            "robot_paths": robot_paths,
+            "lists": lists,
+            "lines": line_entries,
+            "unchanged": unchanged,
+            "prelude": prelude_rewritten,
+        }));
+    }
+
     let line_json: Vec<_> = lines
         .iter()
         .enumerate()
@@ -2932,7 +3437,7 @@ pub fn run_stack_shard_with(
             })
         })
         .collect();
-    let document = json!({
+    let mut document = json!({
         "schema_version": 1,
         "generated_at": stamp,
         "inputs": {
@@ -2976,11 +3481,47 @@ pub fn run_stack_shard_with(
     {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("shard-") && name.ends_with(".list") && !written.contains(name.as_str())
-        {
+        let ours =
+            (name.starts_with("shard-") && name.ends_with(".list")) || name == "prelude.local.list";
+        if ours && !written.contains(name.as_str()) {
             std::fs::remove_file(entry.path())
                 .with_context(|| format!("remove stale {}", entry.path().display()))?;
         }
+    }
+    let sources_root = args.out_dir.join(crate::shard_sources::SOURCES_DIR);
+    if sources_root.exists() {
+        std::fs::remove_dir_all(&sources_root)
+            .with_context(|| format!("remove stale {}", sources_root.display()))?;
+    }
+    let mut sources_json = BTreeMap::new();
+    for (u, sha, chosen) in &source_writes {
+        let view = &views[u - 1];
+        let manifest = sources_root.join(format!("{sha}.json"));
+        let written = crate::shard_sources::write_sources(
+            &view.trees[0],
+            sha,
+            view.provider,
+            &sources_root.join(sha),
+            &manifest,
+            chosen,
+        )?;
+        sources_json.insert(
+            sha.clone(),
+            json!({
+                "directory": format!("{}/{sha}", crate::shard_sources::SOURCES_DIR),
+                "manifest": format!("{}/{sha}.json", crate::shard_sources::SOURCES_DIR),
+                "provider": view.provider,
+                "files": chosen.len(),
+                "sha256": written["sha256"],
+            }),
+        );
+    }
+    if !shadowed.is_empty() {
+        document["shadowed"] = json!(shadowed);
+    }
+    if let Some(mut materialized) = materialized_json {
+        materialized["sources"] = json!(sources_json);
+        document["materialized"] = materialized;
     }
     for (name, text) in &files {
         crate::write_text(&args.out_dir.join(name), text)?;
