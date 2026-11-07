@@ -16,6 +16,14 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack shard --lift-cpu-prerequisites` (opt-in) writes CPU-only
+  prerequisites to `cpu-prerequisites.list` (CPU prefix) while shared
+  accelerator packages stay in `prelude.list`. Classification matches
+  EasyBuild 5.4.2 `dependency_names()` / EESSI's install-path hook: build
+  and runtime dependencies after `--filter-deps`, plus accelerator
+  toolchains — not application package-name lists. Default behaviour is
+  unchanged. A lifted recipe from a `--from-commit` tree keeps that
+  line's source options for hashing and materialization.
 - `stack shard --easyconfigs-repo DIR` reads the commit of a
   `--from-commit` line from an easybuild-easyconfigs git repository: one
   `git ls-tree` per commit, and one `git cat-file --batch` for the

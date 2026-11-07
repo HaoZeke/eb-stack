@@ -478,6 +478,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("default_weight", "integer"),
                 ("filter_deps", "string"),
                 ("generated_at", "string"),
+                ("lift_cpu_prerequisites", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -3234,6 +3235,7 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         filter_deps: filter_deps_argument(arguments),
         generated_at: optional_string(arguments, "generated_at"),
         out_dir: required_path(arguments, "out_dir")?,
+        lift_cpu_prerequisites: optional_bool(arguments, "lift_cpu_prerequisites"),
     };
     let sources = crate::site_commands::StackShardSources {
         easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
@@ -3246,6 +3248,8 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         "text": run.summary(),
         "shards": run.shards,
         "prelude": run.prelude,
+        "cpu_prerequisites": run.cpu_prerequisites,
+        "lift_cpu_prerequisites": run.lift_cpu_prerequisites,
         "lines": run.lines,
         "opaque": run.opaque,
         "warnings": run.warnings,

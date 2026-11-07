@@ -5605,6 +5605,41 @@ in that file. `--weights` is `Name/VersionFull` or the easyconfig
 filename, a tab, then seconds. A module the file does not list weighs
 `--default-weight`, which is 1. Build the prelude, then the shards.
 
+# Lift CPU-only prerequisites of accelerator roots
+
+EESSI installs accelerator packages under an `/accel/` prefix and
+refuses a CPU-only package there: its EasyBuild hook calls
+`dependency_names()` with no arguments (EasyBuild 5.4.2: build and
+runtime dependencies after `--filter-deps`) and classifies by a CUDA or
+ROCm-LLVM dependency or an accelerator toolchain, not by application
+name. A CUDA root whose unshared CPU dependency is still in that root's
+robot closure therefore fails on the accelerator job. The ordinary
+shared prelude can also hold accelerator packages (CUDA, UCX-CUDA); those
+must not share a list that runs under the CPU prefix.
+
+`--lift-cpu-prerequisites` is opt-in. It writes CPU-only prerequisites to
+`cpu-prerequisites.list` (and `cpu-prerequisites.local.list` with
+`--materialize`), keeps shared accelerator packages in `prelude.list`, and
+leaves accelerator-only dependencies on the CUDA shards. Default
+`stack shard` behaviour is unchanged. A lifted recipe from a
+`--from-commit` tree keeps that line's source options for hashing and
+materialization. Invocation order:
+
+1. `cpu-prerequisites.list` under the CPU install path
+2. `prelude.list` under accelerator settings
+3. `shard-NN.list` under accelerator settings
+
+```bash
+eb-stack stack shard \
+  --build-list accel.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all \
+  --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/accel/nvidia/cc80/modules/all \
+  --shards 4 \
+  --lift-cpu-prerequisites \
+  --out-dir build/accel-shards
+```
+
 # Resolve lines EasyBuild fetches from GitHub
 
 A line with `--from-commit=SHA` or `--from-pr=N` builds an easyconfig

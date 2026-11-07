@@ -1184,6 +1184,14 @@ struct ShardArgs {
     /// Output directory for `prelude.list`, `shard-NN.list`, and `plan.json`.
     #[arg(long)]
     out_dir: PathBuf,
+    /// Emit CPU-only prerequisites into `cpu-prerequisites.list` (built under
+    /// the CPU prefix) even when only one accelerator root needs them. Shared
+    /// accelerator packages stay in `prelude.list` under accelerator settings.
+    /// Off by default: only modules two or more shards share go to the
+    /// prelude (legacy). EESSI refuses to install a CPU-only package into an
+    /// `/accel/` prefix.
+    #[arg(long)]
+    lift_cpu_prerequisites: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -3342,6 +3350,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 filter_deps,
                 generated_at,
                 out_dir,
+                lift_cpu_prerequisites,
             } = *args;
             let run = eb_stack::site_commands::run_stack_shard_sources(
                 &eb_stack::site_commands::StackShardRequest {
@@ -3358,6 +3367,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     filter_deps,
                     generated_at,
                     out_dir,
+                    lift_cpu_prerequisites,
                 },
                 &eb_stack::site_commands::StackShardSources {
                     easyconfigs_repo,

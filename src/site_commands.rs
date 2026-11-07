@@ -2226,6 +2226,10 @@ pub struct StackShardRequest {
     pub generated_at: Option<String>,
     /// Output directory.
     pub out_dir: PathBuf,
+    /// Opt-in: lift CPU-only prerequisites of accelerator roots into the
+    /// prelude even when only one root needs them. Default is false (shared
+    /// dependencies only), matching historical `stack shard` behaviour.
+    pub lift_cpu_prerequisites: bool,
 }
 
 /// What `stack shard` wrote.
@@ -2235,6 +2239,10 @@ pub struct StackShardRun {
     pub shards: usize,
     /// Prelude modules.
     pub prelude: usize,
+    /// CPU-prerequisite modules (opt-in lift). Zero when the flag is off.
+    pub cpu_prerequisites: usize,
+    /// Whether `--lift-cpu-prerequisites` was set.
+    pub lift_cpu_prerequisites: bool,
     /// Build-list lines.
     pub lines: usize,
     /// Lines planned without a closure.
@@ -2244,12 +2252,19 @@ pub struct StackShardRun {
 }
 
 impl StackShardRun {
-    /// One line for the CLI.
+    /// One line for the CLI. Legacy format when the CPU-lift flag is off.
     pub fn summary(&self) -> String {
-        let mut text = format!(
-            "shards={} prelude={} lines={}",
-            self.shards, self.prelude, self.lines
-        );
+        let mut text = if self.lift_cpu_prerequisites {
+            format!(
+                "shards={} prelude={} cpu_prerequisites={} lines={}",
+                self.shards, self.prelude, self.cpu_prerequisites, self.lines
+            )
+        } else {
+            format!(
+                "shards={} prelude={} lines={}",
+                self.shards, self.prelude, self.lines
+            )
+        };
         if self.opaque > 0 {
             text.push_str(&format!(" opaque={}", self.opaque));
         }
@@ -2476,11 +2491,13 @@ pub fn run_stack_shard_with_sources(
     extra: &StackShardSources,
     http: &dyn pr_overlap::HttpGet,
 ) -> Result<StackShardRun> {
+    use crate::accel_install::is_accelerator_candidate_filtered;
     use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
     use crate::domain::Candidate;
     use crate::eb_parse::merge_candidates_with_precedence;
     use crate::shard::{
-        is_commit_sha, merge_orders, parse_lines, parse_weights, plan, LineClosure, LineSource,
+        is_commit_sha, merge_orders, parse_lines, parse_weights, plan, plan_with, LineClosure,
+        LineSource,
     };
     use crate::shard_trees::{overlay_candidates, TreeSources, EASYCONFIGS_REPO};
     use serde_json::json;
@@ -3109,7 +3126,104 @@ pub fn run_stack_shard_with_sources(
             .copied()
             .unwrap_or(args.default_weight)
     };
-    let planned = plan(&closures, &order, &weight, args.shards);
+    // Map each planned module to the candidate its origin selected, so CPU vs
+    // accelerator classification follows the effective robot / from-commit
+    // recipe (including source pins), not the module-name spelling.
+    let mut by_path: BTreeMap<String, Candidate> = BTreeMap::new();
+    for &u in &used {
+        for c in build_universe(u) {
+            by_path
+                .entry(c.easyconfig_path.clone())
+                .or_insert_with(|| c);
+        }
+    }
+    // EasyBuild 5.4.2 dependency_names() defaults combine build+runtime then
+    // filter_deps. The universe already dropped filtered edges; re-apply the
+    // same filter when classifying so a filtered CUDA builddep does not count.
+    let is_accel_module = |module: &str| -> bool {
+        origin
+            .get(module)
+            .and_then(|o| by_path.get(&o.path))
+            .map(|c| is_accelerator_candidate_filtered(c, &filter))
+            .unwrap_or(false)
+    };
+    let mut cpu_lift: BTreeSet<String> = BTreeSet::new();
+    let mut cpu_root_lines: BTreeSet<usize> = BTreeSet::new();
+    if args.lift_cpu_prerequisites {
+        for (i, closure) in closures.iter().enumerate() {
+            if opaque[i].is_some() {
+                continue;
+            }
+            if !is_accel_module(&closure.root) {
+                // CPU-only build-list root: emit under CPU settings, not an
+                // accelerator shard.
+                cpu_root_lines.insert(i);
+                continue;
+            }
+            for module in &closure.to_build {
+                if module == &closure.root {
+                    continue;
+                }
+                if !is_accel_module(module) {
+                    cpu_lift.insert(module.clone());
+                }
+            }
+        }
+        // Refuse planning a CPU package that still needs an uninstalled
+        // accelerator dependency (would install into the wrong prefix).
+        let mut cpu_problems = Vec::new();
+        for module in &cpu_lift {
+            let Some(o) = origin.get(module) else {
+                continue;
+            };
+            let Some(c) = by_path.get(&o.path) else {
+                continue;
+            };
+            for dep in c
+                .dependencies
+                .iter()
+                .chain(c.builddependencies.iter())
+                .filter(|d| !filter.dep_is_filtered(&d.name, d.version_req.as_str()))
+            {
+                for (dep_module, dep_origin) in &origin {
+                    let Some(dep_c) = by_path.get(&dep_origin.path) else {
+                        continue;
+                    };
+                    if dep_c.name != dep.name {
+                        continue;
+                    }
+                    if !is_accelerator_candidate_filtered(dep_c, &filter) {
+                        continue;
+                    }
+                    if installed.contains(dep_module) {
+                        continue;
+                    }
+                    let needed = closures
+                        .iter()
+                        .any(|cl| cl.to_build.iter().any(|m| m == dep_module));
+                    if needed {
+                        cpu_problems.push(format!(
+                            "CPU prerequisite {module} needs accelerator module {dep_module} \
+                             ({}); install that under the accelerator prefix first",
+                            dep_origin.file
+                        ));
+                    }
+                }
+            }
+        }
+        if !cpu_problems.is_empty() {
+            return Err(anyhow!(
+                "{} CPU/accelerator conflict(s); nothing written\n{}",
+                cpu_problems.len(),
+                cpu_problems.join("\n")
+            ));
+        }
+    }
+    let planned = if !args.lift_cpu_prerequisites {
+        plan(&closures, &order, &weight, args.shards)
+    } else {
+        plan_with(&closures, &order, &weight, args.shards, &cpu_lift)
+    };
 
     // The digest covers what decides the plan: the list, the weights, the
     // installed modules, and every easyconfig a closure reached, by file name
@@ -3125,9 +3239,10 @@ pub fn run_stack_shard_with_sources(
         easyconfig_digests.insert(key, sha256_hex(&bytes));
     }
     let mut digest_input = format!(
-        "shards={}\ndefault_weight={}\nbuild_list={}\n",
+        "shards={}\ndefault_weight={}\nlift_cpu_prerequisites={}\nbuild_list={}\n",
         args.shards,
         args.default_weight,
+        args.lift_cpu_prerequisites,
         sha256_hex(&list_bytes)
     );
     if let Some(digest) = &weights_digest {
@@ -3150,8 +3265,6 @@ pub fn run_stack_shard_with_sources(
     }
     let inputs_digest = sha256_hex(digest_input.as_bytes());
 
-    let width = planned.shards.len().to_string().len().max(2);
-    let shard_name = |s: usize| format!("shard-{:0width$}", s + 1);
     let mut files: Vec<(String, String)> = vec![(
         "prelude.list".into(),
         planned
@@ -3160,23 +3273,75 @@ pub fn run_stack_shard_with_sources(
             .map(|m| format!("{}\n", prelude_line(m)))
             .collect(),
     )];
+    // CPU prerequisite deps (easyconfig lines) then CPU-only root lines.
+    let mut cpu_prereq_text = String::new();
+    for m in &planned.cpu_prerequisites {
+        cpu_prereq_text.push_str(&format!("{}\n", prelude_line(m)));
+    }
+    let mut cpu_root_json = Vec::new();
+    for &i in &cpu_root_lines {
+        cpu_prereq_text.push_str(&format!("{}\n", lines[i].text));
+        cpu_root_json.push(json!({
+            "line": lines[i].number,
+            "text": lines[i].text,
+            "easyconfig": lines[i].file,
+            "module": closures[i].root,
+        }));
+    }
+    if args.lift_cpu_prerequisites
+        && (!planned.cpu_prerequisites.is_empty() || !cpu_root_lines.is_empty())
+    {
+        files.push(("cpu-prerequisites.list".into(), cpu_prereq_text.clone()));
+    }
     let mut shard_json = Vec::new();
-    for (s, shard) in planned.shards.iter().enumerate() {
+    let mut written_shards: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    for shard in &planned.shards {
+        let shard_lines: Vec<usize> = shard
+            .lines
+            .iter()
+            .copied()
+            .filter(|i| !cpu_root_lines.contains(i))
+            .collect();
+        if shard_lines.is_empty() {
+            // Empty after moving CPU-only roots out; do not write an accel shard.
+            continue;
+        }
+        let shard_modules: Vec<String> = shard
+            .modules
+            .iter()
+            .filter(|m| {
+                !planned.cpu_prerequisites.iter().any(|c| c == *m)
+                    && !cpu_root_lines.iter().any(|&i| closures[i].root == **m)
+            })
+            .cloned()
+            .collect();
+        written_shards.push((shard_lines, shard_modules));
+    }
+    let width = written_shards.len().to_string().len().max(2);
+    let shard_name = |s: usize| format!("shard-{:0width$}", s + 1);
+    let mut line_shard_name: Vec<Option<String>> = vec![None; lines.len()];
+    for (s, (shard_lines, shard_modules)) in written_shards.iter().enumerate() {
+        let name = shard_name(s);
+        for &i in shard_lines {
+            line_shard_name[i] = Some(name.clone());
+        }
         files.push((
-            format!("{}.list", shard_name(s)),
-            shard
-                .lines
+            format!("{}.list", name),
+            shard_lines
                 .iter()
                 .map(|&i| format!("{}\n", lines[i].text))
                 .collect(),
         ));
         shard_json.push(json!({
-            "name": shard_name(s),
-            "file": format!("{}.list", shard_name(s)),
-            "weight": shard.weight,
-            "lines": shard.lines.iter().map(|&i| lines[i].number).collect::<Vec<_>>(),
-            "modules": shard.modules,
+            "name": name,
+            "file": format!("{}.list", name),
+            "weight": shard_modules.iter().map(|m| weight(m)).sum::<u64>(),
+            "lines": shard_lines.iter().map(|&i| lines[i].number).collect::<Vec<_>>(),
+            "modules": shard_modules,
         }));
+    }
+    for &i in &cpu_root_lines {
+        line_shard_name[i] = Some("cpu-prerequisites".into());
     }
 
     // With --materialize: the files each commit gives the planned closures,
@@ -3384,12 +3549,73 @@ pub fn run_stack_shard_with_sources(
         }
         let mut lists = vec!["prelude.local.list".to_string()];
         files.push(("prelude.local.list".into(), prelude_local));
-        for (s, shard) in planned.shards.iter().enumerate() {
+        // Same rewrite path for CPU prerequisites that came from a commit.
+        let mut cpu_local = String::new();
+        let mut cpu_rewritten = Vec::new();
+        for m in &planned.cpu_prerequisites {
+            let rewritten = origin.get(m.as_str()).and_then(|o| {
+                let u = (1..=sources.len()).find(|u| {
+                    matches!(sources[u - 1], LineSource::Commit(_))
+                        && o.options.contains(&sources[u - 1].option())
+                        && overlay_paths[*u].contains(&o.path)
+                })?;
+                let view = &views[u - 1];
+                let rel = view.rel(&o.path)?;
+                let known = selected.get(&u)?;
+                if known.get(&rel) != Some(&rel) {
+                    return None;
+                }
+                let text = prelude_line(m);
+                if unsupported_option(&text).is_some() {
+                    return None;
+                }
+                let bytes = content(&o.path)?;
+                let recipe = String::from_utf8(bytes).ok()?;
+                let needs =
+                    recipe_needs(&recipe, (&view.trees[0], ""), &view.trees[0], &robot_trees)
+                        .ok()?;
+                if known.get(&o.file).is_some_and(|k| *k != rel)
+                    || needs.iter().any(|n| known.get(n).is_some_and(|k| k != n))
+                {
+                    return None;
+                }
+                Some((u, rel, needs, text, o.file.clone()))
+            });
+            match rewritten {
+                Some((u, rel, needs, text, file)) => {
+                    let known = selected.entry(u).or_default();
+                    known.insert(file.clone(), rel);
+                    for n in needs {
+                        known.insert(n.clone(), n);
+                    }
+                    let dir = source_dir(u);
+                    let robot = format!("{}:{}", robot_paths.join(":"), dir.display());
+                    let root = dir.join(&file).display().to_string();
+                    cpu_local.push_str(&executable_line(&text, Some(&root), &robot));
+                    cpu_local.push('\n');
+                    cpu_rewritten.push(m.clone());
+                }
+                None => {
+                    cpu_local.push_str(&prelude_line(m));
+                    cpu_local.push('\n');
+                }
+            }
+        }
+        for &i in &cpu_root_lines {
+            cpu_local.push_str(local_text[i].as_deref().unwrap_or(&lines[i].text));
+            cpu_local.push('\n');
+        }
+        if args.lift_cpu_prerequisites
+            && (!planned.cpu_prerequisites.is_empty() || !cpu_root_lines.is_empty())
+        {
+            files.push(("cpu-prerequisites.local.list".into(), cpu_local));
+            lists.insert(0, "cpu-prerequisites.local.list".to_string());
+        }
+        for (s, (shard_lines, _)) in written_shards.iter().enumerate() {
             let name = format!("{}.local.list", shard_name(s));
             files.push((
                 name.clone(),
-                shard
-                    .lines
+                shard_lines
                     .iter()
                     .map(|&i| format!("{}\n", local_text[i].as_deref().unwrap_or(&lines[i].text)))
                     .collect(),
@@ -3416,6 +3642,7 @@ pub fn run_stack_shard_with_sources(
             "lines": line_entries,
             "unchanged": unchanged,
             "prelude": prelude_rewritten,
+            "cpu_prerequisites": cpu_rewritten,
         }));
     }
 
@@ -3430,13 +3657,26 @@ pub fn run_stack_shard_with_sources(
                 "module": closures[i].root,
                 "source": line.source.as_ref().map(LineSource::option),
                 "group": planned.group_of[i] + 1,
-                "shard": shard_name(planned.shard_of[i]),
+                "shard": line_shard_name[i],
                 "closure": closures[i].to_build,
                 "opaque": opaque[i],
                 "opaque_reason": opaque_reason[i],
             })
         })
         .collect();
+    let module_meta = |modules: &[String]| -> Vec<serde_json::Value> {
+        modules
+            .iter()
+            .map(|m| {
+                json!({
+                    "module": m,
+                    "easyconfig": easyconfig_of(m),
+                    "options": origin.get(m.as_str()).map(|o| o.options.clone()).unwrap_or_default(),
+                    "weight": weight(m),
+                })
+            })
+            .collect()
+    };
     let mut document = json!({
         "schema_version": 1,
         "generated_at": stamp,
@@ -3451,25 +3691,29 @@ pub fn run_stack_shard_with_sources(
         },
         "shards_requested": args.shards,
         "default_weight": args.default_weight,
+        "lift_cpu_prerequisites": args.lift_cpu_prerequisites,
         "prelude": {
             "file": "prelude.list",
             "weight": planned.prelude_weight,
-            "modules": planned
-                .prelude
-                .iter()
-                .map(|m| json!({
-                    "module": m,
-                    "easyconfig": easyconfig_of(m),
-                    "options": origin.get(m.as_str()).map(|o| o.options.clone()).unwrap_or_default(),
-                    "weight": weight(m),
-                }))
-                .collect::<Vec<_>>(),
+            "modules": module_meta(&planned.prelude),
         },
         "shards": shard_json,
         "lines": line_json,
         "opaque": opaque_json,
         "warnings": warnings,
     });
+    if args.lift_cpu_prerequisites {
+        document["cpu_prerequisites"] = json!({
+            "file": if planned.cpu_prerequisites.is_empty() && cpu_root_lines.is_empty() {
+                serde_json::Value::Null
+            } else {
+                json!("cpu-prerequisites.list")
+            },
+            "weight": planned.cpu_prerequisites_weight,
+            "modules": module_meta(&planned.cpu_prerequisites),
+            "roots": cpu_root_json,
+        });
+    }
 
     std::fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("create {}", args.out_dir.display()))?;
@@ -3481,8 +3725,10 @@ pub fn run_stack_shard_with_sources(
     {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let ours =
-            (name.starts_with("shard-") && name.ends_with(".list")) || name == "prelude.local.list";
+        let ours = (name.starts_with("shard-") && name.ends_with(".list"))
+            || name == "prelude.local.list"
+            || name == "cpu-prerequisites.list"
+            || name == "cpu-prerequisites.local.list";
         if ours && !written.contains(name.as_str()) {
             std::fs::remove_file(entry.path())
                 .with_context(|| format!("remove stale {}", entry.path().display()))?;
@@ -3528,8 +3774,10 @@ pub fn run_stack_shard_with_sources(
     }
     crate::write_json_pretty(&args.out_dir.join("plan.json"), &document)?;
     Ok(StackShardRun {
-        shards: planned.shards.len(),
+        shards: written_shards.len(),
         prelude: planned.prelude.len(),
+        cpu_prerequisites: planned.cpu_prerequisites.len() + cpu_root_lines.len(),
+        lift_cpu_prerequisites: args.lift_cpu_prerequisites,
         lines: lines.len(),
         opaque: opaque_json.len(),
         warnings,
@@ -3766,6 +4014,7 @@ mod tests {
                 filter_deps: vec!["NoSuchFilter".into()],
                 generated_at: Some("2026-11-04T00:00:00Z".into()),
                 out_dir: root.join("out"),
+                lift_cpu_prerequisites: false,
             }
         }
 

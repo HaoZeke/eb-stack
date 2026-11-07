@@ -218,10 +218,17 @@ pub struct ShardPlan {
     pub group_of: Vec<usize>,
     /// Shard of each line, 0-based.
     pub shard_of: Vec<usize>,
-    /// Modules two or more groups need, in `order`.
+    /// Modules two or more groups need, in `order`. With
+    /// [`plan_with`] CPU lifts, only the modules that stay under accelerator
+    /// settings (shared accelerator packages) remain here.
     pub prelude: Vec<String>,
     /// Sum of the prelude module weights.
     pub prelude_weight: u64,
+    /// CPU-only prerequisites that must build under the CPU prefix before the
+    /// accelerator prelude. Empty when the opt-in lift set is empty (legacy).
+    pub cpu_prerequisites: Vec<String>,
+    /// Sum of the CPU-prerequisite module weights.
+    pub cpu_prerequisites_weight: u64,
     /// The shards, heaviest first.
     pub shards: Vec<Shard>,
 }
@@ -270,7 +277,7 @@ fn line_order(members: &[usize], closures: &[LineClosure]) -> Vec<usize> {
     out
 }
 
-/// Plan the shards.
+/// Plan the shards with only shared dependencies in the prelude.
 ///
 /// `order` is a dependency order over every module the closures name; the
 /// prelude is written in it. `weight` gives a module's weight.
@@ -279,6 +286,26 @@ pub fn plan(
     order: &[String],
     weight: &dyn Fn(&str) -> u64,
     shards: usize,
+) -> ShardPlan {
+    plan_with(closures, order, weight, shards, &BTreeSet::new())
+}
+
+/// Plan the shards with an optional CPU-prerequisite lift set.
+///
+/// `cpu_prerequisites` is the opt-in set of CPU-only modules that must build
+/// under the CPU prefix before any accelerator work. They are removed from
+/// shard closures and from the shared prelude (so a shared CUDA package can
+/// stay in `prelude` under accelerator settings while HDF5 leaves for the CPU
+/// list). An empty set preserves legacy behaviour: the prelude is exactly the
+/// modules two or more groups share. A module that is any line's root is not
+/// taken from this set into the CPU dependency list; callers place CPU-only
+/// root lines themselves.
+pub fn plan_with(
+    closures: &[LineClosure],
+    order: &[String],
+    weight: &dyn Fn(&str) -> u64,
+    shards: usize,
+    cpu_prerequisites: &BTreeSet<String>,
 ) -> ShardPlan {
     let n = closures.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -328,22 +355,52 @@ pub fn plan(
         .filter(|(_, count)| *count > 1)
         .map(|(module, _)| module.to_string())
         .collect();
+    let line_roots: BTreeSet<&str> = closures.iter().map(|c| c.root.as_str()).collect();
+    let mut cpu_lift: BTreeSet<String> = BTreeSet::new();
+    for module in cpu_prerequisites {
+        if !line_roots.contains(module.as_str()) {
+            cpu_lift.insert(module.clone());
+        }
+    }
+    // Legacy (empty lift): every shared module goes to the accelerator prelude.
+    // Opt-in: shared modules that are CPU lifts leave the prelude for the CPU
+    // list; shared accelerator packages stay.
+    let prelude_set: BTreeSet<String> = if cpu_lift.is_empty() {
+        shared.clone()
+    } else {
+        shared
+            .iter()
+            .filter(|m| !cpu_lift.contains(m.as_str()))
+            .cloned()
+            .collect()
+    };
+    let in_order: BTreeSet<&str> = order.iter().map(String::as_str).collect();
     let mut prelude: Vec<String> = order
         .iter()
-        .filter(|m| shared.contains(*m))
+        .filter(|m| prelude_set.contains(*m))
         .cloned()
         .collect();
-    // A module missing from `order` still has to build; it goes last, sorted.
-    let in_order: BTreeSet<&str> = order.iter().map(String::as_str).collect();
     prelude.extend(
-        shared
+        prelude_set
+            .iter()
+            .filter(|m| !in_order.contains(m.as_str()))
+            .cloned(),
+    );
+    let mut cpu_list: Vec<String> = order
+        .iter()
+        .filter(|m| cpu_lift.contains(*m))
+        .cloned()
+        .collect();
+    cpu_list.extend(
+        cpu_lift
             .iter()
             .filter(|m| !in_order.contains(m.as_str()))
             .cloned(),
     );
     let prelude_weight = prelude.iter().map(|m| weight(m)).sum();
+    let cpu_prerequisites_weight = cpu_list.iter().map(|m| weight(m)).sum();
     for set in &mut modules {
-        set.retain(|m| !shared.contains(m));
+        set.retain(|m| !prelude_set.contains(m) && !cpu_lift.contains(m));
     }
     let group_weight: Vec<u64> = modules
         .iter()
@@ -387,6 +444,8 @@ pub fn plan(
         shard_of,
         prelude,
         prelude_weight,
+        cpu_prerequisites: cpu_list,
+        cpu_prerequisites_weight,
         shards: out,
     }
 }
@@ -592,6 +651,47 @@ mod tests {
         let planned = plan(&closures, &[], &one, 2);
         assert_eq!(planned.shards.len(), 2);
         assert_eq!(planned.shards[0].weight, 0);
+    }
+
+    #[test]
+    fn cpu_lift_uses_a_separate_list_and_leaves_shared_accel_in_prelude() {
+        // Two CUDA roots share UCX-CUDA; only the first needs HDF5. Default
+        // planning puts UCX-CUDA in the prelude and keeps HDF5 in a shard.
+        let closures = [
+            closure(
+                "GROMACS/1-CUDA",
+                &["HDF5/1", "UCX-CUDA/1", "GROMACS/1-CUDA"],
+            ),
+            closure("LAMMPS/1-CUDA", &["UCX-CUDA/1", "LAMMPS/1-CUDA"]),
+        ];
+        let order: Vec<String> = ["HDF5/1", "UCX-CUDA/1", "GROMACS/1-CUDA", "LAMMPS/1-CUDA"]
+            .map(String::from)
+            .to_vec();
+        let default = plan(&closures, &order, &one, 2);
+        assert_eq!(default.prelude, vec!["UCX-CUDA/1".to_string()]);
+        assert!(default.cpu_prerequisites.is_empty());
+        assert!(default.shards[default.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "HDF5/1"));
+
+        let mut cpu = BTreeSet::new();
+        cpu.insert("HDF5/1".into());
+        let planned = plan_with(&closures, &order, &one, 2, &cpu);
+        assert_eq!(planned.prelude, vec!["UCX-CUDA/1".to_string()]);
+        assert_eq!(planned.cpu_prerequisites, vec!["HDF5/1".to_string()]);
+        assert!(!planned.shards[planned.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "HDF5/1"));
+        // A build-list root is never taken into the CPU dependency list.
+        cpu.insert("GROMACS/1-CUDA".into());
+        let planned = plan_with(&closures, &order, &one, 2, &cpu);
+        assert_eq!(planned.cpu_prerequisites, vec!["HDF5/1".to_string()]);
+        assert!(planned.shards[planned.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "GROMACS/1-CUDA"));
     }
 
     #[test]
