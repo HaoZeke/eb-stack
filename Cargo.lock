@@ -1492,7 +1492,7 @@ dependencies = [
 [[package]]
 name = "rfc9162"
 version = "0.6.1"
-source = "git+https://github.com/leidarljos/deedar?branch=feat%2Frfc9162-tiles#dd4b696e1a344b7c9fc6e8db7970b3787681b251"
+source = "git+https://github.com/leidarljos/rfc9162?branch=main#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
 dependencies = [
  "sha2 0.10.9",
 ]
@@ -1500,7 +1500,7 @@ dependencies = [
 [[package]]
 name = "rfc9162-tiles"
 version = "0.6.1"
-source = "git+https://github.com/leidarljos/deedar?branch=feat%2Frfc9162-tiles#dd4b696e1a344b7c9fc6e8db7970b3787681b251"
+source = "git+https://github.com/leidarljos/rfc9162?branch=main#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
 dependencies = [
  "ed25519-dalek",
  "rfc9162",
