@@ -48,6 +48,7 @@ pub mod input_hash;
 mod install_prefix;
 pub mod jenkins;
 pub mod ledger;
+pub mod ledger_tiles;
 pub mod luarocks;
 mod manifest;
 pub mod mcp;

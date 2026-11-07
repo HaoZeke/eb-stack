@@ -12,6 +12,11 @@
 //!
 //! The signing key is a path the writer passes on each call. A key inside
 //! the log's directory is refused, so the key never travels with the log.
+//!
+//! Every line is also an entry of the tile log beside the file
+//! ([`crate::ledger_tiles`]): `append` writes both, `head` signs both, and
+//! `verify` checks that the tile log extends the signed head and holds the
+//! same lines.
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -59,6 +64,10 @@ const LINKS: &[&str] = &[
     "moved_to",
     "corrects",
 ];
+
+/// Fields with one value from a fixed set: `stage` from [`STAGES`] and
+/// `route` from [`crate::ledger_tiles::ROUTES`].
+const ENUMERATED: &[&str] = &["stage", "route"];
 
 /// Fields with structured content: free text or an object of references.
 const STRUCTURED: &[&str] = &[
@@ -150,7 +159,7 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
             || LINKS.contains(&key.as_str())
             || STRUCTURED.contains(&key.as_str())
             || DERIVED.contains(&key.as_str())
-            || key == "stage";
+            || ENUMERATED.contains(&key.as_str());
         if !known {
             bail!("unknown ledger field {key:?}");
         }
@@ -175,7 +184,7 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     if parsed.offset().local_minus_utc() != 0 {
         bail!("ledger ts {ts:?} is not UTC");
     }
-    for field in LINKS.iter().copied().chain(["stage", "sig"]) {
+    for field in LINKS.iter().copied().chain(ENUMERATED.iter().copied()).chain(["sig"]) {
         if let Some(value) = record.get(field) {
             if !value.as_str().is_some_and(|text| !text.is_empty()) {
                 bail!("ledger field {field} must be a non-empty string");
@@ -185,6 +194,14 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     if let Some(stage) = record.get("stage").and_then(Value::as_str) {
         if !STAGES.contains(&stage) {
             bail!("ledger stage {stage:?} is not one of {}", STAGES.join(", "));
+        }
+    }
+    if let Some(route) = record.get("route").and_then(Value::as_str) {
+        if !crate::ledger_tiles::ROUTES.contains(&route) {
+            bail!(
+                "ledger route {route:?} is not one of {}",
+                crate::ledger_tiles::ROUTES.join(", ")
+            );
         }
     }
     if action == "correction" && !record.contains_key("corrects") {
@@ -248,7 +265,7 @@ pub fn parse_log(text: &str) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-fn parse_line(line: &str, index: usize) -> Result<Entry> {
+pub(crate) fn parse_line(line: &str, index: usize) -> Result<Entry> {
     let value: Value = serde_json::from_str(line).context("not JSON")?;
     let Value::Object(record) = value else {
         bail!("not a JSON object");
@@ -484,6 +501,10 @@ pub struct AppendRequest {
     pub key: Option<PathBuf>,
     /// Where to write the new signed head. Needs `key`.
     pub head_out: Option<PathBuf>,
+    /// The tile log, else the log's path with `.tiles`.
+    pub tiles: Option<PathBuf>,
+    /// The checkpoint origin, else derived from the log. Used with `key`.
+    pub origin: Option<String>,
 }
 
 /// What `ledger append` wrote.
@@ -499,6 +520,10 @@ pub struct AppendReport {
     pub head: rfc9162::Head,
     /// The signed head, when a key was given.
     pub signed: Option<SignedHead>,
+    /// The tile log after the append.
+    pub tiles: crate::ledger_tiles::SyncReport,
+    /// The tile log's checkpoint, when a key was given.
+    pub checkpoint: Option<crate::ledger_tiles::CheckpointReport>,
 }
 
 impl AppendReport {
@@ -577,10 +602,21 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         .with_context(|| format!("append to ledger {}", request.log.display()))?;
     file.sync_all()?;
     entries.push(entry.clone());
-    let signed = key.map(|key| SignedHead::sign(&entries, &key, &now));
+    let signed = key
+        .as_ref()
+        .map(|key| SignedHead::sign(&entries, key, &now));
     if let (Some(signed), Some(out)) = (&signed, &request.head_out) {
         signed.write(out)?;
     }
+    let dir = crate::ledger_tiles::tiles_dir(&request.log, request.tiles.as_deref());
+    let (tiles, checkpoint) = match &key {
+        Some(key) => {
+            let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
+            let (tiles, checkpoint) = crate::ledger_tiles::checkpoint(&entries, &dir, key, &origin)?;
+            (tiles, Some(checkpoint))
+        }
+        None => (crate::ledger_tiles::sync(&entries, &dir)?, None),
+    };
     FileExt::unlock(&file)?;
     Ok(AppendReport {
         index: entry.index,
@@ -588,6 +624,8 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         line: entry.line,
         head: rfc9162::Head::over(&leaves(&entries)),
         signed,
+        tiles,
+        checkpoint,
     })
 }
 
@@ -602,10 +640,26 @@ pub struct HeadRequest {
     pub out: PathBuf,
     /// Signing time, RFC 3339 UTC. Defaults to now.
     pub ts: Option<String>,
+    /// The tile log, else the log's path with `.tiles`.
+    pub tiles: Option<PathBuf>,
+    /// The checkpoint origin, else `eb-stack-ledger/<stack>/<year>`.
+    pub origin: Option<String>,
 }
 
-/// Sign the log's current head.
-pub fn sign_head(request: &HeadRequest) -> Result<SignedHead> {
+/// What `ledger head` signed.
+#[derive(Debug, Clone)]
+pub struct HeadReport {
+    /// The signed head over the JSON Lines log.
+    pub head: SignedHead,
+    /// The tile log after its sync.
+    pub tiles: crate::ledger_tiles::SyncReport,
+    /// The tile log's checkpoint.
+    pub checkpoint: crate::ledger_tiles::CheckpointReport,
+}
+
+/// Sign the log's current head, and the tile log's checkpoint with the
+/// same key.
+pub fn sign_head(request: &HeadRequest) -> Result<HeadReport> {
     refuse_key_beside_log(&request.key, &request.log)?;
     let key = read_signing_key(&request.key)?;
     let entries = read_log(&request.log)?;
@@ -622,7 +676,14 @@ pub fn sign_head(request: &HeadRequest) -> Result<SignedHead> {
     };
     let head = SignedHead::sign(&entries, &key, &ts);
     head.write(&request.out)?;
-    Ok(head)
+    let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
+    let dir = crate::ledger_tiles::tiles_dir(&request.log, request.tiles.as_deref());
+    let (tiles, checkpoint) = crate::ledger_tiles::checkpoint(&entries, &dir, &key, &origin)?;
+    Ok(HeadReport {
+        head,
+        tiles,
+        checkpoint,
+    })
 }
 
 /// What `ledger show` needs.
@@ -717,6 +778,10 @@ pub struct VerifyRequest {
     pub public_key: PathBuf,
     /// The proof to check.
     pub mode: VerifyMode,
+    /// The tile log, else the log's path with `.tiles`.
+    pub tiles: Option<PathBuf>,
+    /// The checkpoint origin, else derived from the log.
+    pub origin: Option<String>,
 }
 
 /// A proof that checked.
@@ -726,20 +791,55 @@ pub struct VerifyReport {
     pub kind: String,
     /// The proof nodes, lower-case hex, innermost first.
     pub proof: Vec<String>,
+    /// Entries in the tile log, which extends the head.
+    pub tiles_size: u64,
+    /// The tile log's root, lower-case hex.
+    pub tiles_root: String,
     /// What the command prints.
     pub stdout: String,
 }
 
 /// Check an inclusion or consistency proof computed from the log against
-/// signed heads. Any failure is an error.
+/// signed heads, then that the tile log extends the head and holds the
+/// same lines. Any failure is an error.
 pub fn verify(request: &VerifyRequest) -> Result<VerifyReport> {
     let trusted = read_public_key(&request.public_key)?;
     let entries = read_log(&request.log)?;
     let all = leaves(&entries);
+    let mut report = verify_proof(request, &trusted, &entries, &all)?;
+    let (size, root) = match &request.mode {
+        VerifyMode::Inclusion { head, .. } => {
+            let head = SignedHead::read(head)?;
+            (head.size, head.root)
+        }
+        VerifyMode::Consistency { to, .. } => {
+            let to = SignedHead::read(to)?;
+            (to.size, to.root)
+        }
+    };
+    let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
+    let dir = crate::ledger_tiles::tiles_dir(&request.log, request.tiles.as_deref());
+    let (tiles_size, tiles_root) =
+        crate::ledger_tiles::audit(&entries, &dir, size, &root, &origin, &trusted)?;
+    let _ = writeln!(
+        report.stdout,
+        "tile log size {tiles_size} root {tiles_root} extends the head and holds the same lines"
+    );
+    report.tiles_size = tiles_size;
+    report.tiles_root = tiles_root;
+    Ok(report)
+}
+
+fn verify_proof(
+    request: &VerifyRequest,
+    trusted: &VerifyingKey,
+    entries: &[Entry],
+    all: &[[u8; 32]],
+) -> Result<VerifyReport> {
     match &request.mode {
         VerifyMode::Inclusion { record, head } => {
             let head = SignedHead::read(head)?;
-            head.check(&trusted)?;
+            head.check(trusted)?;
             if head.size > all.len() {
                 bail!(
                     "head covers {} records but the ledger has {}",
@@ -767,6 +867,8 @@ pub fn verify(request: &VerifyRequest) -> Result<VerifyReport> {
             Ok(VerifyReport {
                 kind: "inclusion".to_string(),
                 proof: proof.iter().map(|node| rfc9162::hex(node)).collect(),
+                tiles_size: 0,
+                tiles_root: String::new(),
                 stdout: format!(
                     "record {record} id {} is in the head of size {} root {}\n",
                     entries[*record].id, head.size, head.root
@@ -776,8 +878,8 @@ pub fn verify(request: &VerifyRequest) -> Result<VerifyReport> {
         VerifyMode::Consistency { from, to } => {
             let from = SignedHead::read(from)?;
             let to = SignedHead::read(to)?;
-            from.check(&trusted).context("--from head")?;
-            to.check(&trusted).context("--to head")?;
+            from.check(trusted).context("--from head")?;
+            to.check(trusted).context("--to head")?;
             if from.size > to.size {
                 bail!(
                     "the --from head covers {} records and the --to head {}; a log only grows",
@@ -820,6 +922,8 @@ pub fn verify(request: &VerifyRequest) -> Result<VerifyReport> {
             Ok(VerifyReport {
                 kind: "consistency".to_string(),
                 proof: proof.iter().map(|node| rfc9162::hex(node)).collect(),
+                tiles_size: 0,
+                tiles_root: String::new(),
                 stdout: format!(
                     "the head of size {} root {} extends the head of size {} root {}\n",
                     to.size, to.root, from.size, from.root
