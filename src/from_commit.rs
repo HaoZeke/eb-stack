@@ -196,7 +196,7 @@ struct ReleasedPin {
 
 /// Remove the named pins from easystack text, keeping every other line.
 ///
-/// An entry is `  - FILE:` followed by its more-indented option lines. A pin
+/// An entry starts with two spaces and `- FILE:`, followed by its more-indented option lines. A pin
 /// line goes only when its option and commit both match, so an entry that
 /// repeats a file with another pin keeps that pin. The comment lines
 /// directly above a removed pin go with it. When nothing but `options:` and

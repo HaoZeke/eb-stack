@@ -4412,7 +4412,7 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
     Ok(())
 }
 
-/// `{class}[{toolchain}] Name vX`, then ` w/ ` and the resolved versionsuffix.
+/// `{class}[{toolchain}] Name vX`, then `w/` surrounded by spaces and the resolved versionsuffix.
 pub fn pr_title(ecs: &[ResolvedEasyconfig]) -> String {
     fn mode(items: &[String]) -> String {
         let mut ranked: Vec<(usize, &str)> = Vec::new();

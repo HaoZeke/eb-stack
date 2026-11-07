@@ -983,7 +983,7 @@ pub fn configured_robot_paths(
 }
 
 /// The `robot-paths` value of `eb --show-config` output:
-/// `robot-paths (E) = /a, /b`, the paths joined by `, `.
+/// `robot-paths (E) = /a, /b`, with paths separated by a comma and a space.
 pub fn parse_show_config_robot_paths(text: &str) -> Result<Vec<String>, String> {
     static LINE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^robot-paths\s+\([A-Z]\)\s+=(.*)$").expect("robot-paths regex")
