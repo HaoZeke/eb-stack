@@ -298,7 +298,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_easyblock_dry_run",
-            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log. When the run fails, failure_kind is setup (EasyBuild never started because a module failed to load; errors has the module system's message), environment (the recipe's toolchain or dependencies cannot be set up here; no easyblock code ran) or easyblock (a Python error in a module), and warnings holds the WARNING lines EasyBuild printed about errors it ignored. next says what to do after a dry run on this server: build with eb_build_test when builds are on, since a dry run never links or runs the tests.",
+            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the robot paths EasyBuild is configured with (EASYBUILD_ROBOT_PATHS, a configuration file, or its built-in default, as eb --show-config reports them); try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log. When the run fails, failure_kind is setup (EasyBuild never started because a module failed to load; errors has the module system's message), environment (the recipe's toolchain or dependencies cannot be set up here; no easyblock code ran) or easyblock (a Python error in a module), and warnings holds the WARNING lines EasyBuild printed about errors it ignored. next says what to do after a dry run on this server: build with eb_build_test when builds are on, since a dry run never links or runs the tests.",
             &[("recipe", "string"), ("easyblocks", "array_min1")],
             &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer"), ("env_filter", "string")],
         ),
@@ -2016,12 +2016,23 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     let dir = eb_run_dir(&root, "dry-run")?;
     let output = dir.join("eb.out");
     let guard = dry_run_guard(&dir)?;
-    let run = run_eb_or_absent_with(
-        &invocation.dry_run_args(&dir),
-        timeout_arg(arguments, 600, 10, 3600),
-        &output,
-        &guard,
-    )?;
+    // timeout_s covers the robot-path probe and the dry run together.
+    let deadline = crate::eb_run::Deadline::after(timeout_arg(arguments, 600, 10, 3600));
+    // Extra robot paths go before the ones EasyBuild is configured with; an
+    // eb that cannot be found is reported by the run below.
+    let args = match (invocation.robot.is_empty(), resolve_eb()) {
+        (false, Ok(program)) => {
+            let configured = crate::eb_run::configured_robot_paths(
+                &program,
+                &dir.join("show-config.out"),
+                deadline,
+                &guard,
+            )?;
+            invocation.dry_run_args_with_configured(&dir, &configured)?
+        }
+        _ => invocation.dry_run_args(&dir),
+    };
+    let run = run_eb_or_absent_with(&args, deadline.remaining(), &output, &guard)?;
     let (text, _) = read_tail(&output, 4 * 1024 * 1024)?;
     let lines = text.lines().collect::<Vec<_>>();
     let steps = parse_dry_run(&text);
@@ -2210,12 +2221,21 @@ fn build_test(arguments: &Value) -> Result<Value, String> {
         format!("--tmpdir={}", dir.join("tmp").display()),
         format!("--buildpath={}", dir.join("build").display()),
     ];
-    let run = run_eb_build(
-        &resolve_eb()?,
-        &invocation.args(&extra),
-        timeout_arg(arguments, 7200, 60, 6 * 3600),
-        &output,
-    )?;
+    let program = resolve_eb()?;
+    // timeout_s covers the robot-path probe and the build together.
+    let deadline = crate::eb_run::Deadline::after(timeout_arg(arguments, 7200, 60, 6 * 3600));
+    let args = if invocation.robot.is_empty() {
+        invocation.args(&extra)
+    } else {
+        let configured = crate::eb_run::configured_robot_paths(
+            &program,
+            &dir.join("show-config.out"),
+            deadline,
+            &[],
+        )?;
+        invocation.args_with_configured(&configured, &extra)?
+    };
+    let run = run_eb_build(&program, &args, deadline.remaining(), &output)?;
     let (text, start_truncated) = read_tail(&output, 16 * 1024 * 1024)?;
     let steps = split_steps(&text);
     let completed = run.exit_code == Some(0)

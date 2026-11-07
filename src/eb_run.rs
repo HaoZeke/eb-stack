@@ -686,7 +686,7 @@ pub struct EbInvocation {
     pub recipe: PathBuf,
     /// Easyblock modules for `--include-easyblocks`.
     pub easyblocks: Vec<PathBuf>,
-    /// Robot paths searched before the default ones.
+    /// Robot paths searched before the ones EasyBuild is configured with.
     pub robot: Vec<PathBuf>,
     /// `key=value` pairs for `--try-amend`.
     pub try_amend: Vec<String>,
@@ -749,7 +749,71 @@ impl EbInvocation {
         ])
     }
 
-    /// `eb` arguments for this invocation followed by `extra`.
+    /// [`EbInvocation::dry_run_args`], with `robot` searched before
+    /// `configured`, the robot paths EasyBuild is configured with
+    /// ([`configured_robot_paths`]).
+    pub fn dry_run_args_with_configured(
+        &self,
+        dir: &Path,
+        configured: &[String],
+    ) -> Result<Vec<String>, String> {
+        self.args_with_configured(
+            configured,
+            &[
+                "-x".to_string(),
+                "--disable-cleanup-tmpdir".to_string(),
+                format!("--tmpdir={}", dir.join("tmp").display()),
+            ],
+        )
+    }
+
+    /// [`EbInvocation::args`], with `robot` searched before `configured`,
+    /// the robot paths EasyBuild is configured with
+    /// ([`configured_robot_paths`]).
+    ///
+    /// `--robot-paths` replaces the configured value, and an empty element
+    /// in it stands for EasyBuild's built-in default only, not for a value
+    /// set in `EASYBUILD_ROBOT_PATHS` or a configuration file. So the
+    /// configured paths are spelled out after `robot`. Without `robot` the
+    /// arguments carry no `--robot-paths` and EasyBuild keeps its own.
+    pub fn args_with_configured(
+        &self,
+        configured: &[String],
+        extra: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut args = self.args(extra);
+        if self.robot.is_empty() {
+            return Ok(args);
+        }
+        let mut paths: Vec<String> = self
+            .robot
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        paths.extend(configured.iter().cloned());
+        if let Some(bad) = paths
+            .iter()
+            .find(|path| path.is_empty() || path.contains(':'))
+        {
+            return Err(format!(
+                "robot path {bad:?} cannot be passed to --robot-paths, which separates paths with ':'"
+            ));
+        }
+        let robot_paths = format!("--robot-paths={}", paths.join(":"));
+        if let Some(slot) = args
+            .iter_mut()
+            .find(|arg| arg.starts_with("--robot-paths="))
+        {
+            *slot = robot_paths;
+        }
+        Ok(args)
+    }
+
+    /// `eb` arguments for this invocation followed by `extra`, for an
+    /// EasyBuild with no robot paths configured: the trailing `:` in
+    /// `--robot-paths` stands for EasyBuild's built-in default. Use
+    /// [`EbInvocation::args_with_configured`] where `EASYBUILD_ROBOT_PATHS` or
+    /// a configuration file may set them.
     pub fn args(&self, extra: &[String]) -> Vec<String> {
         let mut args = vec![self.recipe.display().to_string()];
         if !self.easyblocks.is_empty() {
@@ -833,6 +897,119 @@ pub fn resolve_eb() -> Result<PathBuf, String> {
         .ok_or_else(|| "eb is not on PATH; load an EasyBuild module where eb-stack runs".into())
 }
 
+/// Most output an `eb --show-config` probe may write to one file. The report
+/// is a few kilobytes; output near this size is not that report.
+pub const SHOW_CONFIG_OUTPUT_LIMIT: u64 = 1 << 20;
+
+/// One time limit shared by the steps of an operation, such as the
+/// `eb --show-config` probe and the run that follows it.
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    end: Instant,
+    limit: Duration,
+}
+
+impl Deadline {
+    /// A deadline `limit` from now.
+    pub fn after(limit: Duration) -> Self {
+        Self {
+            end: Instant::now() + limit,
+            limit,
+        }
+    }
+
+    /// Time left before the deadline; zero once it has passed.
+    pub fn remaining(&self) -> Duration {
+        self.end.saturating_duration_since(Instant::now())
+    }
+
+    /// The whole limit the deadline was set with.
+    pub fn limit(&self) -> Duration {
+        self.limit
+    }
+}
+
+/// The robot paths `program` is configured with, in EasyBuild's order, as
+/// `eb --show-config` reports `robot-paths`: from `EASYBUILD_ROBOT_PATHS`, a
+/// configuration file, or the built-in default, with `EASYBUILD_ROBOT` paths
+/// first. EasyBuild reads its own configuration, so every source and template
+/// it supports is honoured.
+///
+/// The probe runs as [`run_eb_with`] runs a dry run, in the directory of
+/// `output_file` with `extra_env`, so it sees the run's configuration. It
+/// stops at `deadline`, and when a file it writes reaches
+/// [`SHOW_CONFIG_OUTPUT_LIMIT`]; then it is stopped with every process it
+/// started. Its output goes to `output_file`, read back at most that size.
+pub fn configured_robot_paths(
+    program: &Path,
+    output_file: &Path,
+    deadline: Deadline,
+    extra_env: &[(String, String)],
+) -> Result<Vec<String>, String> {
+    let (run, over_limit) = run_program_bounded(
+        program,
+        &["--show-config".to_string()],
+        deadline.remaining(),
+        output_file,
+        extra_env,
+        Some(SHOW_CONFIG_OUTPUT_LIMIT),
+    )?;
+    let stopped = "it was stopped with every process it started";
+    if over_limit {
+        return Err(format!(
+            "{} --show-config wrote more than {SHOW_CONFIG_OUTPUT_LIMIT} bytes; {stopped}",
+            program.display()
+        ));
+    }
+    if run.timed_out {
+        return Err(format!(
+            "{} --show-config did not finish within the {} s timeout; {stopped}",
+            program.display(),
+            deadline.limit().as_secs()
+        ));
+    }
+    let (text, _) = read_tail(output_file, SHOW_CONFIG_OUTPUT_LIMIT)?;
+    if run.exit_code != Some(0) {
+        return Err(format!(
+            "{} --show-config exited {}: {}",
+            program.display(),
+            run.exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "on a signal".into()),
+            tail(&text.lines().collect::<Vec<_>>(), 5)
+        ));
+    }
+    parse_show_config_robot_paths(&text)
+}
+
+/// The `robot-paths` value of `eb --show-config` output:
+/// `robot-paths (E) = /a, /b`, the paths joined by `, `.
+pub fn parse_show_config_robot_paths(text: &str) -> Result<Vec<String>, String> {
+    static LINE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^robot-paths\s+\([A-Z]\)\s+=(.*)$").expect("robot-paths regex")
+    });
+    let value = text
+        .lines()
+        .find_map(|line| {
+            LINE.captures(line.trim_end())
+                .map(|c| c[1].trim().to_string())
+        })
+        .ok_or("eb --show-config printed no robot-paths line")?;
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    let paths: Vec<String> = value.split(", ").map(str::to_string).collect();
+    if let Some(bad) = paths
+        .iter()
+        .find(|path| path.is_empty() || path.contains(':'))
+    {
+        return Err(format!(
+            "eb --show-config reports robot path {bad:?}, which --robot-paths cannot carry"
+        ));
+    }
+    Ok(paths)
+}
+
 /// Run `eb args...`, stdout and stderr both to `output_file`, killed after
 /// `limit`. The caller decides whether the run may build.
 ///
@@ -879,6 +1056,21 @@ fn run_program_with(
     output_file: &Path,
     extra_env: &[(String, String)],
 ) -> Result<EbRun, String> {
+    run_program_bounded(program, args, limit, output_file, extra_env, None).map(|(run, _)| run)
+}
+
+/// [`run_program_with`], and with `max_output` no file the program or a
+/// process it starts writes may grow past that many bytes (`RLIMIT_FSIZE`),
+/// and the run is stopped once `output_file` reaches it. Returns the run and
+/// whether it was stopped for its output.
+fn run_program_bounded(
+    program: &Path,
+    args: &[String],
+    limit: Duration,
+    output_file: &Path,
+    extra_env: &[(String, String)],
+    max_output: Option<u64>,
+) -> Result<(EbRun, bool), String> {
     let file = File::create(output_file)
         .map_err(|error| format!("create {}: {error}", output_file.display()))?;
     let err = file
@@ -915,10 +1107,35 @@ fn run_program_with(
     for (key, value) in extra_env {
         command.env(key, value);
     }
+    #[cfg(unix)]
+    if let Some(bytes) = max_output {
+        use std::os::unix::process::CommandExt;
+        let cap = libc::rlim_t::try_from(bytes).unwrap_or(libc::RLIM_INFINITY);
+        // SAFETY: setrlimit is async-signal-safe and touches only the child.
+        unsafe {
+            command.pre_exec(move || {
+                let limit = libc::rlimit {
+                    rlim_cur: cap,
+                    rlim_max: cap,
+                };
+                if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("start {}: {error}", program.display()))?;
     let mut timed_out = false;
+    let mut over_limit = false;
+    let poll = if max_output.is_some() {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(200)
+    };
     let status = loop {
         if let Some(status) = child
             .try_wait()
@@ -926,22 +1143,45 @@ fn run_program_with(
         {
             break Some(status);
         }
+        if let Some(bytes) = max_output {
+            let written = std::fs::metadata(output_file)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            if written >= bytes {
+                over_limit = true;
+                stop_tree(&mut child);
+                break None;
+            }
+        }
         if started.elapsed() >= limit {
             timed_out = true;
             stop_tree(&mut child);
             break None;
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(poll.min(limit.saturating_sub(started.elapsed())));
     };
+    if let (Some(bytes), Some(_)) = (max_output, status) {
+        let written = std::fs::metadata(output_file)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if written >= bytes {
+            over_limit = true;
+            // A process the program started may still hold the file.
+            signal_all("KILL", &descendants(child.id()));
+        }
+    }
     let mut argv = vec![program.display().to_string()];
     argv.extend(args.iter().cloned());
-    Ok(EbRun {
-        argv,
-        exit_code: status.and_then(|status| status.code()),
-        timed_out,
-        seconds: started.elapsed().as_secs(),
-        output_file: output_file.to_path_buf(),
-    })
+    Ok((
+        EbRun {
+            argv,
+            exit_code: status.and_then(|status| status.code()),
+            timed_out,
+            seconds: started.elapsed().as_secs(),
+            output_file: output_file.to_path_buf(),
+        },
+        over_limit,
+    ))
 }
 
 /// The parent process id in a `/proc/<pid>/stat` line. The command name
@@ -1973,5 +2213,290 @@ configure:9999: $? = 1\n";
             !logged.exists(),
             "a lock the output logged as created is removed"
         );
+    }
+
+    #[test]
+    fn show_config_robot_paths_are_read_from_every_source_eb_reports() {
+        for (text, want) in [
+            (
+                "buildpath         (D) = /p/build\nrobot-paths       (D) = /eb/easyconfigs\n",
+                vec!["/eb/easyconfigs"],
+            ),
+            (
+                "robot-paths       (E) = /env/one, /env/two\n",
+                vec!["/env/one", "/env/two"],
+            ),
+            (
+                "robot-paths       (F) = /home/u/cfg, /eb/easyconfigs\n",
+                vec!["/home/u/cfg", "/eb/easyconfigs"],
+            ),
+            ("robot-paths       (E) = /a,b, /c\n", vec!["/a,b", "/c"]),
+            ("robot-paths       (D) = \n", vec![]),
+        ] {
+            assert_eq!(parse_show_config_robot_paths(text).unwrap(), want, "{text}");
+        }
+        assert!(parse_show_config_robot_paths("buildpath (D) = /p\n").is_err());
+        assert!(parse_show_config_robot_paths("robot-paths (E) = /a:b, /c\n").is_err());
+    }
+
+    #[test]
+    fn robot_paths_are_searched_before_the_configured_ones_in_order() {
+        let invocation = EbInvocation {
+            recipe: "x.eb".into(),
+            robot: vec!["/ws/one".into(), "/ws/two".into()],
+            ..Default::default()
+        };
+        let configured = vec!["/env/one".to_string(), "/eb/easyconfigs".to_string()];
+        let args = invocation
+            .args_with_configured(&configured, &["-x".to_string()])
+            .unwrap();
+        assert_eq!(
+            args,
+            [
+                "x.eb",
+                "--robot",
+                "--robot-paths=/ws/one:/ws/two:/env/one:/eb/easyconfigs",
+                "-x"
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.ends_with(':')), "{args:?}");
+        let dry = invocation
+            .dry_run_args_with_configured(Path::new("/w/d"), &configured)
+            .unwrap();
+        assert_eq!(dry[2], args[2]);
+        assert!(dry.contains(&"--tmpdir=/w/d/tmp".to_string()), "{dry:?}");
+        // With nothing configured the paths are still listed, with no empty
+        // element standing for a default.
+        let bare = invocation.args_with_configured(&[], &[]).unwrap();
+        assert_eq!(bare[2], "--robot-paths=/ws/one:/ws/two");
+    }
+
+    #[test]
+    fn without_extra_robot_paths_easybuild_keeps_its_own() {
+        let invocation = EbInvocation {
+            recipe: "x.eb".into(),
+            ..Default::default()
+        };
+        let args = invocation
+            .args_with_configured(&["/env/one".to_string()], &[])
+            .unwrap();
+        assert_eq!(args, invocation.args(&[]));
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("--robot-paths")),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn a_robot_path_with_a_separator_is_refused() {
+        let invocation = EbInvocation {
+            recipe: "x.eb".into(),
+            robot: vec!["/ws/a:b".into()],
+            ..Default::default()
+        };
+        assert!(invocation.args_with_configured(&[], &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_robot_paths_asks_eb_with_the_run_environment_and_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        write_executable(
+            &fake,
+            "#!/bin/sh\necho \"$@\" > args\necho \"$EB_TEST_MARK\" > mark\necho 'buildpath         (D) = /p/build'\necho 'robot-paths       (E) = /site/one, /site/two'\n",
+        )
+        .expect("fake eb");
+        let cwd = dir.path().join("run");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        let paths = configured_robot_paths(
+            &fake,
+            &cwd.join("show-config.out"),
+            Deadline::after(Duration::from_secs(30)),
+            &[("EB_TEST_MARK".to_string(), "guard".to_string())],
+        )
+        .expect("paths");
+        assert_eq!(paths, ["/site/one", "/site/two"]);
+        assert_eq!(
+            std::fs::read_to_string(cwd.join("args")).unwrap().trim(),
+            "--show-config"
+        );
+        assert_eq!(
+            std::fs::read_to_string(cwd.join("mark")).unwrap().trim(),
+            "guard"
+        );
+
+        let failing = dir.path().join("eb-fail");
+        write_executable(
+            &failing,
+            "#!/bin/sh\necho 'ERROR: broken config' >&2\nexit 2\n",
+        )
+        .expect("failing eb");
+        let error = configured_robot_paths(
+            &failing,
+            &cwd.join("show-config.out"),
+            Deadline::after(Duration::from_secs(30)),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("exited 2") && error.contains("broken config"),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|stat| {
+                !stat
+                    .rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start()
+                    .starts_with('Z')
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn gone_within(pid: u32, wait: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < wait {
+            if !alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        !alive(pid)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hanging_probe_and_its_child_stop_at_the_deadline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        write_executable(&fake, "#!/bin/sh\nsleep 300 &\necho $! > child.pid\nwait\n")
+            .expect("fake eb");
+        let started = Instant::now();
+        let error = configured_robot_paths(
+            &fake,
+            &dir.path().join("show-config.out"),
+            Deadline::after(Duration::from_secs(1)),
+            &[],
+        )
+        .unwrap_err();
+        let took = started.elapsed();
+        assert!(error.contains("did not finish within"), "{error}");
+        assert!(
+            error.contains("stopped with every process it started"),
+            "{error}"
+        );
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+        let child: u32 = std::fs::read_to_string(dir.path().join("child.pid"))
+            .expect("child pid")
+            .trim()
+            .parse()
+            .expect("pid");
+        assert!(
+            gone_within(child, Duration::from_secs(3)),
+            "child {child} still runs"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_floods_its_output_is_stopped_at_the_size_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        // The writer is a child of the probe, so the limit has to reach it.
+        write_executable(
+            &fake,
+            "#!/bin/sh\nyes robot-paths &\necho $! > child.pid\nwait\n",
+        )
+        .expect("fake eb");
+        let output = dir.path().join("show-config.out");
+        let started = Instant::now();
+        let error = configured_robot_paths(
+            &fake,
+            &output,
+            Deadline::after(Duration::from_secs(60)),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("wrote more than"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        let size = std::fs::metadata(&output).expect("output").len();
+        assert!(size <= SHOW_CONFIG_OUTPUT_LIMIT, "{size} bytes");
+        let child: u32 = std::fs::read_to_string(dir.path().join("child.pid"))
+            .expect("child pid")
+            .trim()
+            .parse()
+            .expect("pid");
+        assert!(
+            gone_within(child, Duration::from_secs(3)),
+            "writer {child} still runs"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_absent_or_failing_probe_is_an_error_not_a_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = dir.path().join("show-config.out");
+        let deadline = Deadline::after(Duration::from_secs(30));
+        let error = configured_robot_paths(&dir.path().join("no-such-eb"), &output, deadline, &[])
+            .unwrap_err();
+        assert!(error.contains("start"), "{error}");
+        let silent = dir.path().join("eb-silent");
+        write_executable(&silent, "#!/bin/sh\necho 'buildpath (D) = /p'\n").expect("fake eb");
+        let error = configured_robot_paths(&silent, &output, deadline, &[]).unwrap_err();
+        assert!(error.contains("no robot-paths line"), "{error}");
+        let killed = dir.path().join("eb-killed");
+        write_executable(
+            &killed,
+            "#!/bin/sh\necho 'robot-paths (E) = /a'\nkill -9 $$\n",
+        )
+        .expect("fake eb");
+        let error = configured_robot_paths(&killed, &output, deadline, &[]).unwrap_err();
+        assert!(error.contains("exited on a signal"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_run_after_the_probe_gets_only_the_time_that_is_left() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let probe = dir.path().join("eb-probe");
+        write_executable(
+            &probe,
+            "#!/bin/sh\nsleep 1\necho 'robot-paths       (E) = /site/one'\n",
+        )
+        .expect("probe");
+        let run = dir.path().join("eb-run");
+        write_executable(&run, "#!/bin/sh\nsleep 30\n").expect("run");
+        let started = Instant::now();
+        let deadline = Deadline::after(Duration::from_millis(2500));
+        let paths =
+            configured_robot_paths(&probe, &dir.path().join("show-config.out"), deadline, &[])
+                .expect("paths");
+        assert_eq!(paths, ["/site/one"]);
+        let left = deadline.remaining();
+        assert!(
+            left < Duration::from_millis(1600),
+            "{left:?} left after a 1 s probe"
+        );
+        let outcome =
+            run_program(&run, &[], deadline.remaining(), &dir.path().join("eb.out")).expect("run");
+        assert!(outcome.timed_out);
+        let took = started.elapsed();
+        assert!(
+            took < Duration::from_millis(3300),
+            "probe and run took {took:?} under a 2.5 s limit"
+        );
+        assert_eq!(deadline.remaining(), Duration::ZERO);
     }
 }

@@ -181,6 +181,7 @@ jobs:
             --test cuda_cc \
             --test component_reach \
             --test doc_walkthrough \
+            --test eb_robot_paths \
             --test easyblock_layers \
             --test easyblock_owed \
             --test extension_provides \

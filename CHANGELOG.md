@@ -33,6 +33,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `eb_easyblock_dry_run` and `eb_build_test` with `robot` pass those
+  directories and then the robot paths EasyBuild is configured with, as
+  `eb --show-config` reports them, to `--robot-paths`. The trailing `:`
+  they passed stands for EasyBuild's built-in default only, so robot paths
+  set in `EASYBUILD_ROBOT_PATHS` or a configuration file were dropped.
 - `stack shard` resolves a `--from-commit` or `--from-pr` line as EasyBuild
   5.4 does: the easyconfig the line names comes from the fetched tree, and
   a dependency comes from the robot path when it has a file of that name
