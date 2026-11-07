@@ -135,6 +135,8 @@ name in the schema ~tools/list~ returns. The
 | ~repro summary~ | ~eb_repro_summary~ |
 | ~ledger append~ | ~eb_ledger_append~ |
 | ~ledger head~ | ~eb_ledger_head~ |
+| ~ledger tiles~ | ~eb_ledger_tiles~ |
+| ~ledger find~ | ~eb_ledger_find~ |
 | ~ledger show~ | ~eb_ledger_show~ |
 | ~ledger verify~ | ~eb_ledger_verify~ |
 | ~easyblock-reach~ | ~eb_easyblock_reach~ |

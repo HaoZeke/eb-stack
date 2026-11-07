@@ -35,6 +35,24 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `ledger tiles` and `ledger find`, and a tile log beside every ledger.
+  `ledger append` writes each canonical line into a C2SP tlog-tiles log
+  at `<log>.tiles` (or `--tiles DIR`) through the `rfc9162-tiles` crate,
+  with key sidecars over `module=`, `pkg=`, `target=`, `action=`,
+  `route=`, `actor=`, `id=`, and `job=` from `build.job`. `ledger find
+  --key pkg=PETSc --key route=kvm` prints the records carrying every
+  key, each proven in the tile log's checkpoint. `ledger head`, and
+  `ledger append --key`, sign that checkpoint under the origin
+  `eb-stack-ledger/<stack>/<year>` (or `--origin`) with the ledger's
+  Ed25519 key. `ledger verify` also checks that the tile log extends
+  the signed head with the same lines and that its checkpoint is signed
+  by the same key, so a changed tile, a rewritten tree state, or a tile
+  log of another ledger is status 1. `ledger tiles` writes the tile log
+  for an existing ledger or brings it up to date; a tile log that
+  disagrees with the ledger is moved to `<dir>.stale-<time>` and
+  rebuilt. `route` is a new optional record field: `native`, `kvm`, or
+  `qemu`. `eb_ledger_tiles` and `eb_ledger_find` are the same commands
+  over MCP, and the other ledger tools take `tiles` and `origin`.
 - `ledger append`, `ledger head`, `ledger show`, and `ledger verify` keep
   a per-stack software ledger: one JSON Lines file of install, rebuild,
   retire, move, access, removal, finding, and correction records. Each
