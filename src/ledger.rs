@@ -855,13 +855,44 @@ enum LockMode {
 /// A writer's local gate keeps contenders from opening the process-scoped
 /// record-lock inode. Closing any descriptor for that inode releases the
 /// process's lock.
-struct LedgerLock {
+pub(crate) struct LedgerLock {
     gate: Option<File>,
     record: Option<File>,
     #[cfg(unix)]
     slot: Option<process_slot::Slot>,
     owner: u32,
     paths: LedgerPaths,
+}
+
+/// Exclude tile writers through a stable sibling of the replaceable tile tree.
+/// The first append creates this gate, so signing a read-only canonical log
+/// needs no new files in its directory. Its record lock also excludes writers
+/// on hosts that do not share a local flock implementation.
+pub(crate) fn tile_writer_lock(dir: &Path) -> Result<LedgerLock> {
+    if std::fs::symlink_metadata(dir)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        bail!("tile directory {} is a symbolic link", dir.display());
+    }
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("create tile directory {}", dir.display()))?;
+    let resolved = dir
+        .canonicalize()
+        .with_context(|| format!("resolve tile directory {}", dir.display()))?;
+    let mut name = resolved.into_os_string();
+    name.push(".writer-lock");
+    let path = PathBuf::from(name);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(&path)
+        .with_context(|| format!("open tile writer gate {}", path.display()))?;
+    LedgerLock::acquire(&file, &path)
 }
 
 impl LedgerLock {

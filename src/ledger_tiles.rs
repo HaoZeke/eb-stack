@@ -265,6 +265,7 @@ fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Writer<PosixStore>, Syn
 /// Bring the tile log at `dir` to the ledger's lines: append what it lacks,
 /// or move it aside and rebuild it when its entries disagree.
 pub fn sync(entries: &[Entry], dir: &Path) -> Result<SyncReport> {
+    let _lock = ledger::tile_writer_lock(dir)?;
     let (_writer, report) = open_synced(entries, dir)?;
     Ok(report)
 }
@@ -277,6 +278,7 @@ pub fn checkpoint(
     key: &SigningKey,
     origin: &str,
 ) -> Result<(SyncReport, CheckpointReport)> {
+    let _lock = ledger::tile_writer_lock(dir)?;
     let (writer, synced) = open_synced(entries, dir)?;
     let signer = Signer::new(origin, key.clone())
         .map_err(|error| anyhow!("checkpoint signer for {origin}: {error}"))?;
