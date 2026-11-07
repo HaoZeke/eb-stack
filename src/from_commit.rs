@@ -651,8 +651,6 @@ mod tests {
             .arg("-C")
             .arg(dir)
             .arg("-c")
-            .arg("commit.gpgsign=false")
-            .arg("-c")
             .arg("user.name=Rohit Goswami")
             .arg("-c")
             .arg("user.email=rgoswami@ieee.org")

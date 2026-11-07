@@ -1542,8 +1542,6 @@ mod tests {
             .arg("user.email=reach@example.com")
             .arg("-c")
             .arg("user.name=reach")
-            .arg("-c")
-            .arg("commit.gpgsign=false")
             .args(args)
             .output()
             .unwrap();

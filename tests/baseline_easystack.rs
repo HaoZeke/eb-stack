@@ -145,8 +145,6 @@ fn a_from_commit_entry_is_read_from_its_commit_not_the_tree() {
                 "user.name=t",
                 "-c",
                 "user.email=t@t",
-                "-c",
-                "commit.gpgsign=false",
             ])
             .args(args)
             .status()

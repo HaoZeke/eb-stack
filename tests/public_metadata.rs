@@ -306,8 +306,6 @@ fn easyconfigs_env_is_the_robot_directory_and_the_ucx_diff_uses_it() {
             .arg("-C")
             .arg(&clone)
             .arg("-c")
-            .arg("commit.gpgsign=false")
-            .arg("-c")
             .arg("user.name=Rohit Goswami")
             .arg("-c")
             .arg("user.email=rgoswami@ieee.org")
