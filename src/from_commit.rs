@@ -200,7 +200,7 @@ struct ReleasedPin {
 /// line goes only when its option and commit both match, so an entry that
 /// repeats a file with another pin keeps that pin. The comment lines
 /// directly above a removed pin go with it. When nothing but `options:` and
-/// comments is left, the entry collapses to `  - FILE`. Returns the new text
+/// comments is left, the entry collapses to `- FILE` preceded by two spaces. Returns the new text
 /// and the pins dropped.
 fn drop_pins(text: &str, drop: &[ReleasedPin]) -> (String, usize) {
     let lines: Vec<&str> = text.lines().collect();
