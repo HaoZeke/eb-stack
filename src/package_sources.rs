@@ -1278,6 +1278,7 @@ class Leaflib(Package):
                 version: "2026.1".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: root
                 .join("Reusable-1.0-foss-2026.1.eb")
                 .display()

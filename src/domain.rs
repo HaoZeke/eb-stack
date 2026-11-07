@@ -47,11 +47,19 @@ pub struct ExtEntry {
     pub version: String,
 }
 
+/// `true` when `versionprefix` should be omitted from serialized JSON.
+fn skip_versionprefix(value: &Option<String>) -> bool {
+    value.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// One installable variant the solver may choose: a parsed easyconfig.
 ///
-/// Identity is name, version, toolchain and versionsuffix together; two
-/// easyconfigs differing in any of those are separate candidates.
+/// Identity is name, version, versionprefix, toolchain and versionsuffix
+/// together; two easyconfigs differing in any of those are separate
+/// candidates. `version` is the upstream bare version from the recipe; the
+/// EasyBuild install stem is [`Candidate::install_version_stem`] and is never
+/// folded back into `version`.
 pub struct Candidate {
     /// Package name.
     pub name: String,
@@ -63,6 +71,10 @@ pub struct Candidate {
     /// `None` when the easyconfig sets none.
     #[serde(default)]
     pub versionsuffix: Option<String>,
+    /// EasyBuild `versionprefix`. `None` when the recipe sets none (or empty).
+    /// Old JSON without this field deserializes as `None`.
+    #[serde(default, skip_serializing_if = "skip_versionprefix")]
+    pub versionprefix: Option<String>,
     /// Path the candidate was parsed from. Empty for an in-memory parse.
     pub easyconfig_path: String,
     /// Runtime requirements, which must also be installed.
@@ -86,6 +98,22 @@ pub struct Candidate {
     /// topic at all and upstream classes both as `tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
+}
+
+impl Candidate {
+    /// EasyBuild install stem: `versionprefix` + bare `version`.
+    ///
+    /// Pure field projection used by module keys, filenames, robot full
+    /// versions, and dependency matching. Does not mutate [`Self::version`],
+    /// which stays the upstream bare recipe version for SBOM and metadata.
+    pub fn install_version_stem(&self) -> String {
+        install_version_stem(self.versionprefix.as_deref(), &self.version)
+    }
+}
+
+/// EasyBuild install stem from a prefix and bare version.
+pub fn install_version_stem(versionprefix: Option<&str>, version: &str) -> String {
+    format!("{}{version}", versionprefix.unwrap_or(""))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

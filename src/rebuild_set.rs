@@ -920,6 +920,7 @@ mod tests {
             version: version.into(),
             toolchain,
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: format!("x/{name}/{name}-{suffix}.eb"),
             dependencies: deps,
             builddependencies: build,

@@ -64,6 +64,14 @@ pub fn letter_dir_for(name: &str) -> String {
     }
 }
 
+/// EasyBuild 5.4.2 `is_system_toolchain`: only the exact name `system`
+/// (see `SYSTEM_TOOLCHAIN_NAME`). `dummy`, `System`, and `SYSTEM` are not.
+/// Hierarchy matching may still treat `dummy` as an alias of `system` for
+/// old robot trees; module naming and robot full versions do not.
+pub fn is_module_system_toolchain(toolchain: &Toolchain) -> bool {
+    toolchain.name == "system"
+}
+
 /// `det_full_ec_version`: `versionprefix`, `version`, the toolchain unless it
 /// is `system`, then `versionsuffix`. EasyBuild 5 treats only `system` as the
 /// system toolchain.
@@ -73,7 +81,7 @@ pub fn full_version(
     versionprefix: &str,
     versionsuffix: &str,
 ) -> String {
-    let main = if toolchain.name == "system" {
+    let main = if is_module_system_toolchain(toolchain) {
         version.to_string()
     } else {
         format!("{version}-{}-{}", toolchain.name, toolchain.version)
@@ -124,17 +132,19 @@ pub fn versionprefix_of(text: &str) -> Result<String, String> {
 }
 
 /// The full version of a parsed candidate, as EasyBuild's robot looks it up.
-/// `text` is the easyconfig, read for `versionprefix`. A part that still
-/// holds a `%(...)s` template is an error: the file name cannot be told.
-pub fn candidate_full_version(candidate: &Candidate, text: &str) -> Result<String, String> {
-    let prefix = versionprefix_of(text)?;
+/// Uses [`Candidate::versionprefix`] (parsed once at the easyconfig boundary);
+/// does not re-read the file. `_text` is retained so existing call sites keep
+/// compiling; it is not consulted. A part that still holds a `%(...)s`
+/// template is an error: the file name cannot be told.
+pub fn candidate_full_version(candidate: &Candidate, _text: &str) -> Result<String, String> {
+    let prefix = candidate.versionprefix.as_deref().unwrap_or("");
     let suffix = candidate.versionsuffix.clone().unwrap_or_default();
     let parts = [
         candidate.name.as_str(),
         candidate.version.as_str(),
         candidate.toolchain.name.as_str(),
         candidate.toolchain.version.as_str(),
-        prefix.as_str(),
+        prefix,
         suffix.as_str(),
     ];
     if let Some(part) = parts.iter().find(|part| part.contains("%(")) {
@@ -145,7 +155,7 @@ pub fn candidate_full_version(candidate: &Candidate, text: &str) -> Result<Strin
     Ok(full_version(
         &candidate.version,
         &candidate.toolchain,
-        &prefix,
+        prefix,
         &suffix,
     ))
 }
@@ -304,23 +314,19 @@ impl RobotPath {
 
     /// The candidates of a parsed tree EasyBuild's robot would use: each
     /// candidate whose own name and full version lead [`Self::find`] to its
-    /// own file. `read` gives a candidate's easyconfig text.
+    /// own file. Full versions come from candidate fields (no text re-read).
+    /// `read` is retained for call-site compatibility and is unused.
     pub fn effective(
         &self,
         candidates: Vec<Candidate>,
-        read: impl Fn(&Path) -> Option<String>,
+        _read: impl Fn(&Path) -> Option<String>,
     ) -> EffectiveCandidates {
         let mut out = EffectiveCandidates::default();
         let mut ranked: Vec<((usize, usize), Candidate)> = Vec::new();
         let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
         for candidate in candidates {
             let path = PathBuf::from(&candidate.easyconfig_path);
-            let Some(text) = read(&path) else {
-                out.undecidable
-                    .push((candidate.easyconfig_path.clone(), "not readable".into()));
-                continue;
-            };
-            let version = match candidate_full_version(&candidate, &text) {
+            let version = match candidate_full_version(&candidate, "") {
                 Ok(version) => version,
                 Err(why) => {
                     out.undecidable

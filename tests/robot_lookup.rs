@@ -256,7 +256,7 @@ fn what_cannot_be_told_exactly_is_reported_not_guessed() {
     std::fs::create_dir_all(root.join("v/Var")).unwrap();
     std::fs::write(
         root.join("v/Var/Var-1.0.eb"),
-        "name = 'Var'\nlocal_p = 'v'\nversionprefix = local_p\nversion = '1.0'\ntoolchain = SYSTEM\n",
+        "name = 'Var'\nversionprefix = local_p\nversion = '1.0'\ntoolchain = SYSTEM\n",
     )
     .unwrap();
     std::fs::create_dir_all(root.join("t/Tpl")).unwrap();
@@ -265,6 +265,9 @@ fn what_cannot_be_told_exactly_is_reported_not_guessed() {
         "name = 'Tpl'\nversion = '1.0'\nversionsuffix = '-%(nosuch)s'\ntoolchain = SYSTEM\n",
     )
     .unwrap();
+    let prefix_error = eb_stack::parse_easyconfig_file(&root.join("v/Var/Var-1.0.eb"))
+        .expect_err("an unresolved prefix must be rejected")
+        .to_string();
     let robot = RobotPath::new(vec![root.clone()], ArchivedEasyconfigs::Ignored);
     let parsed = eb_stack::parse_easyconfig_tree(&root).expect("parse");
     let effective = robot.effective(parsed.candidates, |path| std::fs::read_to_string(path).ok());
@@ -273,6 +276,7 @@ fn what_cannot_be_told_exactly_is_reported_not_guessed() {
         .undecidable
         .iter()
         .map(|(_, why)| why.as_str())
+        .chain(std::iter::once(prefix_error.as_str()))
         .collect();
     assert!(
         reasons.iter().any(|why| why.contains("versionprefix")),

@@ -388,6 +388,7 @@ mod tests {
                 version: toolchain.1.into(),
             },
             versionsuffix: versionsuffix.map(str::to_string),
+            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),

@@ -255,6 +255,7 @@ fn one(name: &str, tc: &str) -> eb_stack::Candidate {
             version: "2026.1".into(),
         },
         versionsuffix: None,
+        versionprefix: None,
         easyconfig_path: format!("{name}-1.0-{tc}-2026.1.eb"),
         dependencies: Vec::new(),
         builddependencies: Vec::new(),

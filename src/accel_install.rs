@@ -86,6 +86,7 @@ mod tests {
                 version: "2026.1".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: format!("{name}-1.0.eb"),
             dependencies: to_deps(deps),
             builddependencies: to_deps(builddeps),

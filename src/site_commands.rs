@@ -2490,13 +2490,18 @@ fn effective_robot_universe(
 /// Keep the fetched-tree candidates EasyBuild reads after the robot path:
 /// a file a line names, or one whose name and full version the robot path
 /// lacks and the tree's own layout reaches (`create_paths` under the tree's
-/// `easybuild/easyconfigs`). `texts` holds the bytes of candidates not on disk.
+/// `easybuild/easyconfigs`). Full versions come from candidate fields (no
+/// text re-read). `texts` is retained for call-site compatibility and unused.
+///
+/// Used for both `--from-commit` and `--from-pr` overlays: EasyBuild appends
+/// each as `extra_ec_paths` and still resolves dependencies only through
+/// `create_paths`.
 fn retain_commit_fallback(
     layer: &mut Vec<crate::domain::Candidate>,
     robot: &crate::robot_lookup::RobotPath,
     trees: &[crate::easyconfig_tree::Tree],
     named: &std::collections::BTreeSet<String>,
-    texts: &[(String, Vec<u8>)],
+    _texts: &[(String, Vec<u8>)],
     warnings: &mut Vec<String>,
 ) {
     use crate::robot_lookup::{candidate_full_version, ArchivedEasyconfigs, RobotPath};
@@ -2506,18 +2511,12 @@ fn retain_commit_fallback(
         if named.contains(file) {
             return true;
         }
-        let text = texts
-            .iter()
-            .find(|(path, _)| *path == c.easyconfig_path)
-            .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
-            .or_else(|| std::fs::read_to_string(&c.easyconfig_path).ok());
-        let version = match text.as_deref().map(|text| candidate_full_version(c, text)) {
-            Some(Ok(version)) => version,
-            Some(Err(why)) => {
+        let version = match candidate_full_version(c, "") {
+            Ok(version) => version,
+            Err(why) => {
                 warnings.push(format!("{}: {why}; left out", c.easyconfig_path));
                 return false;
             }
-            None => return false,
         };
         if robot.find(&c.name, &version).is_some() {
             return false;
@@ -2901,7 +2900,7 @@ pub fn run_stack_shard_with_sources(
                         let name = file_name(c);
                         !robot_names.contains(&name) || roots.contains(&name)
                     });
-                    if let (Some(robot), LineSource::Commit(_)) = (&effective_robot, source) {
+                    if let Some(robot) = &effective_robot {
                         retain_commit_fallback(
                             &mut layer,
                             robot,

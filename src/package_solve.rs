@@ -309,6 +309,7 @@ pub fn solve_package_profile_with_hierarchy(
         toolchain: plan.build.toolchain.clone(),
         versionsuffix: (!materialized.versionsuffix.is_empty())
             .then_some(materialized.versionsuffix.clone()),
+        versionprefix: None,
         easyconfig_path: format!("__package_profile__/{profile_name}.eb"),
         dependencies: runtime_dependencies,
         builddependencies: build_dependencies,
@@ -441,19 +442,20 @@ fn admit_named_dependency_toolchains(
                 return false;
             };
             let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
-            let module_version = if is_system_toolchain(&candidate.toolchain) {
-                format!("{}{suffix}", candidate.version)
-            } else {
-                format!(
-                    "{}-{}-{}{suffix}",
-                    candidate.version, candidate.toolchain.name, candidate.toolchain.version
-                )
-            };
+            let stem = candidate.install_version_stem();
+            let module_version =
+                if crate::robot_lookup::is_module_system_toolchain(&candidate.toolchain) {
+                    format!("{stem}{suffix}")
+                } else {
+                    format!(
+                        "{stem}-{}-{}{suffix}",
+                        candidate.toolchain.name, candidate.toolchain.version
+                    )
+                };
             // Only an exact pin, and only when it spells the module out:
             // `==5.0.3-GCC-13.3.0` names one build. A range must not reach
             // outside the hierarchy, which is what the hierarchy is for.
-            module_version != candidate.version
-                && constraint.strip_prefix("==") == Some(module_version.as_str())
+            module_version != stem && constraint.strip_prefix("==") == Some(module_version.as_str())
         }) {
             admitted.push(candidate.clone());
         }

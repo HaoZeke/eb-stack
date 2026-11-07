@@ -1276,6 +1276,7 @@ mod tests {
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "App.eb".into(),
             dependencies: vec![DepReq {
                 name: "Lib".into(),
@@ -1298,6 +1299,7 @@ mod tests {
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Lib.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -1310,6 +1312,7 @@ mod tests {
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Tool.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],

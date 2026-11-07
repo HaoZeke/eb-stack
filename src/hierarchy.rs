@@ -1635,6 +1635,7 @@ mod tests {
                 version: tc_ver.into(),
             },
             versionsuffix: vs.map(str::to_string),
+            versionprefix: None,
             easyconfig_path: format!("{name}-{ver}.eb"),
             dependencies: vec![],
             builddependencies: vec![],

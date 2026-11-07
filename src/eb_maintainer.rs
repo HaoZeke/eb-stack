@@ -1072,6 +1072,7 @@ moduleclass = 'bio'
                 version: tc_ver.into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),

@@ -74,6 +74,7 @@ fn universe_for(case_ab: usize, case_bg: usize) -> Universe {
                 version: version.to_string(),
                 toolchain: toolchain(),
                 versionsuffix: None,
+                versionprefix: None,
                 dependencies,
                 builddependencies: Vec::new(),
                 easyconfig_path: format!("x/{name}/{name}-{version}-foss-2025a.eb"),

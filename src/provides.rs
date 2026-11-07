@@ -376,6 +376,7 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         version: ext.version.clone(),
         toolchain: parent.toolchain.clone(),
         versionsuffix: parent.versionsuffix.clone(),
+        versionprefix: parent.versionprefix.clone(),
         easyconfig_path: format!("{}{EXT_PROVIDE_MARKER}{}", parent.easyconfig_path, ext.name),
         dependencies: vec![DepReq {
             name: parent.name.clone(),
@@ -408,6 +409,7 @@ mod tests {
             version: "2025.06".into(),
             toolchain: toolchain(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "SciPy-bundle-2025.06-foss-2026.1.eb".into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),

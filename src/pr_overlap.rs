@@ -3011,6 +3011,7 @@ entries = []
                 version: "system".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: format!("{name}.eb"),
             dependencies: deps
                 .iter()

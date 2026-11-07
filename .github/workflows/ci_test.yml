@@ -197,7 +197,9 @@ jobs:
             --test stack_shard_cpu_prelude \
             --test stack_shard_sources \
             --test robot_lookup \
+            --test robot_lookup_versionprefix_field \
             --test stack_shard_robot_layout \
+            --test stack_shard_robot_versionprefix_field \
             --test hierarchy_universe \
             --test jenkins_build_list \
             --test lint_fixtures \

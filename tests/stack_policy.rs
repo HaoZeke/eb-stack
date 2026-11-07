@@ -26,6 +26,7 @@ fn candidate(name: &str, version: &str, dependencies: Vec<DepReq>) -> Candidate 
         version: version.into(),
         toolchain: toolchain(),
         versionsuffix: None,
+        versionprefix: None,
         easyconfig_path: format!("{name}-{version}-foss-2026.1.eb"),
         dependencies,
         builddependencies: Vec::new(),

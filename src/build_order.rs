@@ -63,11 +63,17 @@ pub struct ModuleKey {
 
 impl ModuleKey {
     /// The key for one candidate.
+    ///
+    /// Built only from fields on `candidate` (no filesystem reads). The
+    /// version segment is the EasyBuild install stem (`versionprefix` + bare
+    /// `version`). Toolchain spelling follows EasyBuild 5.4.2: only the exact
+    /// name `system` is the system toolchain; `dummy` keeps `dummy-<version>`
+    /// in the key, as `det_full_ec_version` does.
     pub fn of(candidate: &Candidate) -> Self {
         Self {
             name: candidate.name.clone(),
-            version: candidate.version.clone(),
-            toolchain: if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+            version: candidate.install_version_stem(),
+            toolchain: if crate::robot_lookup::is_module_system_toolchain(&candidate.toolchain) {
                 "system".to_string()
             } else {
                 format!(
@@ -395,14 +401,14 @@ pub enum Choice {
 /// toolchain name and the toolchain version, in an installed module version.
 pub(crate) const MODULE_VERSION_TOOLCHAIN_SEPARATOR: &str = "-";
 
-/// The part of a module name after the `/`: version, then the toolchain unless
-/// it is the system one, then the versionsuffix.
+/// The part of a module name after the `/`: install stem, then the toolchain
+/// unless it is the system one, then the versionsuffix.
 ///
-/// [`installed_module_version`] is the same string. A system toolchain
-/// contributes no toolchain segment.
+/// [`installed_module_version`] is the same string. EasyBuild 5.4.2: only the
+/// exact name `system` contributes no toolchain segment.
 fn module_version(candidate: &Candidate) -> String {
     let sep = MODULE_VERSION_TOOLCHAIN_SEPARATOR;
-    let toolchain = if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+    let toolchain = if crate::robot_lookup::is_module_system_toolchain(&candidate.toolchain) {
         String::new()
     } else {
         format!(
@@ -412,7 +418,7 @@ fn module_version(candidate: &Candidate) -> String {
     };
     format!(
         "{}{toolchain}{}",
-        candidate.version,
+        candidate.install_version_stem(),
         candidate.versionsuffix.as_deref().unwrap_or("")
     )
 }
@@ -447,20 +453,17 @@ pub(crate) fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
         }
     }
     if !dep.version_req.is_empty() {
-        // A dependency may name the version alone, or the version with the
-        // versionsuffix run onto it, because that is what the module ends up
-        // called: foss-2019a asks for GCC 8.2.0-2.31.1, and the recipe that
-        // provides it is version 8.2.0 with versionsuffix -2.31.1. Both
-        // spellings have to match or every recipe using the second one reads
-        // as unsatisfiable.
-        let with_suffix = format!(
-            "{}{}",
-            candidate.version,
-            candidate.versionsuffix.as_deref().unwrap_or("")
-        );
-        if !matches_req(&candidate.version, &dep.version_req)
-            && !matches_req(&with_suffix, &dep.version_req)
-        {
+        // A dependency may name the install stem (versionprefix + version), or
+        // that stem with the versionsuffix run onto it, because that is what
+        // the module ends up called: foss-2019a asks for GCC 8.2.0-2.31.1, and
+        // the recipe that provides it is version 8.2.0 with versionsuffix
+        // -2.31.1; a recipe that asks for mpp-1.0 selects the Mol with
+        // versionprefix mpp- and bare version 1.0. Bare `candidate.version`
+        // stays for SBOM/metadata and is not what dependency matching uses
+        // when a prefix is present.
+        let stem = candidate.install_version_stem();
+        let with_suffix = format!("{stem}{}", candidate.versionsuffix.as_deref().unwrap_or(""));
+        if !matches_req(&stem, &dep.version_req) && !matches_req(&with_suffix, &dep.version_req) {
             return false;
         }
     }
@@ -1628,6 +1631,7 @@ mod tests {
             version: version.into(),
             toolchain,
             versionsuffix: None,
+            versionprefix: None,
             dependencies: deps,
             builddependencies: Vec::new(),
             easyconfig_path: format!("x/{name}/{name}-{version}.eb"),
