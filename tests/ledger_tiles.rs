@@ -740,10 +740,30 @@ fn backfill_records_with_route_and_accelerator_targets_are_found() {
     let icelake = "x86_64/intel/icelake+accel/nvidia/cc80";
     let head = fixture.work.join("head.json");
     for (module, route, target, job) in [
-        ("GROMACS/2026.1-foss-2026.1-CUDA-13.0.2", "kvm", icelake, "snellius/4411"),
-        ("GROMACS/2026.1-foss-2026.1", "native", "x86_64/intel/icelake", "snellius/4412"),
-        ("LAMMPS/2Aug2025-foss-2026.1-kokkos-CUDA-13.0.2", "kvm", icelake, "snellius/4413"),
-        ("LAMMPS/2Aug2025-foss-2026.1-kokkos", "kvm", "x86_64/amd/zen4", "snellius/4414"),
+        (
+            "GROMACS/2026.1-foss-2026.1-CUDA-13.0.2",
+            "kvm",
+            icelake,
+            "snellius/4411",
+        ),
+        (
+            "GROMACS/2026.1-foss-2026.1",
+            "native",
+            "x86_64/intel/icelake",
+            "snellius/4412",
+        ),
+        (
+            "LAMMPS/2Aug2025-foss-2026.1-kokkos-CUDA-13.0.2",
+            "kvm",
+            icelake,
+            "snellius/4413",
+        ),
+        (
+            "LAMMPS/2Aug2025-foss-2026.1-kokkos",
+            "kvm",
+            "x86_64/amd/zen4",
+            "snellius/4414",
+        ),
     ] {
         ok(&append_signed(
             &fixture,
