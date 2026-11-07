@@ -146,7 +146,11 @@ fn three(fixture: &Fixture) -> [PathBuf; 3] {
     .iter()
     .enumerate()
     {
-        let out = ok(&append_signed(fixture, &record(module, route, job), &heads[n]));
+        let out = ok(&append_signed(
+            fixture,
+            &record(module, route, job),
+            &heads[n],
+        ));
         assert!(
             out.starts_with(&format!("appended record {n} id ")),
             "{out}"
@@ -233,7 +237,12 @@ fn records(fixture: &Fixture) -> Vec<Value> {
 /// Flip one bit of the file at `path`.
 fn flip_a_bit(path: &Path, at: usize) {
     let mut bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    assert!(at < bytes.len(), "{} has {} bytes", path.display(), bytes.len());
+    assert!(
+        at < bytes.len(),
+        "{} has {} bytes",
+        path.display(),
+        bytes.len()
+    );
     bytes[at] ^= 1;
     std::fs::write(path, bytes).unwrap();
 }
@@ -277,10 +286,17 @@ fn append_writes_the_tile_log_and_find_answers_keys() {
         .enumerate()
         .take(2)
     {
-        assert_eq!(rows[index], format!("{index}\t{line}"), "the line as written");
+        assert_eq!(
+            rows[index],
+            format!("{index}\t{line}"),
+            "the line as written"
+        );
     }
 
-    let kvm = ok(&find(&fixture, &["--key", "pkg=PETSc", "--key", "route=kvm"]));
+    let kvm = ok(&find(
+        &fixture,
+        &["--key", "pkg=PETSc", "--key", "route=kvm"],
+    ));
     assert!(kvm.starts_with("0\t"), "{kvm}");
     assert!(kvm.contains("\n1 of 3 records match;"), "{kvm}");
 
@@ -288,18 +304,27 @@ fn append_writes_the_tile_log_and_find_answers_keys() {
     assert!(native.contains("\n2 of 3 records match;"), "{native}");
     assert!(native.starts_with("1\t"), "{native}");
 
-    let module = ok(&find(&fixture, &["--key", "module=zlib/1.3.1-GCCcore-15.2.0"]));
+    let module = ok(&find(
+        &fixture,
+        &["--key", "module=zlib/1.3.1-GCCcore-15.2.0"],
+    ));
     assert!(module.starts_with("2\t"), "{module}");
     let job = ok(&find(&fixture, &["--key", "job=snellius/4412"]));
     assert!(job.starts_with("1\t"), "{job}");
     let by_id = ok(&find(&fixture, &["--key", &format!("id={}", ids[2])]));
     assert!(by_id.starts_with("2\t"), "{by_id}");
-    let actor = ok(&find(&fixture, &["--key", "actor=jenkins/run/7", "--key", "action=install"]));
+    let actor = ok(&find(
+        &fixture,
+        &["--key", "actor=jenkins/run/7", "--key", "action=install"],
+    ));
     assert!(actor.contains("\n3 of 3 records match;"), "{actor}");
 
     let none = ok(&find(&fixture, &["--key", "pkg=HDF5"]));
     assert!(none.starts_with("0 of 3 records match;"), "{none}");
-    let disjoint = ok(&find(&fixture, &["--key", "pkg=zlib", "--key", "route=kvm"]));
+    let disjoint = ok(&find(
+        &fixture,
+        &["--key", "pkg=zlib", "--key", "route=kvm"],
+    ));
     assert!(disjoint.starts_with("0 of 3 records match;"), "{disjoint}");
 
     let json = ok(&find(&fixture, &["--key", "pkg=PETSc", "--json"]));
@@ -486,9 +511,17 @@ fn a_custom_origin_is_needed_to_read_the_checkpoint_it_signed() {
     );
     let found = ok(&find(
         &fixture,
-        &["--key", "pkg=PETSc", "--origin", "example.org/eessi/2026.06"],
+        &[
+            "--key",
+            "pkg=PETSc",
+            "--origin",
+            "example.org/eessi/2026.06",
+        ],
     ));
-    assert!(found.contains("checkpoint example.org/eessi/2026.06 size 3"), "{found}");
+    assert!(
+        found.contains("checkpoint example.org/eessi/2026.06 size 3"),
+        "{found}"
+    );
     let spaced = eb(&[
         "ledger",
         "head",
@@ -619,7 +652,10 @@ fn a_tile_log_of_another_ledger_fails_verify() {
         "{error}"
     );
     let error = failed(&verify_range(&fixture, &heads[0], &heads[1]));
-    assert!(error.contains("does not extend the head of size 2"), "{error}");
+    assert!(
+        error.contains("does not extend the head of size 2"),
+        "{error}"
+    );
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -657,7 +693,10 @@ fn a_record_with_an_unknown_route_is_refused() {
         &record("zlib/1.3.1-GCCcore-15.2.0", "docker", "snellius/1"),
         &head,
     ));
-    assert!(error.contains("route \"docker\" is not one of native, kvm, qemu"), "{error}");
+    assert!(
+        error.contains("route \"docker\" is not one of native, kvm, qemu"),
+        "{error}"
+    );
     assert!(
         !fixture.log.exists() || std::fs::read(&fixture.log).unwrap().is_empty(),
         "nothing is appended"
@@ -676,6 +715,11 @@ fn mcp(name: &str, arguments: Value) -> Value {
     response["result"].clone()
 }
 
+/// The structured body of a tool result.
+fn body(result: &Value) -> &Value {
+    &result["structuredContent"]
+}
+
 #[test]
 fn mcp_ledger_tiles_and_find_mirror_the_commands() {
     let fixture = fixture();
@@ -686,8 +730,8 @@ fn mcp_ledger_tiles_and_find_mirror_the_commands() {
         json!({"log": s(&fixture.log), "tiles": s(&other)}),
     );
     assert_ne!(synced["isError"], true, "{synced}");
-    assert_eq!(synced["tiles"]["size"], 3, "{synced}");
-    assert_eq!(synced["tiles"]["appended"], 3, "{synced}");
+    assert_eq!(body(&synced)["tiles"]["size"], 3, "{synced}");
+    assert_eq!(body(&synced)["tiles"]["appended"], 3, "{synced}");
     let anchor = fixture.work.join("anchor.json");
     let head = mcp(
         "eb_ledger_head",
@@ -699,8 +743,12 @@ fn mcp_ledger_tiles_and_find_mirror_the_commands() {
         }),
     );
     assert_ne!(head["isError"], true, "{head}");
-    assert_eq!(head["checkpoint"]["origin"], "eb-stack-ledger/2026.06/2026");
-    assert_eq!(head["checkpoint"]["size"], 3);
+    assert_eq!(
+        body(&head)["checkpoint"]["origin"],
+        "eb-stack-ledger/2026.06/2026",
+        "{head}"
+    );
+    assert_eq!(body(&head)["checkpoint"]["size"], 3, "{head}");
     let found = mcp(
         "eb_ledger_find",
         json!({
@@ -711,10 +759,11 @@ fn mcp_ledger_tiles_and_find_mirror_the_commands() {
         }),
     );
     assert_ne!(found["isError"], true, "{found}");
+    let found = body(&found);
     assert_eq!(found["found"].as_array().unwrap().len(), 1, "{found}");
-    assert_eq!(found["found"][0]["index"], 0);
-    assert_eq!(found["unsigned"], 0);
-    assert_eq!(found["checkpoint_size"], 3);
+    assert_eq!(found["found"][0]["index"], 0, "{found}");
+    assert_eq!(found["unsigned"], 0, "{found}");
+    assert_eq!(found["checkpoint_size"], 3, "{found}");
     let empty = mcp(
         "eb_ledger_find",
         json!({
@@ -735,5 +784,5 @@ fn mcp_ledger_tiles_and_find_mirror_the_commands() {
         }),
     );
     assert_ne!(verified["isError"], true, "{verified}");
-    assert_eq!(verified["tiles_size"], 3, "{verified}");
+    assert_eq!(body(&verified)["tiles_size"], 3, "{verified}");
 }
