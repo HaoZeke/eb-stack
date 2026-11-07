@@ -852,6 +852,69 @@ enum LockMode {
     Read,
 }
 
+/// Resolve an output namespace through its existing ancestor without creating it.
+fn resolve_namespace_path(path: &Path) -> Result<PathBuf> {
+    let mut ancestor = std::path::absolute(path)
+        .with_context(|| format!("resolve path {}", path.display()))?;
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match ancestor.canonicalize() {
+            Ok(resolved) => break resolved,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = ancestor.file_name()
+                    .ok_or_else(|| anyhow!("cannot resolve path {}", path.display()))?;
+                missing.push(name.to_os_string());
+                ancestor.pop();
+            }
+            Err(error) => return Err(error)
+                .with_context(|| format!("resolve path {}", path.display())),
+        }
+    };
+    for name in missing.into_iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
+/// The tile tree and its persistent writer gates own a separate namespace.
+/// Reject conflicting canonical inputs and head outputs before an append.
+fn check_tile_namespace(
+    log: &Path,
+    tiles: Option<&Path>,
+    key: Option<&KeyFile>,
+    head: Option<&Path>,
+) -> Result<()> {
+    let dir = crate::ledger_tiles::tiles_dir(log, tiles);
+    let root = resolve_namespace_path(&dir)?;
+    let mut gate = root.as_os_str().to_owned();
+    gate.push(".writer-lock");
+    let gate = PathBuf::from(gate);
+    let mut record_gate = gate.as_os_str().to_owned();
+    record_gate.push(".posix-lock");
+    let record_gate = PathBuf::from(record_gate);
+    let check = |path: &Path, kind: &str| -> Result<()> {
+        let resolved = resolve_namespace_path(path)?;
+        if resolved.starts_with(&root) || resolved == gate || resolved == record_gate {
+            bail!(
+                "{kind} {} conflicts with tile namespace {}; choose a separate path",
+                path.display(), dir.display()
+            );
+        }
+        Ok(())
+    };
+    check(log, "ledger")?;
+    let mut record_lock = log.as_os_str().to_owned();
+    record_lock.push(".posix-lock");
+    check(Path::new(&record_lock), "ledger record lock")?;
+    if let Some(key) = key {
+        check(&key.path, "signing key")?;
+    }
+    if let Some(head) = head {
+        check(head, "head path")?;
+    }
+    Ok(())
+}
+
 /// A writer's local gate keeps contenders from opening the process-scoped
 /// record-lock inode. Closing any descriptor for that inode releases the
 /// process's lock.
@@ -1134,6 +1197,12 @@ pub fn append(request: &AppendRequest) -> Result<AppendReport> {
         Some(path) => Some(open_signing_key(path, &request.log)?),
         None => None,
     };
+    check_tile_namespace(
+        &request.log,
+        request.tiles.as_deref(),
+        key.as_ref(),
+        request.head_out.as_deref(),
+    )?;
     let text = std::fs::read_to_string(&request.record)
         .with_context(|| format!("read record {}", request.record.display()))?;
     let record: Value = serde_json::from_str(&text)
@@ -1325,6 +1394,12 @@ pub struct HeadReport {
 /// and its record lock for reading only.
 pub fn sign_head(request: &HeadRequest) -> Result<HeadReport> {
     let key = open_signing_key(&request.key, &request.log)?;
+    check_tile_namespace(
+        &request.log,
+        request.tiles.as_deref(),
+        Some(&key),
+        Some(&request.out),
+    )?;
     let ts = match &request.ts {
         Some(ts) => {
             let parsed = DateTime::parse_from_rfc3339(ts)
