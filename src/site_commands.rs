@@ -2651,7 +2651,17 @@ pub fn run_stack_shard_with_sources(
         return Err(usage("--shards must be at least 1"));
     }
     if let Some(repo) = &extra.easyconfigs_repo {
-        if crate::easyconfig_tree::git_output(repo, &["rev-parse", "--git-dir"])?.is_none() {
+        // Git parent discovery must not substitute a different source repository.
+        let bare = crate::easyconfig_tree::git_output(repo, &["rev-parse", "--is-bare-repository"])?;
+        let root_arg = if bare.as_deref() == Some("true") {
+            "--absolute-git-dir"
+        } else {
+            "--show-toplevel"
+        };
+        let discovered = crate::easyconfig_tree::git_output(repo, &["rev-parse", root_arg])?
+            .and_then(|root| std::fs::canonicalize(root).ok());
+        let requested = std::fs::canonicalize(repo).ok();
+        if requested.is_none() || requested != discovered {
             return Err(usage(format!(
                 "--easyconfigs-repo {} is not a git repository",
                 repo.display()
