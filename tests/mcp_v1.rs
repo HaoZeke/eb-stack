@@ -595,7 +595,10 @@ version = "2026.1"
 fn mcp_recipe_lint_reports_style_findings() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe = temp.path().join("long.eb");
-    let long = format!("name = 'tool'\n# {}\n", "x".repeat(200));
+    let long = format!(
+        "name = 'tool'\n# {}\neasyblock = 'ConfigureMake'\nversion = '1.0'\nhomepage = 'https://example.invalid/tool'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
+        "x".repeat(200)
+    );
     std::fs::write(&recipe, long).expect("recipe");
     let response = handle_message(&json!({
         "jsonrpc": "2.0",
@@ -746,6 +749,10 @@ sanity_check_paths = {
     'files': [f'lib/%(name)s.{SHLIB_EXT}'],
     'dirs': [],
 }
+version = '1.0'
+homepage = 'https://example.invalid/x'
+description = 'synthetic'
+toolchain = SYSTEM
 ",
     )
     .expect("good");
@@ -767,7 +774,12 @@ sanity_check_paths = {
     std::fs::write(
         &concat,
         "name = 'x'
-files = ['lib/%(name)s.' + SHLIB_EXT]
+files_to_copy = ['lib/%(name)s.' + SHLIB_EXT]
+easyblock = 'MakeCp'
+version = '1.0'
+homepage = 'https://example.invalid/x'
+description = 'synthetic'
+toolchain = SYSTEM
 ",
     )
     .expect("concat");
@@ -788,7 +800,7 @@ fn mcp_recipe_lint_is_not_clean_while_percent_formatting_remains() {
     let recipe = temp.path().join("p7zip.eb");
     std::fs::write(
         &recipe,
-        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles = ['libexec/7z.%s' % SHLIB_EXT]\n",
+        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles_to_copy = ['libexec/7z.%s' % SHLIB_EXT]\neasyblock = 'MakeCp'\nversion = '17.05'\nhomepage = 'https://example.invalid/p7zip'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
     )
     .expect("recipe");
     let response = call(27, "eb_recipe_lint", json!({"recipes": [recipe]}));
@@ -818,7 +830,7 @@ fn mcp_recipe_lint_is_not_clean_while_percent_formatting_remains() {
 
     std::fs::write(
         &recipe,
-        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles = [f'libexec/7z.{SHLIB_EXT}']\n",
+        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles_to_copy = [f'libexec/7z.{SHLIB_EXT}']\neasyblock = 'MakeCp'\nversion = '17.05'\nhomepage = 'https://example.invalid/p7zip'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
     )
     .expect("fixed");
     let response = call(28, "eb_recipe_lint", json!({"recipes": [recipe]}));
@@ -871,7 +883,9 @@ fn mcp_dep_versions_lists_versions_from_a_tree_and_refuses_to_guess() {
 fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe = temp.path().join("pkg.eb");
-    let original = "easyblock = 'PythonPackage'\nname = 'pkg'\nsanity_check_paths = {\n    'files': ['bin/pkg', 'lib/libpkg.%s' % SHLIB_EXT],\n    'dirs': [],\n}\n";
+    // The name has a software-specific easyblock, so the recipe stays a valid
+    // easyconfig once its easyblock line is dropped.
+    let original = "easyblock = 'PythonPackage'\nname = 'numexpr'\nsanity_check_paths = {\n    'files': ['bin/pkg', 'lib/libpkg.%s' % SHLIB_EXT],\n    'dirs': [],\n}\nversion = '1.0'\nhomepage = 'https://example.invalid/numexpr'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n";
     std::fs::write(&recipe, original).expect("recipe");
     let first = call(42, "eb_recipe_lint", json!({"recipes": [recipe]}));
     let body = &first["result"]["structuredContent"];
@@ -883,7 +897,7 @@ fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
     // Drop the easyblock and collapse a sanity entry.
     std::fs::write(
         &recipe,
-        "name = 'pkg'\nsanity_check_paths = {\n    'files': [f'lib/libpkg.{SHLIB_EXT}'],\n    'dirs': [],\n}\n",
+        "name = 'numexpr'\nsanity_check_paths = {\n    'files': [f'lib/libpkg.{SHLIB_EXT}'],\n    'dirs': [],\n}\nversion = '1.0'\nhomepage = 'https://example.invalid/numexpr'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
     )
     .expect("edited");
     let second = call(43, "eb_recipe_lint", json!({"recipes": [recipe]}));
@@ -926,7 +940,7 @@ fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
 fn mcp_recipe_lint_and_diff_report_open_review_items() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe = temp.path().join("items.eb");
-    let pre = "easyblock = 'CMakeMake'\nname = 'items'\nconfigopts = '-DBUILD_SHARED_LIBS=ON'\nsanity_check_paths = {\n    'files': ['bin/items'],\n    'dirs': [],\n}\nruntest = 'check'\nmoduleclass = 'tools'\n";
+    let pre = "easyblock = 'CMakeMake'\nname = 'items'\nconfigopts = '-DBUILD_SHARED_LIBS=ON'\nsanity_check_paths = {\n    'files': ['bin/items'],\n    'dirs': [],\n}\nruntest = 'check'\nmoduleclass = 'tools'\nversion = '1.0'\nhomepage = 'https://example.invalid/items'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n";
     std::fs::write(&recipe, pre).expect("recipe");
     let items = json!([
         {"id": "pic", "line_start": 3, "suggestion": null,
@@ -1004,7 +1018,7 @@ fn mcp_recipe_lint_and_diff_report_open_review_items() {
 fn mcp_recipe_lint_file_scope_keeps_preexisting_errors_advisory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe = temp.path().join("tool.eb");
-    let pre = "easyblock = 'MesonNinja'\nname = 'tool'\nversion_tag = 'v1'\nbuilddependencies = [\n    ('Meson', '1.8.2'),\n]\nsanity_check_commands = ['python -c \"import tool\"']\n";
+    let pre = "easyblock = 'MesonNinja'\nname = 'tool'\nversion_tag = 'v1'\nbuilddependencies = [\n    ('Meson', '1.8.2'),\n]\nsanity_check_commands = ['python -c \"import tool\"']\nversion = '1.0'\nhomepage = 'https://example.invalid/tool'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n";
     std::fs::write(&recipe, pre).expect("recipe");
     let first = call(60, "eb_recipe_lint", json!({"recipes": [recipe]}));
     let body = &first["result"]["structuredContent"];
@@ -1053,7 +1067,7 @@ fn mcp_recipe_lint_file_scope_keeps_preexisting_errors_advisory() {
     // Under review_scope "file" a pre-existing EB_FMT finding still counts:
     // that is what the file scope is for.
     let fmt = temp.path().join("fmt.eb");
-    let fmt_pre = "name = 'tool'\nfiles = ['lib/libtool.%s' % SHLIB_EXT]\nx = 1\n";
+    let fmt_pre = "name = 'tool'\nfiles_to_copy = ['lib/libtool.%s' % SHLIB_EXT]\nx = 1\neasyblock = 'MakeCp'\nversion = '1.0'\nhomepage = 'https://example.invalid/tool'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n";
     std::fs::write(&fmt, fmt_pre).expect("fmt");
     let _ = call(62, "eb_recipe_lint", json!({"recipes": [fmt]}));
     std::fs::write(&fmt, fmt_pre.replace("x = 1", "x = 2")).expect("fmt edit");
@@ -1071,11 +1085,11 @@ fn mcp_recipe_lint_review_lines_and_base_decide_formatting_scope() {
     let temp = tempfile::tempdir().expect("tempdir");
     let base = temp.path().join("base.eb");
     let recipe = temp.path().join("tool.eb");
-    let pre = "name = 'tool'\nlocal_m = 'm'\nprebuildopts = 'cp %s x &&' % local_m\nfiles = ['libexec/t.%s' % SHLIB_EXT]\n";
+    let pre = "name = 'tool'\nlocal_m = 'm'\nprebuildopts = 'cp %s x &&' % local_m\nfiles_to_copy = ['libexec/t.%s' % SHLIB_EXT]\neasyblock = 'MakeCp'\nversion = '1.0'\nhomepage = 'https://example.invalid/tool'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n";
     std::fs::write(&base, pre).expect("base");
     std::fs::write(
         &recipe,
-        "name = 'tool'\nlocal_m = 'm'\nprebuildopts = f'cp {local_m} x &&'\nfiles = ['libexec/t.%s' % SHLIB_EXT]\n",
+        "name = 'tool'\nlocal_m = 'm'\nprebuildopts = f'cp {local_m} x &&'\nfiles_to_copy = ['libexec/t.%s' % SHLIB_EXT]\neasyblock = 'MakeCp'\nversion = '1.0'\nhomepage = 'https://example.invalid/tool'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
     )
     .expect("recipe");
     // Explicit base: the untouched line 4 is info, so the file is clean.
