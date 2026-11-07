@@ -88,7 +88,7 @@ absolute path there.
 
 * Tools
 
-The catalog has 55 tools. ~tools/list~ returns one tool for each CLI
+The catalog has 57 tools. ~tools/list~ returns one tool for each CLI
 command in the table, and the recipe and easyblock tools that have no
 command. ~mcp~ publishes that catalog and has no tool of its own. Each
 command's tool calls the same runner as that command. The ~text~ field
