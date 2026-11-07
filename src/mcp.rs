@@ -472,6 +472,35 @@ fn tool_catalog() -> Vec<Value> {
                 ("default_weight", "integer"),
                 ("filter_deps", "string"),
                 ("generated_at", "string"),
+                ("inode_quota", "integer"),
+                ("inode_footprints", "string"),
+                ("inode_margin", "integer"),
+                ("inode_line_overhead", "integer"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_footprints",
+            "Write footprints.json, the peak build-tree inode count per software name, as `stack footprints` does: the peak of build.inodes_peak over the records of each ledger, then each table line (Name<TAB>inodes; the larger when both name a package), then the built-in class table over a default of 60000. `stack shard` reads it through inode_footprints and `stack admit` takes a shard's inode_footprint from plan.json.",
+            &[("out", "string")],
+            &[
+                ("ledger", "array"),
+                ("table", "array"),
+                ("generated_at", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_admit",
+            "Decide whether one build job fits under the scratch inode quota, as `stack admit` does. quota_json is a file with inodes_available, or inodes_soft and inodes_used. The job is admitted when the available inodes minus the reservations of the jobs in live_jobs cover footprint plus margin (100000); on admit its reservation <job>.json is written under reservations. A reservation of a job not in live_jobs is dropped; the job's own earlier reservation is never counted. A refusal is a result with admitted false, not a tool error.",
+            &[
+                ("quota_json", "string"),
+                ("footprint", "integer"),
+                ("job", "string"),
+                ("reservations", "string"),
+            ],
+            &[
+                ("margin", "integer"),
+                ("live_jobs", "array"),
+                ("ts", "string"),
             ],
         ),
         tool_with_optional(
@@ -891,6 +920,8 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_shadow" => stack_shadow_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_shard" => stack_shard_tool(arguments),
+        "eb_stack_footprints" => stack_footprints_tool(arguments),
+        "eb_stack_admit" => stack_admit_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_stack_files" => stack_files_tool(arguments),
         "eb_stack_generation" => stack_generation_tool(arguments),
@@ -3223,6 +3254,12 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         filter_deps: filter_deps_argument(arguments),
         generated_at: optional_string(arguments, "generated_at"),
         out_dir: required_path(arguments, "out_dir")?,
+        inode_quota: optional_u64(arguments, "inode_quota")?,
+        inode_footprints: optional_path(arguments, "inode_footprints"),
+        inode_margin: optional_u64(arguments, "inode_margin")?
+            .unwrap_or(crate::inode_budget::DEFAULT_MARGIN),
+        inode_line_overhead: optional_u64(arguments, "inode_line_overhead")?
+            .unwrap_or(crate::inode_budget::DEFAULT_LINE_OVERHEAD),
     };
     let run = crate::site_commands::run_stack_shard(&request).map_err(workflow_error)?;
     Ok(json!({
@@ -3230,7 +3267,46 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         "shards": run.shards,
         "prelude": run.prelude,
         "lines": run.lines,
+        "max_concurrent_shards": run.max_concurrent,
     }))
+}
+
+fn stack_footprints_tool(arguments: &Value) -> Result<Value, String> {
+    let request = crate::inode_budget::FootprintsRequest {
+        ledgers: optional_paths(arguments, "ledger")?,
+        tables: optional_paths(arguments, "table")?,
+        out: required_path(arguments, "out")?,
+        generated_at: optional_string(arguments, "generated_at"),
+    };
+    let run = crate::inode_budget::run_stack_footprints(&request).map_err(workflow_error)?;
+    Ok(json!({
+        "text": run.summary(),
+        "packages": run.packages,
+        "ledger": run.from_ledger,
+        "table": run.from_table,
+        "class": run.from_class,
+        "records": run.records,
+    }))
+}
+
+fn stack_admit_tool(arguments: &Value) -> Result<Value, String> {
+    let live_jobs = match arguments.get("live_jobs") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(string_array(arguments, "live_jobs")?),
+    };
+    let request = crate::inode_budget::AdmitRequest {
+        quota_json: required_path(arguments, "quota_json")?,
+        footprint: optional_u64(arguments, "footprint")?.ok_or("footprint is required")?,
+        job: required_string(arguments, "job")?,
+        reservations: required_path(arguments, "reservations")?,
+        margin: optional_u64(arguments, "margin")?.unwrap_or(crate::inode_budget::DEFAULT_MARGIN),
+        live_jobs,
+        ts: optional_string(arguments, "ts"),
+    };
+    let report = crate::inode_budget::run_stack_admit(&request).map_err(workflow_error)?;
+    let mut result: Value = serde_json::from_str(&report.line).map_err(|error| error.to_string())?;
+    result["text"] = Value::String(report.line.clone());
+    Ok(result)
 }
 
 fn stack_batch_tool(arguments: &Value) -> Result<Value, String> {
