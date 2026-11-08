@@ -43,11 +43,8 @@ rustc --version
 
   The GitHub release is 0.7.1, with installers and archives for Linux
   (x86-64, aarch64), macOS and Windows, and it carries every command in
-  this manual. crates.io still has 0.3.0: that binary solves a stack with
-  `--policy`, not `--stack-policy`, and does not provide `stack gap`,
-  `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
-  `component-reach`. `eb-stack --version` prints `0.3.0` for it. A build
-  of this tree prints `0.7.1`. Build from main for the commands in this manual:
+  this manual; `cargo install eb_stack --locked` builds the same 0.7.1
+  from crates.io. A build of this tree prints `0.7.1`. To build from main:
 
 ```bash
 git clone https://github.com/HaoZeke/eb-stack.git

@@ -11,7 +11,7 @@
 
 A plan is not a build. `package plan` and `package bump` can establish only **resolves**. `campaign run` owns **builds** and **binary-verified**.
 
-The GitHub release is 0.7.1 and carries every command here. The crates.io package is still 0.3.0: it lacks `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, and `component-reach`, and its `stack solve` flag is `--policy`. Take the release installer, or build from main.
+The GitHub release and the crates.io package are 0.7.1 and carry every command here.
 
 The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation, baseline, and reachability. The longer path is the [tutorial](docs/orgmode/tutorial.org).
 
@@ -76,16 +76,12 @@ stable` provide a new enough compiler.
 
 The GitHub release is 0.7.1, with installers and archives for Linux
 (x86-64, aarch64), macOS and Windows, and `eb-stack --version` prints
-`0.7.1` for it, as a build of this tree does. The crates.io package is
-still 0.3.0: that binary's `stack solve` flag is `--policy`, and it does
-not include `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`,
-`pr-overlap`, or `component-reach`. The commands below use
-`--stack-policy` and those reports; the release or a build from main has
-them, `cargo install eb_stack --locked` does not.
+`0.7.1` for it, as a build of this tree does. `cargo install eb_stack
+--locked` builds the same 0.7.1 from crates.io.
 
 `cargo binstall` is not part of a Rust install. `cargo binstall
 eb_stack` fails with `no such command: binstall` until that program is
-installed on its own, and it then installs the crates.io 0.3.0 package.
+installed on its own; it then installs the release binary.
 
 From this checkout:
 

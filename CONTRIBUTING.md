@@ -104,7 +104,8 @@ git push origin v0.7.1
 # .github/workflows/release.yml (cargo-dist) builds the installers
 # and publishes the GitHub Release. It does not publish to crates.io:
 cargo publish --locked
-# runs on a host with the crates.io token, from the tagged checkout.
+# runs on a host with a crates.io token scoped to publish eb_stack, from the
+# tagged checkout (0.7.1 was published this way).
 ```
 
 Verify the binary surface:
