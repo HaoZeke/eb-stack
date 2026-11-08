@@ -654,6 +654,12 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
     let published = read_checkpoint(&store, &dir, &origin, &trusted)?;
     let reader = Reader::open(store.clone(), key_fn())
         .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
+    // The hash tiles have to fold to the committed root before any entry is
+    // read through them, so a tampered tile is named as such.
+    reader
+        .hashes()
+        .root()
+        .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?;
     let checkpoint_root = rfc9162::hex(&published.root);
     check_prefix(
         &reader,
