@@ -881,3 +881,75 @@ fn mcp_ledger_tiles_and_find_mirror_the_commands() {
     assert_ne!(verified["isError"], true, "{verified}");
     assert_eq!(body(&verified)["tiles_size"], 3, "{verified}");
 }
+
+/// A full bundle of records seals a sorted run: its manifest lands in the
+/// index log beside the tile log, `ledger head` signs that log under
+/// `<origin>/index`, and a find proves the run there while the tile log
+/// keeps the ledger's root.
+#[test]
+fn the_ledger_head_signs_a_sealed_run_in_the_index_log() {
+    let fixture = fixture();
+    for i in 0..259 {
+        let route = if i % 2 == 0 { "native" } else { "kvm" };
+        ok(&append_plain(
+            &fixture,
+            &record(
+                &format!("Mod{i}/1.0-foss-2026.1"),
+                route,
+                &format!("job-{i}"),
+            ),
+        ));
+    }
+    let head = fixture.work.join("head-sealed.json");
+    let signed = ok(&append_signed(
+        &fixture,
+        &record("Last/1.0-foss-2026.1", "qemu", "job-last"),
+        &head,
+    ));
+    assert!(
+        signed.contains("checkpoint eb-stack-ledger/2026.06/2026 size 260 root "),
+        "{signed}"
+    );
+    assert!(
+        signed.contains("index checkpoint eb-stack-ledger/2026.06/2026/index size 1 root "),
+        "the head signs the index log once a run is sealed: {signed}"
+    );
+    let index_dir = fixture.tiles.join("index");
+    let index_checkpoint = std::fs::read_to_string(index_dir.join("checkpoint")).unwrap();
+    assert!(
+        index_checkpoint.starts_with("eb-stack-ledger/2026.06/2026/index\n1\n"),
+        "{index_checkpoint}"
+    );
+    // The head and the tile checkpoint print the same hex root: the tile log
+    // holds the ledger's lines and nothing else.
+    let root_after = |marker: &str| -> String {
+        let at = signed
+            .find(marker)
+            .unwrap_or_else(|| panic!("{marker:?} in {signed}"));
+        signed[at + marker.len()..]
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let head_root = root_after("; head size 260 root ");
+    let tile_root = root_after("checkpoint eb-stack-ledger/2026.06/2026 size 260 root ");
+    assert_eq!(head_root, tile_root, "{signed}");
+    let head_json: Value = serde_json::from_str(&std::fs::read_to_string(&head).unwrap()).unwrap();
+    assert_eq!(
+        head_json["root"].as_str().unwrap(),
+        head_root,
+        "{head_json}"
+    );
+
+    let out = ok(&find(&fixture, &["--key", "route=kvm", "--json"]));
+    let found: Vec<Value> = serde_json::from_str(&out).unwrap();
+    assert_eq!(found.len(), 129, "every odd record of the sealed run");
+    let text = ok(&find(&fixture, &["--key", "route=qemu"]));
+    assert!(
+        text.contains("1 of 260 records match; checkpoint eb-stack-ledger/2026.06/2026 size 260"),
+        "{text}"
+    );
+    ok(&verify_record(&fixture, 7, &head));
+    ok(&verify_record(&fixture, 259, &head));
+}

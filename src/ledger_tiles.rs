@@ -14,6 +14,14 @@
 //! that the signed checkpoint is a prefix of it, and checks the inclusion
 //! proof of every record it prints. A verify checks that the tile log
 //! extends the signed JSON head and holds the same lines.
+//!
+//! The tile log holds exactly the ledger's lines, so its root is the
+//! ledger's. The sorted runs a lookup goes through, and the manifests that
+//! describe them, live in a second tile log inside it, the index log at
+//! `<tiles>/index` (see [`index_dir`]), with its own checkpoint under
+//! `<origin>/index` signed by the same key. Each logged manifest carries the
+//! size and root of the tile log it indexed. A find proves a record in the
+//! tile log's checkpoint and the run that located it in the index log's.
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
@@ -210,24 +218,59 @@ pub struct CheckpointReport {
     pub path: PathBuf,
     /// The signed note, as written.
     pub note: String,
+    /// The index log's checkpoint, signed with the same key under
+    /// `<origin>/index`, once a run has been sealed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<Box<CheckpointReport>>,
 }
 
 impl CheckpointReport {
-    /// One line for stdout.
+    /// One line for stdout, two once the index log has a checkpoint.
     #[must_use]
     pub fn summary(&self) -> String {
-        format!(
+        let mut text = format!(
             "checkpoint {} size {} root {} to {}",
             self.origin,
             self.size,
             self.root,
             self.path.display()
-        )
+        );
+        if let Some(index) = &self.index {
+            text.push_str(&format!(
+                "\nindex checkpoint {} size {} root {} to {}",
+                index.origin,
+                index.size,
+                index.root,
+                index.path.display()
+            ));
+        }
+        text
     }
 }
 
 fn open_store(dir: &Path) -> Result<PosixStore> {
     PosixStore::open(dir).with_context(|| format!("open tile log {}", dir.display()))
+}
+
+/// The index log inside the tile log at `dir`: the run files and the logged
+/// run manifests, with their own checkpoint. It lives under the tile log so
+/// that moving or copying the tile log takes its index along.
+#[must_use]
+pub fn index_dir(dir: &Path) -> PathBuf {
+    dir.join("index")
+}
+
+/// The origin the index log's checkpoint is signed under.
+#[must_use]
+pub fn index_origin(origin: &str) -> String {
+    format!("{origin}/index")
+}
+
+/// The split store over the tile log at `dir` and its index log, holding
+/// both writer locks.
+fn open_split(dir: &Path) -> Result<Store<PosixStore>> {
+    Store::open_split(open_store(dir)?, open_store(&index_dir(dir))?, keys_arc())
+        .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))
 }
 
 fn stale_path(dir: &Path) -> PathBuf {
@@ -239,12 +282,11 @@ fn stale_path(dir: &Path) -> PathBuf {
 /// The store over a tile log that holds exactly the ledger's lines, and
 /// what it took to get there. The lines are appended as one batch; when the
 /// unsealed tail then holds a full bundle of entries it is sealed into a
-/// sorted run whose manifest is logged, so the next checkpoint signs the
-/// index as well as the entries.
+/// sorted run whose manifest is logged in the index log, so the next head
+/// signs the index as well as the entries.
 fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Store<PosixStore>, SyncReport)> {
     let leaves = ledger::leaves(entries);
-    let mut store = Store::open(open_store(dir)?, keys_arc())
-        .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
+    let mut store = open_split(dir)?;
     let held = usize::try_from(store.size()).unwrap_or(usize::MAX);
     let agrees = held <= leaves.len() && store.root() == rfc9162::root(&leaves[..held]);
     let mut rebuilt_from = None;
@@ -253,8 +295,9 @@ fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Store<PosixStore>, Sync
         let stale = stale_path(dir);
         std::fs::rename(dir, &stale)
             .with_context(|| format!("move tile log {} to {}", dir.display(), stale.display()))?;
-        store = Store::open(open_store(dir)?, keys_arc())
-            .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
+        // The index log describes the tree that was just moved aside, and it
+        // sits inside that directory, so it went with it.
+        store = open_split(dir)?;
         rebuilt_from = Some(stale);
     }
     let start =
@@ -315,6 +358,31 @@ pub fn checkpoint(
         .map_err(|error| anyhow!("checkpoint tile log {}: {error}", dir.display()))?;
     let published = Checkpoint::parse(&note.text)
         .map_err(|error| anyhow!("checkpoint tile log {}: {error}", dir.display()))?;
+    // The index log gets its own checkpoint under <origin>/index once it
+    // holds a manifest; an empty index log is not signed.
+    let index = match store.index_writer() {
+        Some(writer) if writer.size() > 0 => {
+            let index_origin = index_origin(origin);
+            let index_dir = index_dir(dir);
+            let signer = Signer::new(&index_origin, key.clone())
+                .map_err(|error| anyhow!("checkpoint signer for {index_origin}: {error}"))?;
+            let note = writer.checkpoint(&signer, &index_origin).map_err(|error| {
+                anyhow!("checkpoint index log {}: {error}", index_dir.display())
+            })?;
+            let published = Checkpoint::parse(&note.text).map_err(|error| {
+                anyhow!("checkpoint index log {}: {error}", index_dir.display())
+            })?;
+            Some(Box::new(CheckpointReport {
+                origin: published.origin,
+                size: published.size,
+                root: rfc9162::hex(&published.root),
+                path: index_dir.join(CHECKPOINT),
+                note: note.to_text(),
+                index: None,
+            }))
+        }
+        _ => None,
+    };
     Ok((
         synced,
         CheckpointReport {
@@ -323,8 +391,37 @@ pub fn checkpoint(
             root: rfc9162::hex(&published.root),
             path: dir.join(CHECKPOINT),
             note: note.to_text(),
+            index,
         },
     ))
+}
+
+/// The index log's signed state: its checkpoint under `<origin>/index` when
+/// it has one and the index log extends it, else the empty tree. A tile log
+/// with no sealed run has no index checkpoint, and a find then goes through
+/// the unsealed tail alone.
+fn read_index_checkpoint(
+    dir: &Path,
+    origin: &str,
+    trusted: &VerifyingKey,
+) -> Result<(PosixStore, u64, [u8; 32])> {
+    let index_dir = index_dir(dir);
+    let store = open_store(&index_dir)?;
+    if !store.exists(CHECKPOINT)? {
+        return Ok((store, 0, rfc9162::root(&[])));
+    }
+    let index_origin = index_origin(origin);
+    let published = read_checkpoint(&store, &index_dir, &index_origin, trusted)?;
+    let reader = Reader::open(store.clone(), key_fn())
+        .map_err(|error| anyhow!("open index log {}: {error}", index_dir.display()))?;
+    check_prefix(
+        &reader,
+        &index_dir,
+        published.size,
+        &rfc9162::hex(&published.root),
+        "index checkpoint",
+    )?;
+    Ok((store, published.size, published.root))
 }
 
 /// The checkpoint the store holds, once `trusted` has signed it and its
@@ -447,6 +544,9 @@ pub fn audit(
             "checkpoint",
         )?;
     }
+    if index_dir(dir).is_dir() {
+        read_index_checkpoint(dir, origin, trusted)?;
+    }
     let width = usize::try_from(TILE_WIDTH).expect("256 fits");
     let mut index = 0usize;
     while index < size {
@@ -502,8 +602,9 @@ pub struct Found {
     pub index: u64,
     /// The record.
     pub record: Value,
-    /// Leaf number of the logged run manifest the lookup went through, or
-    /// none when the record sits in the unsealed tail and was found by scan.
+    /// Leaf number, in the index log, of the run manifest the lookup went
+    /// through, or none when the record sits in the unsealed tail and was
+    /// found by scan.
     pub run: Option<u64>,
 }
 
@@ -562,14 +663,37 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
         "checkpoint",
     )?;
 
-    // Lookups at the checkpoint: every answer carries inclusion paths against
-    // the signed size, for the record and for the run manifest that located
-    // it, so both are proven with the checkpoint root and nothing from the
-    // store is trusted.
-    let signed = Index::at(store.clone(), published.size, published.root, keys_arc())
-        .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
-    let current = Index::at(store, reader.size(), reader.root(), keys_arc())
-        .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
+    // Lookups at the checkpoints: every answer carries inclusion paths
+    // against the signed sizes, the record's against the tile log and the run
+    // manifest's against the index log, so both are proven with checkpoint
+    // roots and nothing from the store is trusted.
+    let (index_store, index_size, index_root) = read_index_checkpoint(&dir, &origin, &trusted)?;
+    let index_checkpoint_root = rfc9162::hex(&index_root);
+    let cache = rfc9162_log::store::RunCache::default();
+    let signed = Index::at_split(
+        store.clone(),
+        published.size,
+        published.root,
+        index_store.clone(),
+        index_size,
+        index_root,
+        keys_arc(),
+        Arc::clone(&cache),
+    )
+    .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
+    let index_reader = Reader::open(index_store.clone(), key_fn())
+        .map_err(|error| anyhow!("open index log {}: {error}", index_dir(&dir).display()))?;
+    let current = Index::at_split(
+        store,
+        reader.size(),
+        reader.root(),
+        index_store,
+        index_reader.size(),
+        index_reader.root(),
+        keys_arc(),
+        cache,
+    )
+    .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
     let mut hits: Option<BTreeMap<u64, rfc9162_log::Located>> = None;
     let mut past: Option<BTreeSet<u64>> = None;
     for key in &request.keys {
@@ -622,27 +746,29 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
         let run = match hit.run {
             Some(run) => {
                 let manifest = signed
-                    .reader()
+                    .manifest_reader()
                     .get(run.index)
-                    .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
+                    .map_err(|error| anyhow!("index log {}: {error}", index_dir(&dir).display()))?
                     .ok_or_else(|| {
                         anyhow!(
-                            "tile log {} has no run manifest {}",
-                            dir.display(),
+                            "index log {} has no run manifest {}",
+                            index_dir(&dir).display(),
                             run.index
                         )
                     })?;
                 let at = usize::try_from(run.index).map_err(|_| anyhow!("index does not fit"))?;
+                let index_size =
+                    usize::try_from(index_size).map_err(|_| anyhow!("size does not fit"))?;
                 if !rfc9162::verify_inclusion(
                     &rfc9162::leaf_hash(&manifest),
                     at,
-                    size,
+                    index_size,
                     &run.path,
-                    &checkpoint_root,
+                    &index_checkpoint_root,
                 ) {
                     bail!(
-                        "tile log {} run manifest {} is not in the checkpoint of size {size}",
-                        dir.display(),
+                        "index log {} run manifest {} is not in the index checkpoint of size {index_size}",
+                        index_dir(&dir).display(),
                         run.index
                     );
                 }
@@ -783,6 +909,54 @@ mod tests {
         assert!(origin(None, None).is_err());
         assert!(origin(None, Some("has space")).is_err());
         assert!(origin(None, Some("a+b")).is_err());
+    }
+
+    #[test]
+    fn a_full_bundle_seals_a_ledger_run_into_the_index_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("2026.06.jsonl.tiles");
+        let entries: Vec<Entry> = (0..300)
+            .map(|i| {
+                let mut value = record();
+                value["module"] = json!(format!("Mod{i}/1.0"));
+                value["target"] = json!(if i % 2 == 0 { "zen2" } else { "zen4" });
+                ledger::seal_record(&value, i, "2026-11-08T10:00:00Z").unwrap()
+            })
+            .collect();
+        let (store, report) = open_synced(&entries, &dir).unwrap();
+        assert_eq!(report.size, 300, "the tile log holds the lines alone");
+        assert!(report.sealed && report.runs == 1, "{report:?}");
+        assert_eq!(
+            store.root(),
+            rfc9162::root(&ledger::leaves(&entries)),
+            "the tile log root is the ledger root"
+        );
+        let index = store.index_writer().expect("split store");
+        assert_eq!(index.size(), 1, "one manifest in the index log");
+        assert!(
+            index_dir(&dir).is_dir(),
+            "the index log sits inside the tile log"
+        );
+        let manifest = Reader::open(index.store().clone(), key_fn())
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .expect("manifest entry");
+        let logged = rfc9162_log::store::Logged::decode(&manifest, 0, false).unwrap();
+        assert_eq!(logged.data_size, 300);
+        assert_eq!(logged.data_root, store.root());
+        assert_eq!(*logged.run.entries.end(), 299, "the run covers every entry");
+        let hits = store.find(b"target=zen4").unwrap();
+        assert_eq!(hits.len(), 150);
+        assert!(
+            hits.iter()
+                .all(|h| h.run.as_ref().is_some_and(|r| r.tree_size == 1)),
+            "every hit went through the run, proven against the index log"
+        );
+        drop(store);
+        // the same lines again: nothing appended, nothing resealed
+        let (_store, again) = open_synced(&entries, &dir).unwrap();
+        assert_eq!((again.appended, again.sealed, again.runs), (0, false, 1));
     }
 
     #[test]
