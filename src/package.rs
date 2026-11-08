@@ -501,14 +501,89 @@ impl ConditionExpr {
 
     /// Whether this condition holds in `context`.
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
+        self.known(context) == Some(true)
+    }
+
+    /// True when the selector cannot be decided in any profile context: an
+    /// opaque condition, its negation, or a conjunction or disjunction that
+    /// only opaque conditions decide.
+    pub(crate) fn is_undecidable(&self) -> bool {
         match self {
-            Self::Always => true,
-            Self::Never => false,
-            Self::Predicate(predicate) => predicate.evaluate(context),
-            Self::All(expressions) => expressions.iter().all(|expr| expr.evaluate(context)),
-            Self::Any(expressions) => expressions.iter().any(|expr| expr.evaluate(context)),
-            Self::Not(expression) => !expression.evaluate(context),
-            Self::Opaque { .. } => false,
+            Self::Opaque { .. } => true,
+            Self::Not(inner) => inner.is_undecidable(),
+            Self::All(expressions) => {
+                expressions.iter().any(Self::is_undecidable)
+                    && expressions.iter().all(|expression| {
+                        expression.is_undecidable() || matches!(expression, Self::Always)
+                    })
+            }
+            Self::Any(expressions) => {
+                expressions.iter().any(Self::is_undecidable)
+                    && expressions.iter().all(|expression| {
+                        expression.is_undecidable() || matches!(expression, Self::Never)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Three-valued: `None` when the context does not say, so that the
+    /// negation of an unknown is unknown too, not an always-on dependency.
+    fn known(&self, context: &ConditionContext) -> Option<bool> {
+        match self {
+            Self::Always => Some(true),
+            Self::Never => Some(false),
+            Self::Predicate(ConditionPredicate::Platform { name }) => context
+                .platform
+                .as_deref()
+                .map(|platform| platform.eq_ignore_ascii_case(name)),
+            Self::Predicate(ConditionPredicate::Architecture { name }) => context
+                .architecture
+                .as_deref()
+                .map(|architecture| architecture.eq_ignore_ascii_case(name)),
+            Self::Predicate(ConditionPredicate::DependencyFeature {
+                dependency,
+                name,
+                enabled,
+            }) => context
+                .dependency_features
+                .get(dependency)
+                .and_then(|features| features.get(name))
+                .copied()
+                .map(|value| value == *enabled),
+            Self::Predicate(predicate) => Some(predicate.evaluate(context)),
+            Self::All(expressions) => {
+                let mut unknown = false;
+                for expression in expressions {
+                    match expression.known(context) {
+                        Some(false) => return Some(false),
+                        Some(true) => {}
+                        None => unknown = true,
+                    }
+                }
+                if unknown {
+                    None
+                } else {
+                    Some(true)
+                }
+            }
+            Self::Any(expressions) => {
+                let mut unknown = false;
+                for expression in expressions {
+                    match expression.known(context) {
+                        Some(true) => return Some(true),
+                        Some(false) => {}
+                        None => unknown = true,
+                    }
+                }
+                if unknown {
+                    None
+                } else {
+                    Some(false)
+                }
+            }
+            Self::Not(expression) => expression.known(context).map(|value| !value),
+            Self::Opaque { .. } => None,
         }
     }
 }
