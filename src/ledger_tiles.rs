@@ -78,7 +78,6 @@ pub fn keys_of(entry: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// The key function the tile log is written and read with.
-#[must_use]
 pub fn key_fn() -> KeyFn {
     Box::new(keys_of)
 }
