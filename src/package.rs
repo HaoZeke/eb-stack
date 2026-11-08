@@ -1261,9 +1261,9 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         .map(NormalizedString::new);
     root.hashes = plan
         .sources
-        .first()
-        .and_then(|source| source.sha256.as_deref())
-        .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+        .iter()
+        .find_map(|source| source.sha256.as_deref().and_then(sha256_hash))
+        .map(|hash| Hashes(vec![hash]));
     let mut source_references = Vec::new();
     let mut seen_references = BTreeSet::new();
     for source in &plan.sources {
@@ -1297,7 +1297,8 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
                 reference.hashes = source
                     .sha256
                     .as_deref()
-                    .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+                    .and_then(sha256_hash)
+                    .map(|hash| Hashes(vec![hash]));
                 reference.comment = source
                     .target_directory
                     .as_deref()
@@ -1389,6 +1390,33 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         }
     }
 
+    for extension in &plan.overlay_extensions {
+        let reference = component_ref(&extension.name, &extension.version);
+        if !dependency_refs.contains(&reference) {
+            dependency_refs.push(reference.clone());
+        }
+        if !seen_component_refs.insert(reference.clone()) {
+            continue;
+        }
+        let mut component = Component::new(
+            Classification::Library,
+            &extension.name,
+            &extension.version,
+            Some(reference),
+        );
+        let mut properties = vec![Property::new("eb-stack:overlay-extension", "true")];
+        if let Some(checksum) = extension.checksum.as_deref() {
+            let digest = checksum.strip_prefix("sha256:").unwrap_or(checksum);
+            if let Some(hash) = sha256_hash(digest) {
+                component.hashes = Some(Hashes(vec![hash]));
+            } else {
+                properties.push(Property::new("eb-stack:checksum", checksum));
+            }
+        }
+        component.properties = Some(Properties(properties));
+        components.push(component);
+    }
+
     let mut dependencies = vec![Dependency {
         dependency_ref: root_ref,
         dependencies: runtime_refs,
@@ -1435,10 +1463,19 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     })
 }
 
-fn sha256_hash(checksum: &str) -> Hash {
-    Hash {
-        alg: HashAlgorithm::SHA_256,
-        content: HashValue(checksum.to_string()),
+/// A CycloneDX SHA-256 hash, only for a value that is one.
+fn sha256_hash(checksum: &str) -> Option<Hash> {
+    if checksum.len() == 64
+        && checksum
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        Some(Hash {
+            alg: HashAlgorithm::SHA_256,
+            content: HashValue(checksum.to_string()),
+        })
+    } else {
+        None
     }
 }
 
