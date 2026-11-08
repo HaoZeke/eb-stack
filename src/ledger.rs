@@ -1448,8 +1448,7 @@ pub fn sign_head(request: &HeadRequest) -> Result<HeadReport> {
     let (tiles, checkpoint) = if entries.is_empty() && request.origin.is_none() {
         (crate::ledger_tiles::sync(&entries, &dir)?, None)
     } else {
-        let origin =
-            crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
+        let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
         let (tiles, checkpoint) =
             crate::ledger_tiles::checkpoint(&entries, &dir, &key.key, &origin)?;
         (tiles, Some(checkpoint))

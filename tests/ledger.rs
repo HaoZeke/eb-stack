@@ -610,11 +610,16 @@ fn an_empty_log_signs_a_head_without_a_checkpoint() {
         "a size-0 head has no checkpoint line"
     );
     let tiles = PathBuf::from(format!("{}.tiles", fixture.log.display()));
-    assert!(!tiles.join("checkpoint").exists(), "no checkpoint is written");
+    assert!(
+        !tiles.join("checkpoint").exists(),
+        "no checkpoint is written"
+    );
     let extends = ok(&verify_range(&fixture, &head, &head));
     assert_eq!(
         extends,
-        format!("the head of size 0 root {empty_root} extends the head of size 0 root {empty_root}\n"),
+        format!(
+            "the head of size 0 root {empty_root} extends the head of size 0 root {empty_root}\n"
+        ),
         "a size-0 head verifies without a tile-log line"
     );
     let later = fixture.work.join("head-1.json");
