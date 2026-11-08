@@ -767,16 +767,29 @@ fn try_render_github_primary(
     } else {
         format!("{tag}.tar.gz")
     };
-    let filename_expr = if uses_source_lower && tag.ends_with(package_version) {
-        "SOURCELOWER_TAR_GZ".to_string()
-    } else if let Some(filename) = source.filename.as_deref() {
-        format!("'{}'", escape_single(filename))
-    } else {
-        format!("'{repo}-{package_version}.tar.gz'")
-    };
+    let filename_expr =
+        if uses_source_lower && (tag == package_version || tag == format!("v{package_version}")) {
+            "SOURCELOWER_TAR_GZ".to_string()
+        } else if let Some(filename) = source.filename.as_deref() {
+            format!("'{}'", escape_single(filename))
+        } else {
+            format!("'{repo}-{package_version}.tar.gz'")
+        };
 
+    // GITHUB_SOURCE expands to github.com/%(github_account)s/%(name)s/archive.
+    // GitHub folds case on that path. A repo whose last component differs
+    // from the package name 404s unless the URL names that component.
+    let source_urls = if repo.eq_ignore_ascii_case(package_name) {
+        "GITHUB_SOURCE".to_string()
+    } else {
+        format!(
+            "'https://github.com/{}/{}/archive'",
+            escape_single(&account),
+            escape_single(&repo)
+        )
+    };
     let prelude = format!(
-        "github_account = '{}'\nsource_urls = [GITHUB_SOURCE]\n",
+        "github_account = '{}'\nsource_urls = [{source_urls}]\n",
         escape_single(&account)
     );
     // Same multi-line dict shape as staged multi-source entries so format_style
