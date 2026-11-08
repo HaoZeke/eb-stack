@@ -29,6 +29,7 @@ exclude = [
     "assets/",
     "deliveries/",
     "docs/",
+    "docs/build*/",
     "examples/",
     "fixtures/",
     "llms-full.txt",
