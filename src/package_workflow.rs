@@ -2310,7 +2310,7 @@ fn replace_quoted_command_prefix(text: &str, prefix: &str) -> String {
     text
 }
 
-fn named_lookup<'a, T: Copy>(map: &HashMap<&str, T>, name: &str) -> Option<T> {
+fn named_lookup<T: Copy>(map: &HashMap<&str, T>, name: &str) -> Option<T> {
     map.get(name).copied().or_else(|| {
         map.iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))

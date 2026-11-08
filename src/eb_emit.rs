@@ -465,33 +465,6 @@ fn position_is_in_comment(src: &str, idx: usize) -> bool {
     false
 }
 
-/// True when `src` already declares a live dependency tuple whose name is
-/// `name`. The recipe spelling need not match the robot's case (`hdf5` vs
-/// `HDF5`). A prefix such as `NetCDF` must not match `NetCDF-Fortran`. A
-/// leftover `# ('CMake', '3.26.3')` is a comment, not a declaration.
-fn names_dependency_tuple(src: &str, name: &str) -> bool {
-    for quote in ['\'', '"'] {
-        let opener = format!("({quote}");
-        let mut search_from = 0usize;
-        while let Some(rel) = src[search_from..].find(&opener) {
-            let idx = search_from + rel;
-            let name_start = idx + opener.len();
-            if let Some(name_end_rel) = src[name_start..].find(quote) {
-                let found = &src[name_start..name_start + name_end_rel];
-                if found.eq_ignore_ascii_case(name) && !position_is_in_comment(src, idx) {
-                    let after = &src[name_start + name_end_rel + 1..];
-                    let next = after.chars().find(|c| !c.is_whitespace());
-                    if matches!(next, Some(',') | Some(')')) {
-                        return true;
-                    }
-                }
-            }
-            search_from = idx + 1;
-        }
-    }
-    false
-}
-
 /// Insert a runtime dependency tuple if that name is not already declared.
 pub fn insert_runtime_dependency(
     src: &str,
