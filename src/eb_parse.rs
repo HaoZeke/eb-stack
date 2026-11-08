@@ -3631,6 +3631,7 @@ fn expected_artifact_names(recipe: &ResolvedEasyconfig) -> Vec<String> {
 /// Structural findings for the `checksums` list or top-level dict.
 ///
 /// Real EasyBuild (`get_checksum_for` + `verify_checksum` + Cargo lifecycle):
+///
 /// - Cargo.`__init__` appends each `crates` tarball onto `cfg['sources']`.
 /// - `check_checksums_for` then builds filenames via
 ///   `chain(sources, data_sources)` then patches, so the list order is
