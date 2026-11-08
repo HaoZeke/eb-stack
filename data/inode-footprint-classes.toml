@@ -1,0 +1,12 @@
+# Peak build-tree inode footprint classes for packages the ledger has not seen
+# and no footprint table names. Inodes, per software name as EasyBuild spells it.
+# Codes with a large regression-test tree, GPU codes and vendor toolchains; any
+# other package takes the default footprint of `stack footprints`.
+[classes]
+CP2K = 350000
+LAMMPS = 150000
+PyTorch = 150000
+SeisSol = 150000
+NVHPC = 150000
+intel = 150000
+intel-compilers = 150000

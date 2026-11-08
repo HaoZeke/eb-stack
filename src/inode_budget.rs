@@ -14,7 +14,7 @@
 //! - A footprint table, `footprints.json`: per software name, the peak
 //!   build-tree inode count. [`derive`] takes the peak over ledger records
 //!   whose `build.inodes_peak` names the count a build reached, a static
-//!   table for packages the ledger has not seen, and [`CLASSES`] for the
+//!   table for packages the ledger has not seen, and the bundled classes ([`classes`]) for the
 //!   rest. [`Footprints::of_module`] answers for a module or an easyconfig
 //!   filename.
 //! - A shard footprint, [`shard_footprint`]: a shard builds its modules one
@@ -48,17 +48,26 @@ pub const DEFAULT_MARGIN: u64 = 100_000;
 /// Exit status of `stack admit` when the job is refused.
 pub const REFUSED_EXIT: i32 = 78;
 
-/// Footprint classes for packages no record or table names: codes with a
-/// large regression-test tree, GPU codes, and vendor toolchains.
-pub const CLASSES: &[(&str, u64)] = &[
-    ("CP2K", 350_000),
-    ("LAMMPS", 150_000),
-    ("PyTorch", 150_000),
-    ("SeisSol", 150_000),
-    ("NVHPC", 150_000),
-    ("intel", 150_000),
-    ("intel-compilers", 150_000),
-];
+/// The bundled footprint classes, `data/inode-footprint-classes.toml`: packages
+/// no record or table names, by software name.
+pub const BUNDLED_CLASSES: &str = include_str!("../data/inode-footprint-classes.toml");
+
+#[derive(serde::Deserialize)]
+struct ClassTable {
+    classes: BTreeMap<String, u64>,
+}
+
+/// The bundled footprint classes as a map from software name to inodes.
+///
+/// # Errors
+///
+/// The bundled table is not valid TOML with a `[classes]` table of integers.
+pub fn classes() -> anyhow::Result<BTreeMap<String, u64>> {
+    use anyhow::Context as _;
+    let table: ClassTable =
+        toml::from_str(BUNDLED_CLASSES).context("bundled footprint classes are not valid TOML")?;
+    Ok(table.classes)
+}
 
 /// Peak build-tree inodes per software name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,15 +85,16 @@ impl Default for Footprints {
 }
 
 impl Footprints {
-    /// [`CLASSES`] over [`DEFAULT_FOOTPRINT`].
+    /// The bundled classes over [`DEFAULT_FOOTPRINT`].
+    ///
+    /// # Panics
+    ///
+    /// The bundled class table does not parse; a unit test keeps it valid.
     #[must_use]
     pub fn builtin() -> Self {
         Self {
             default: DEFAULT_FOOTPRINT,
-            packages: CLASSES
-                .iter()
-                .map(|(name, inodes)| ((*name).to_string(), *inodes))
-                .collect(),
+            packages: classes().unwrap_or_else(|err| panic!("{err:#}")),
         }
     }
 
@@ -173,7 +183,7 @@ pub enum Source {
         /// How many ledger records carried a peak for the package.
         records: usize,
     },
-    /// A [`CLASSES`] entry.
+    /// A the bundled classes ([`classes`]) entry.
     Class,
 }
 
@@ -258,7 +268,7 @@ pub fn parse_table(text: &str) -> Result<BTreeMap<String, u64>, String> {
 }
 
 /// Derive the footprint table: the ledger peak and the static table where
-/// either names a package (the larger when both do), then [`CLASSES`] for
+/// either names a package (the larger when both do), then the bundled classes ([`classes`]) for
 /// the rest, over [`DEFAULT_FOOTPRINT`].
 #[must_use]
 pub fn derive(
@@ -312,7 +322,7 @@ pub struct FootprintsRun {
     pub from_ledger: usize,
     /// Packages whose footprint a static table set.
     pub from_table: usize,
-    /// Packages taken from [`CLASSES`].
+    /// Packages taken from the bundled classes ([`classes`]).
     pub from_class: usize,
     /// Ledger records that carried `build.inodes_peak`.
     pub records: usize,
@@ -841,6 +851,14 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bundled_classes_parse_and_name_the_heavy_builders() {
+        let classes = super::classes().expect("bundled classes");
+        assert_eq!(classes.get("CP2K"), Some(&350_000));
+        assert!(classes.values().all(|inodes| *inodes > 0));
+        assert_eq!(super::Footprints::builtin().packages.len(), classes.len());
+    }
+
     use super::*;
     use crate::ledger::seal_record;
 
