@@ -341,6 +341,35 @@ mod tests {
     }
 
     #[test]
+    fn explicit_easyblock_paths_preserve_recipe_resolution() {
+        for helpers in ["/helpers/generic.py", "/helpers/first.py,/helpers/second.py"] {
+            let line = format!(
+                "A-1.0.eb --from-commit={SHA} --include-easyblocks={helpers}"
+            );
+            assert_eq!(unsupported_option(&line), None, "{line}");
+            assert_eq!(
+                executable_line(&line, Some("/selected/A-1.0.eb"), "/robot:/selected"),
+                format!(
+                    "/selected/A-1.0.eb --include-easyblocks={helpers} --robot-paths=/robot:/selected"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn easyblock_pull_request_options_remain_unsupported() {
+        for option in [
+            "--include-easyblocks-from-pr=42",
+            "--include-easyblocks-from-p=42",
+            "--include-easyblocks-from=42",
+            "--include-easyblocks /helpers/generic.py",
+        ] {
+            let line = format!("A-1.0.eb --from-commit={SHA} {option}");
+            assert!(unsupported_option(&line).is_some(), "{line}");
+        }
+    }
+
+    #[test]
     fn resolution_options_and_extra_words_are_refused() {
         for line in [
             "A-1.0.eb".to_string(),
