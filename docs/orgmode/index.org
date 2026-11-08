@@ -34,7 +34,7 @@ A plan is not a build. ``package plan`` and ``package bump`` can establish only 
 
 Start with the :doc:`tutorial`. With no EasyBuild install, run the inspect snippet under *Inspect from a fresh clone*. Closure, generation, baseline, and reachability are in the :doc:`reference/glossary`.
 
-Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``. The published 0.3.0 binary (crates.io and the GitHub release) uses ``--policy`` and does not include those commands.
+The GitHub release (0.7.0) and a build from main carry ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``. The crates.io package is still 0.3.0: it uses ``--policy`` and does not include those commands.
 
 .. important::
 
