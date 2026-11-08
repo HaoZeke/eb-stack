@@ -294,3 +294,129 @@ fn package_plan_sbom_keeps_build_only_dependencies_off_depends_on() {
         "a run-only dependency stays off buildDependsOn: {listed}"
     );
 }
+
+#[test]
+fn an_ssh_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("git@github.com:QMCPACK/qmcpack.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn a_github_remote_with_a_port_keeps_the_owner() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("ssh://git@github.com:22/QMCPACK/qmcpack.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn a_trailing_slash_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("https://github.com/QMCPACK/qmcpack.git/".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn an_ssh_dot_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("git@ssh.github.com:QMCPACK/qmcpack.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn a_gist_remote_does_not_invent_a_github_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("https://gist.github.com/user/abc123.git".into());
+    plan.sources[0].url = None;
+    plan.sources[0].tag = Some("v1".into());
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    assert!(
+        !references.iter().any(|reference| {
+            reference["type"] == "distribution"
+                && reference["url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("github.com/")
+                && reference["url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("/archive/")
+        }),
+        "{references:?}"
+    );
+}
+
+#[test]
+fn a_gitlab_remote_does_not_invent_a_github_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("https://gitlab.com/org/pkg.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    assert!(references.iter().any(|reference| {
+        reference["type"] == "vcs" && reference["url"] == "https://gitlab.com/org/pkg.git"
+    }));
+    assert!(
+        !references.iter().any(|reference| {
+            reference["type"] == "distribution"
+                && reference["url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("/archive/")
+        }),
+        "{references:?}"
+    );
+}

@@ -1443,18 +1443,90 @@ fn sha256_hash(checksum: &str) -> Hash {
 }
 
 fn source_archive_url(source: &SourceArtifact) -> Option<String> {
-    source.url.clone().or_else(|| {
-        let git = source.git.as_deref()?;
-        let base = git.trim_end_matches(".git");
-        if let Some(tag) = source.tag.as_deref() {
-            Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
-        } else {
-            source
-                .commit
-                .as_deref()
-                .map(|commit| format!("{base}/archive/{commit}.tar.gz"))
+    if let Some(url) = source.url.clone() {
+        return Some(url);
+    }
+    let git = source.git.as_deref()?;
+    let base = github_https_repo(git)?;
+    if let Some(tag) = source.tag.as_deref() {
+        Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
+    } else {
+        source
+            .commit
+            .as_deref()
+            .map(|commit| format!("{base}/archive/{commit}.tar.gz"))
+    }
+}
+
+/// HTTPS repo root for a GitHub remote, or nothing.
+///
+/// scp-style and ssh/git URLs are accepted as remotes, including
+/// `ssh.github.com`, but the archive GitHub serves is only at
+/// `https://github.com/{owner}/{repo}/archive/...`. gist.github.com is a
+/// GitHub host and is still rejected: it has no `/archive/refs/tags/` tree.
+fn github_https_repo(git: &str) -> Option<String> {
+    if !git_remote_is_github(git) {
+        return None;
+    }
+    let host = github_remote_host(git)?;
+    if host == "gist.github.com" || host.ends_with(".gist.github.com") {
+        return None;
+    }
+    let trimmed = git.trim().trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    let path = if lower.starts_with("git@github.com:") {
+        &trimmed["git@github.com:".len()..]
+    } else if let Some(idx) = lower.find("github.com/") {
+        &trimmed[idx + "github.com/".len()..]
+    } else if let Some(idx) = lower.find("github.com:") {
+        let after = &trimmed[idx + "github.com:".len()..];
+        match after.find('/') {
+            Some(slash)
+                if after[..slash]
+                    .chars()
+                    .all(|character| character.is_ascii_digit()) =>
+            {
+                &after[slash + 1..]
+            }
+            _ => after,
         }
-    })
+    } else {
+        return None;
+    };
+    let path = path.trim_end_matches('/');
+    let path = if path.to_ascii_lowercase().ends_with(".git") {
+        &path[..path.len() - 4]
+    } else {
+        path
+    };
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    Some(format!("https://github.com/{owner}/{repo}"))
+}
+
+fn github_remote_host(git: &str) -> Option<String> {
+    let lower = git.trim().to_ascii_lowercase();
+    let host_and_path = lower
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(lower.as_str());
+    let host = host_and_path.split('/').next().unwrap_or("");
+    let host = host.rsplit_once('@').map(|(_, rest)| rest).unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// GitHub's `/archive/refs/tags/` URL is only defined for github.com remotes.
+///
+/// A substring match would invent that path for `gitlab.com/org/github.com`
+/// and for `notgithub.com`. The host is the only thing that certifies it.
+fn git_remote_is_github(git: &str) -> bool {
+    match github_remote_host(git).as_deref() {
+        Some("github.com") | Some("githubusercontent.com") => true,
+        Some(host) => host.ends_with(".github.com") || host.ends_with(".githubusercontent.com"),
+        None => false,
+    }
 }
 
 /// The planned BOM as JSON.
