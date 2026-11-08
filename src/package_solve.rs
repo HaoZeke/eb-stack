@@ -125,7 +125,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         }
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
-                && matches_req(&candidate.version, &version_req)
+                && candidate_matches_any_spelling(candidate, &version_req)
                 && dependency
                     .versionsuffix
                     .as_deref()
@@ -368,6 +368,17 @@ pub fn solve_package_profile_with_hierarchy(
             .find(|candidate| candidate.easyconfig_path == provider.easyconfig_path)
             .unwrap_or(provider);
         if !seen_providers.insert(provider.name.clone()) {
+            // BTreeMap order is not role order. A build-only extra that
+            // sorts first would otherwise lock the parent as build-only and
+            // drop a later runtime extra that collapsed to the same bundle.
+            if !build {
+                if let Some(existing) = dependencies
+                    .iter_mut()
+                    .find(|dependency| dependency.name == provider.name)
+                {
+                    existing.build = false;
+                }
+            }
             continue;
         }
         dependencies.push(LockedDependency {
@@ -598,9 +609,33 @@ fn scoped_dependency_name(scope: &str, name: &str) -> String {
     format!("__stack_context_{scope}__{name}")
 }
 
+/// Version, version+suffix, module without suffix, and module with suffix.
+///
+/// A dependency may spell the module instead of the version
+/// (`==5.0.3-GCC-13.3.0`), and a CUDA pin keeps `-CUDA-12.6.0` apart from
+/// the version it pins. A match that only reads `candidate.version` reports
+/// a hole for a pin the solve then locks.
+fn candidate_matches_any_spelling(candidate: &Candidate, version_req: &str) -> bool {
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    if matches_req(&candidate.version, version_req)
+        || (!suffix.is_empty()
+            && matches_req(&format!("{}{suffix}", candidate.version), version_req))
+    {
+        return true;
+    }
+    if is_system_toolchain(&candidate.toolchain) {
+        return false;
+    }
+    let module = format!(
+        "{}-{}-{}",
+        candidate.version, candidate.toolchain.name, candidate.toolchain.version
+    );
+    matches_req(&module, version_req) || matches_req(&format!("{module}{suffix}"), version_req)
+}
+
 fn stack_pin_candidate_matches(candidate: &Candidate, pin: &crate::package::StackPin) -> bool {
     candidate.name == pin.name
-        && matches_req(&candidate.version, &pin.version_requirement)
+        && candidate_matches_any_spelling(candidate, &pin.version_requirement)
         && pin
             .toolchain
             .as_ref()
@@ -621,7 +656,7 @@ fn dependency_candidate_matches(
     parent_hierarchy: Option<&ToolchainHierarchy>,
 ) -> bool {
     if candidate.name != dependency.name
-        || !matches_req(&candidate.version, &dependency.version_req)
+        || !candidate_matches_any_spelling(candidate, &dependency.version_req)
     {
         return false;
     }
