@@ -179,12 +179,12 @@ All eight prek hooks passed.
 ```sh
 git clone /path/to/eb-stack eb-stack-u3-u5
 cd eb-stack-u3-u5
-git fetch artifacts/eb-stack-u3-u5.bundle \
+git fetch deliveries/stack-gap-lint/eb-stack-u3-u5.bundle \
   cursor/stack-gap-lint-5553:u3-u5
 git switch u3-u5
 ```
 
-Alternatively, apply `artifacts/patches/*.patch` in numeric order to
+Alternatively, apply `deliveries/stack-gap-lint/patches/*.patch` in numeric order to
 `da07561a`.
 
 ## Left undone

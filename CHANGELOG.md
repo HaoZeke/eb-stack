@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Fixed
+
+- The stack-gap-lint delivery (report, bundle, patches) lives under
+  `deliveries/stack-gap-lint/`. At `artifacts/` it sat where cargo-dist
+  collects the release artifacts, and the 0.6.1 host step failed trying to
+  upload `artifacts/patches` as a release asset.
+
 ## 0.6.1 - 2026-11-08
 
 ### Fixed
