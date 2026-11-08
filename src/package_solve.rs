@@ -47,6 +47,22 @@ pub struct UnsatisfiedDirectDependency {
 }
 
 impl UnsatisfiedDirectDependency {
+    /// True when this hole is the same package, version requirement, and suffix
+    /// as `dependency`. Overlay identity is what the solver remaps (`poetry-core`
+    /// to `poetry`); a raw spelling compare would miss that hole. A name-only
+    /// match would drop every Python intent because one of them is missing.
+    pub fn matches_intent(&self, dependency: &crate::package::DependencyIntent) -> bool {
+        let identity = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        crate::provides::overlay_package_identity(identity)
+            == crate::provides::overlay_package_identity(&self.name)
+            && normalize_requirement(dependency.constraint.as_deref()) == self.version_req
+            && dependency.versionsuffix.as_deref().unwrap_or("")
+                == self.versionsuffix.as_deref().unwrap_or("")
+    }
+
     /// True when `versionsuffix` is compatible with this hole: `None` on the
     /// hole means any suffix, `Some("")` only the unsuffixed module.
     pub fn matches_versionsuffix(&self, versionsuffix: Option<&str>) -> bool {

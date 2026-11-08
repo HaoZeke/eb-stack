@@ -1201,8 +1201,21 @@ pub fn prepare_package_bump(
     );
     pin_version_derived_dependencies(&mut plan, request, &resolved);
     apply_dependency_overrides(&mut plan, &request.overrides);
+    let recipe_checksums = plan
+        .sources
+        .iter()
+        .map(|source| source.sha256.clone())
+        .collect::<Vec<_>>();
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    // Layers write [package] version onto the plan. A CLI --version is the
+    // later word and must win here too, or the plan and the emitted recipe
+    // disagree.
+    if let Some(version) = request.version.as_deref() {
+        if version != plan.package.version {
+            plan.package.version = version.to_string();
+        }
+    }
     // Layers write source_checksums onto every source. A CLI digest is the
     // later word and must win on the first source, which is what emit rewrites.
     if let Some(checksum) = request.source_checksum.as_deref() {
@@ -1213,6 +1226,15 @@ pub fn prepare_package_bump(
                 sha256: Some(checksum.to_string()),
                 ..SourceArtifact::default()
             });
+        }
+    }
+    // A version the layer moved without a CLI digest cannot keep the old
+    // recipe's source checksums: those bytes belong to the old version.
+    if plan.package.version != resolved.version && request.source_checksum.is_none() {
+        for (source, original) in plan.sources.iter_mut().zip(recipe_checksums) {
+            if source.sha256 == original {
+                source.sha256 = None;
+            }
         }
     }
     merge_foreign_inspect_deps(&mut plan, request)?;
@@ -1379,15 +1401,17 @@ pub fn complete_package_bump_with_options(
     raise_missing_easyblock(&mut plan);
     let source_recipe = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
-    let version_changed = request
-        .version
+    let emit_version = bump_emit_version(request, &plan, &source_recipe.version);
+    let version_changed = emit_version
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
-    if version_changed {
+    let generation_retarget = is_generation_retarget(&source_recipe.toolchain, &request.toolchain);
+    let profile_name = default_profile_name(&plan).to_string();
+    if version_changed || generation_retarget {
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
-            "default",
+            &profile_name,
             &Default::default(),
             candidates,
             stack_policy,
@@ -1395,34 +1419,49 @@ pub fn complete_package_bump_with_options(
         )
         .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
         for (index, hole) in holes.into_iter().enumerate() {
+            let already_excluded = plan
+                .dependencies
+                .iter()
+                .any(|dependency| hole.matches_intent(dependency) && dependency.solver_excluded);
             for dependency in &mut plan.dependencies {
-                let identity = dependency
-                    .eb_name
-                    .as_deref()
-                    .unwrap_or(dependency.name.as_str());
-                if identity.eq_ignore_ascii_case(&hole.name) {
+                if hole.matches_intent(dependency) {
                     dependency.solver_excluded = true;
                 }
             }
             dropped_dep_names.push(hole.name.clone());
-            plan.residuals.push(Residual {
-                id: format!("version-bump-dropped-dep:{index}"),
-                stage: ResidualStage::Resolve,
-                category: "version-bump-dropped-dep".into(),
-                severity: ResidualSeverity::Judgment,
-                summary: format!(
-                    "{} {} has no candidate on this generation after the version bump; \
-                     dropped from the emitted recipe",
-                    hole.name, hole.version_req
-                ),
-                evidence: None,
-                provenance: None,
-            });
+            if already_excluded {
+                plan.residuals.push(Residual {
+                    id: format!("version-bump-dropped-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "version-bump-dropped-dep".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: format!(
+                        "{} {} has no candidate on this generation after the version bump; \
+                         dropped from the emitted recipe",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: None,
+                    provenance: None,
+                });
+            } else {
+                plan.residuals.push(Residual {
+                    id: format!("unresolved-generation-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "unresolved-generation-dep".into(),
+                    severity: ResidualSeverity::Blocking,
+                    summary: format!(
+                        "{} {} has no candidate on this generation",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: hole.versionsuffix.clone(),
+                    provenance: None,
+                });
+            }
         }
     }
     let lock = solve_package_profile_with_hierarchy(
         &plan,
-        "default",
+        &profile_name,
         &Default::default(),
         candidates,
         stack_policy,
@@ -1435,10 +1474,14 @@ pub fn complete_package_bump_with_options(
     // with it changes nothing. A dependency may name the module rather than
     // the version: `('OpenMPI', '5.0.3-GCC-13.3.0')` says exactly what the
     // solve picked, and rewriting it into a four-element tuple is churn.
-    let stated_versions: HashMap<&str, &str> = source_recipe
+    let stated_run: HashMap<&str, &str> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
+        .collect();
+    let stated_build: HashMap<&str, &str> = source_recipe
+        .builddependencies
+        .iter()
         .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
         .collect();
     let names_the_selected_module = |dependency: &crate::package::LockedDependency| {
@@ -1451,9 +1494,14 @@ pub fn complete_package_bump_with_options(
                 dependency.version, dependency.toolchain.name, dependency.toolchain.version
             )
         };
-        stated_versions
-            .get(dependency.name.as_str())
-            .is_some_and(|stated| *stated == module_version)
+        // One lock row can stand for both lists. Skip the rewrite only when
+        // every stated occurrence already names this module; otherwise a
+        // matching build pin would leave a disagreeing runtime line in place.
+        let run_matches = named_lookup(&stated_run, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
+        let build_matches = named_lookup(&stated_build, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
+        run_matches && build_matches
     };
     let dependency_versions = lock
         .dependencies
@@ -1468,10 +1516,19 @@ pub fn complete_package_bump_with_options(
     // to be when the selection is the toolchain already named: a bump that
     // changes nothing should leave the line alone rather than refuse the
     // recipe.
-    let stated: HashMap<&str, &Toolchain> = source_recipe
+    let stated_run_tc: HashMap<&str, &Toolchain> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .filter_map(|dependency| {
+            dependency
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (dependency.name.as_str(), toolchain))
+        })
+        .collect();
+    let stated_build_tc: HashMap<&str, &Toolchain> = source_recipe
+        .builddependencies
+        .iter()
         .filter_map(|dependency| {
             dependency
                 .toolchain
@@ -1484,7 +1541,12 @@ pub fn complete_package_bump_with_options(
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
-            stated.get(dependency.name.as_str()).is_none_or(|already| {
+            let stated = if dependency.build {
+                named_lookup(&stated_build_tc, &dependency.name)
+            } else {
+                named_lookup(&stated_run_tc, &dependency.name)
+            };
+            stated.is_none_or(|already| {
                 !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
             })
         })
@@ -1523,7 +1585,7 @@ pub fn complete_package_bump_with_options(
         &request.source,
         &EmitParams {
             toolchain: request.toolchain.clone(),
-            version: request.version.clone(),
+            version: emit_version.clone(),
             dep_versions: dependency_versions,
             dep_toolchains: dependency_toolchains,
             dep_versionsuffixes: dependency_versionsuffixes,
@@ -1641,6 +1703,8 @@ pub fn complete_package_bump_with_options(
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
+    result.text = apply_derived_cmake_locals(&result.text, &plan)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let extra: Vec<String> = request
         .package_layers
         .iter()
@@ -1679,40 +1743,50 @@ pub fn complete_package_bump_with_options(
     // recorded decision. Without a sibling, version-pinned patch names are
     // flagged rather than silently carried.
     let mut patch_calls: Vec<crate::patch_evolution::PatchCall> = Vec::new();
-    if let Some(new_version) = request.version.as_deref() {
-        let source_recipe = resolve_easyconfig_file(&request.source)
-            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    if let Some(new_version) = emit_version.as_deref() {
         if new_version != source_recipe.version {
             let sibling = crate::patch_evolution::sibling_paths(
                 &source_recipe.name,
                 new_version,
                 candidates,
                 &request.toolchain,
+                source_recipe.versionsuffix.as_deref(),
             )
             .into_iter()
             .find_map(|path| {
                 resolve_easyconfig_file(Path::new(&path))
                     .ok()
-                    .map(|recipe| crate::patch_evolution::SiblingRecipe {
-                        easyconfig_path: path,
-                        toolchain: recipe.toolchain,
-                        patch_names: recipe.patch_names,
-                    })
+                    .map(|recipe| (path, recipe))
             });
+            let sibling_evidence =
+                sibling
+                    .as_ref()
+                    .map(|(path, recipe)| crate::patch_evolution::SiblingRecipe {
+                        easyconfig_path: path.clone(),
+                        toolchain: recipe.toolchain.clone(),
+                        patch_names: recipe.patch_names.clone(),
+                    });
             let patch_plan = crate::patch_evolution::plan_patch_evolution(
                 new_version,
                 &source_recipe.patch_names,
-                sibling.as_ref(),
+                sibling_evidence.as_ref(),
             );
             if request.strict_patches && !patch_plan.undecided().is_empty() {
                 return Err(PackageWorkflowError::UndecidedPatches(
                     patch_plan.undecided().join(", "),
                 ));
             }
-            if let Some(sibling_path) = &patch_plan.sibling {
+            if let Some((sibling_path, sibling_recipe)) = &sibling {
                 result.text =
                     crate::patch_evolution::adopt_sibling_patch_block(&result.text, sibling_path)
                         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+                plan.build.patches = patches_from_final_names(
+                    &patch_plan.final_patches(),
+                    sibling_recipe,
+                    &request.source,
+                    &plan.build.patches,
+                );
+                refresh_checksum_residuals(&mut plan);
                 // Per-patch evidence supersedes the blanket review warning.
                 result
                     .warnings
@@ -1759,7 +1833,7 @@ pub fn complete_package_bump_with_options(
         sbom,
         locks: vec![lock],
         easyconfigs: vec![EmittedEasyconfig {
-            profile: "default".into(),
+            profile: profile_name,
             filename: result.filename,
             text: result.text,
         }],
@@ -2023,6 +2097,225 @@ fn package_plan_from_easyconfig(
         overlay_extensions: Vec::new(),
         package_index: Default::default(),
     }
+}
+
+/// Version the bump writes into the recipe.
+///
+/// `request.version` wins when the CLI set one. Otherwise a layer version
+/// that already rewrote the plan reaches emit so plan and recipe agree.
+fn bump_emit_version(
+    request: &BumpPackageRequest,
+    plan: &PackagePlan,
+    source_version: &str,
+) -> Option<String> {
+    if let Some(version) = request.version.clone() {
+        return Some(version);
+    }
+    (plan.package.version != source_version).then(|| plan.package.version.clone())
+}
+
+fn default_profile_name(plan: &PackagePlan) -> &str {
+    plan.profiles
+        .iter()
+        .find(|profile| profile.default)
+        .map(|profile| profile.name.as_str())
+        .or_else(|| plan.outputs.first().map(|output| output.profile.as_str()))
+        .unwrap_or("default")
+}
+
+/// Rebuild `plan.build.patches` from the adopted sibling set.
+///
+/// `complete_package_bump` used to splice only `result.text`. The writer
+/// copies `plan.build.patches`, so without this the overlay still holds the
+/// source-version files.
+fn patches_from_final_names(
+    final_names: &[&str],
+    sibling: &crate::eb_parse::ResolvedEasyconfig,
+    source_path: &Path,
+    previous: &[PatchArtifact],
+) -> Vec<PatchArtifact> {
+    let sibling_dir = Path::new(&sibling.easyconfig_path).parent();
+    let source_dir = source_path.parent();
+    let source_count = if sibling.sources_count > 0 {
+        sibling.sources_count
+    } else {
+        sibling
+            .checksums
+            .len()
+            .saturating_sub(sibling.patch_names.len())
+    };
+    final_names
+        .iter()
+        .enumerate()
+        .map(|(index, filename)| {
+            let resolved_source = sibling_dir
+                .map(|directory| directory.join(filename))
+                .filter(|path| path.is_file())
+                .or_else(|| {
+                    source_dir
+                        .map(|directory| directory.join(filename))
+                        .filter(|path| path.is_file())
+                });
+            let sha256 = sibling
+                .checksums_by_filename
+                .get(*filename)
+                .cloned()
+                .or_else(|| sibling.checksums.get(source_count + index).cloned())
+                .or_else(|| {
+                    previous
+                        .iter()
+                        .find(|patch| patch.filename == *filename)
+                        .and_then(|patch| patch.sha256.clone())
+                })
+                .or_else(|| {
+                    resolved_source
+                        .as_ref()
+                        .and_then(|path| std::fs::read(path).ok().map(|bytes| sha256_hex(&bytes)))
+                });
+            PatchArtifact {
+                filename: (*filename).to_string(),
+                sha256,
+                url: None,
+                source: resolved_source
+                    .as_deref()
+                    .map(|path| path.display().to_string()),
+                condition: ConditionExpr::Always,
+                resolved_source,
+            }
+        })
+        .collect()
+}
+
+fn easyconfig_scalar(value: &crate::package::EasyconfigValue) -> Option<String> {
+    match value {
+        crate::package::EasyconfigValue::String(text) => Some(text.clone()),
+        crate::package::EasyconfigValue::Integer(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn apply_derived_cmake_locals(
+    text: &str,
+    plan: &PackagePlan,
+) -> Result<String, crate::eb_emit::EmitError> {
+    let host = plan
+        .build
+        .easyconfig_parameters
+        .get("local_host_arch")
+        .and_then(easyconfig_scalar);
+    let order = plan
+        .build
+        .easyconfig_parameters
+        .get("local_order")
+        .and_then(easyconfig_scalar);
+    let equations = plan
+        .build
+        .easyconfig_parameters
+        .get("local_equations")
+        .and_then(easyconfig_scalar);
+    let (Some(host), Some(order), Some(equations)) = (host, order, equations) else {
+        return Ok(text.to_string());
+    };
+    let build_type = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| flag.strip_prefix("-DCMAKE_BUILD_TYPE="))
+        .unwrap_or("Release");
+    let precision_letter = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| match flag.strip_prefix("-DPRECISION=") {
+            Some("double") => Some('d'),
+            Some("single") => Some('s'),
+            _ => None,
+        })
+        .unwrap_or('d');
+    let binary_rhs = format!(
+        "'{}_{}_{}%s_%s_%s' % (local_host_arch, local_order, local_equations)",
+        plan.package.name, build_type, precision_letter
+    );
+    let mut text = crate::eb_emit::upsert_raw_assignment(text, "local_binary", &binary_rhs)?;
+    let mut placeholders = Vec::new();
+    let joined = plan
+        .build
+        .config_options
+        .iter()
+        .map(|flag| {
+            if let Some(rest) = flag.strip_prefix("-DORDER=") {
+                if rest == order.as_str() {
+                    placeholders.push("local_order");
+                    return "-DORDER=%s".into();
+                }
+            }
+            if let Some(rest) = flag.strip_prefix("-DHOST_ARCH=") {
+                if rest == host.as_str() {
+                    placeholders.push("local_host_arch");
+                    return "-DHOST_ARCH=%s".into();
+                }
+            }
+            if let Some(rest) = flag.strip_prefix("-DEQUATIONS=") {
+                if rest == equations.as_str() {
+                    placeholders.push("local_equations");
+                    return "-DEQUATIONS=%s".into();
+                }
+            }
+            flag.clone()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.contains("%s") && !placeholders.is_empty() {
+        let rhs = format!("'{joined}' % ({})", placeholders.join(", "));
+        text = crate::eb_emit::upsert_raw_assignment(&text, "configopts", &rhs)?;
+    }
+    let binary_prefix = format!("{}_{}_{}", plan.package.name, build_type, precision_letter);
+    text = replace_quoted_binary_prefix(
+        &text,
+        &format!("bin/{binary_prefix}"),
+        "'bin/%s' % local_binary",
+    );
+    text = replace_quoted_command_prefix(&text, &binary_prefix);
+    Ok(text)
+}
+
+fn replace_quoted_binary_prefix(text: &str, prefix: &str, replacement: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    while let Some(start) = text.find(&needle) {
+        let Some(rel_end) = text[start + 1..].find('\'') else {
+            break;
+        };
+        let end = start + 1 + rel_end + 1;
+        text.replace_range(start..end, replacement);
+    }
+    text
+}
+
+fn replace_quoted_command_prefix(text: &str, prefix: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    if let Some(start) = text.find(&needle) {
+        if let Some(rel_end) = text[start + 1..].find('\'') {
+            let end = start + 1 + rel_end + 1;
+            let inner = &text[start + 1..end - 1];
+            if let Some(after) = inner.strip_prefix(prefix) {
+                let skip = after.find(char::is_whitespace).unwrap_or(after.len());
+                let rest = &after[skip..];
+                let replacement = format!("'%s{rest}' % local_binary");
+                text.replace_range(start..end, &replacement);
+            }
+        }
+    }
+    text
+}
+
+fn named_lookup<'a, T: Copy>(map: &HashMap<&str, T>, name: &str) -> Option<T> {
+    map.get(name).copied().or_else(|| {
+        map.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| *value)
+    })
 }
 
 /// Whether the plan moves the recipe onto a different toolchain generation.
