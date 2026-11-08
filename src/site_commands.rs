@@ -33,7 +33,7 @@ fn rejected_pull_request(flag: &str, number: u64, input: &[u64]) -> String {
 }
 
 /// `--generated-at` is stored as given. An absent flag is the current UTC time.
-fn generated_at(value: Option<String>, seconds: bool) -> Result<String> {
+pub(crate) fn generated_at(value: Option<String>, seconds: bool) -> Result<String> {
     let Some(text) = value else {
         return Ok(if seconds {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -2226,6 +2226,15 @@ pub struct StackShardRequest {
     pub generated_at: Option<String>,
     /// Output directory.
     pub out_dir: PathBuf,
+    /// Scratch inode quota the shards share; caps how many run at once.
+    pub inode_quota: Option<u64>,
+    /// `footprints.json` from `stack footprints`; absent is the built-in
+    /// class table.
+    pub inode_footprints: Option<PathBuf>,
+    /// Inodes kept free under the quota.
+    pub inode_margin: u64,
+    /// Inodes each build-list line keeps beside its build tree.
+    pub inode_line_overhead: u64,
     /// Opt-in: lift CPU-only prerequisites of accelerator roots into the
     /// prelude even when only one root needs them. Default is false (shared
     /// dependencies only), matching historical `stack shard` behaviour.
@@ -2245,6 +2254,11 @@ pub struct StackShardRun {
     pub lift_cpu_prerequisites: bool,
     /// Build-list lines.
     pub lines: usize,
+    /// Shards that fit under the quota at once; the shard count without a
+    /// quota.
+    pub max_concurrent: usize,
+    /// Whether a quota was given, so the summary names the cap.
+    pub capped: bool,
     /// Lines planned without a closure.
     pub opaque: usize,
     /// One line per opaque line and per other planning caveat, for stderr.
@@ -2265,6 +2279,9 @@ impl StackShardRun {
                 self.shards, self.prelude, self.lines
             )
         };
+        if self.capped {
+            text.push_str(&format!(" max_concurrent={}", self.max_concurrent));
+        }
         if self.opaque > 0 {
             text.push_str(&format!(" opaque={}", self.opaque));
         }
@@ -2649,6 +2666,33 @@ pub fn run_stack_shard_with_sources(
     if args.shards == 0 {
         return Err(usage("--shards must be at least 1"));
     }
+    if let Some(quota) = args.inode_quota {
+        if quota <= args.inode_margin {
+            return Err(usage(format!(
+                "--inode-quota {quota} leaves nothing under --inode-margin {}",
+                args.inode_margin
+            )));
+        }
+    }
+    let (footprints, footprints_sha256) = match &args.inode_footprints {
+        Some(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("--inode-footprints {}: not readable", path.display()))?;
+            (
+                crate::inode_budget::read_footprints(path)?,
+                Some(sha256_hex(&bytes)),
+            )
+        }
+        None => (crate::inode_budget::Footprints::builtin(), None),
+    };
+    let budget = crate::inode_budget::PlanBudget {
+        quota: args.inode_quota,
+        margin: args.inode_margin,
+        footprints_file: args.inode_footprints.clone(),
+        footprints_sha256,
+        footprints,
+        line_overhead: args.inode_line_overhead,
+    };
     if let Some(repo) = &extra.easyconfigs_repo {
         // Git parent discovery must not substitute a different source repository.
         let bare =
@@ -3470,6 +3514,17 @@ pub fn run_stack_shard_with_sources(
     for (file, digest) in &easyconfig_digests {
         digest_input.push_str(&format!("easyconfig={file} {digest}\n"));
     }
+    // The inode budget decides the cap, not the shard lists, so it enters
+    // the digest only when it is given.
+    if let Some(quota) = args.inode_quota {
+        digest_input.push_str(&format!(
+            "inode_quota={quota}\ninode_margin={}\ninode_line_overhead={}\n",
+            args.inode_margin, args.inode_line_overhead
+        ));
+    }
+    if let Some(digest) = &budget.footprints_sha256 {
+        digest_input.push_str(&format!("inode_footprints={digest}\n"));
+    }
     for (source, status) in &tree_status {
         digest_input.push_str(&format!(
             "tree={source} {}\n",
@@ -3532,6 +3587,12 @@ pub fn run_stack_shard_with_sources(
     }
     let width = written_shards.len().to_string().len().max(2);
     let shard_name = |s: usize| format!("shard-{:0width$}", s + 1);
+    let shard_parts: Vec<(Vec<String>, usize)> = written_shards
+        .iter()
+        .map(|(shard_lines, shard_modules)| (shard_modules.clone(), shard_lines.len()))
+        .collect();
+    let (shard_footprints, prelude_footprint, max_concurrent) =
+        budget.apply_parts(&shard_parts, &planned.prelude, shard_name)?;
     let mut line_shard_name: Vec<Option<String>> = vec![None; lines.len()];
     for (s, (shard_lines, shard_modules)) in written_shards.iter().enumerate() {
         let name = shard_name(s);
@@ -3551,6 +3612,9 @@ pub fn run_stack_shard_with_sources(
             "weight": shard_modules.iter().map(|m| weight(m)).sum::<u64>(),
             "lines": shard_lines.iter().map(|&i| lines[i].number).collect::<Vec<_>>(),
             "modules": shard_modules,
+            "inode_footprint": shard_footprints[s]["inodes"],
+            "inode_peak_module": shard_footprints[s]["peak_module"],
+            "inode_overhead": shard_footprints[s]["overhead"],
         }));
     }
     for &i in &cpu_root_lines {
@@ -3904,10 +3968,14 @@ pub fn run_stack_shard_with_sources(
         },
         "shards_requested": args.shards,
         "default_weight": args.default_weight,
+        "inode_budget": budget.to_json(),
+        "max_concurrent_shards": max_concurrent,
         "lift_cpu_prerequisites": args.lift_cpu_prerequisites,
         "prelude": {
             "file": "prelude.list",
             "weight": planned.prelude_weight,
+            "inode_footprint": prelude_footprint["inodes"],
+            "inode_peak_module": prelude_footprint["peak_module"],
             "modules": module_meta(&planned.prelude),
         },
         "shards": shard_json,
@@ -3992,6 +4060,8 @@ pub fn run_stack_shard_with_sources(
         cpu_prerequisites: planned.cpu_prerequisites.len() + cpu_root_lines.len(),
         lift_cpu_prerequisites: args.lift_cpu_prerequisites,
         lines: lines.len(),
+        max_concurrent,
+        capped: args.inode_quota.is_some(),
         opaque: opaque_json.len(),
         warnings,
     })
@@ -4214,6 +4284,10 @@ mod tests {
         fn request(root: &Path, list: &str) -> StackShardRequest {
             std::fs::write(root.join("build.list"), list).unwrap();
             StackShardRequest {
+                inode_quota: None,
+                inode_footprints: None,
+                inode_margin: crate::inode_budget::DEFAULT_MARGIN,
+                inode_line_overhead: crate::inode_budget::DEFAULT_LINE_OVERHEAD,
                 build_list: root.join("build.list"),
                 easyconfigs: vec![root.join("robot")],
                 commit_trees: Vec::new(),

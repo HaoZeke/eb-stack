@@ -1,0 +1,466 @@
+From 1342ae911ba2eb9078604b08f1a4094337249903 Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:15:45 +0000
+Subject: [PATCH 3/7] feat(stack): write module version changes
+
+---
+ CHANGELOG.md                      |   4 +
+ docs/orgmode/howto/module-gap.org |   8 ++
+ docs/orgmode/reference/cli.org    |   5 +-
+ src/gap.rs                        | 177 +++++++++++++++++++++++++++---
+ src/main.rs                       |   3 +-
+ src/mcp.rs                        |   2 +-
+ src/site_commands.rs              |  38 +++++--
+ tests/stack_gap.rs                |  23 ++++
+ 8 files changed, 233 insertions(+), 27 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 3ccb293..ece0820 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -12,6 +12,10 @@ All notable changes to this project are documented here.
+ - `scripts/dump-module-trees.sh` captures the live site, older EESSI, and
+   target EESSI `module -t avail` inventories in isolated, purged shells for
+   `stack gap`.
++- `stack gap` writes `version-change.tsv`, one row per version in the site
++  and older-EESSI inventories. A module in the target is `moved` and names
++  its EESSI version; an excluded module is `site-only`; every other missing
++  route is `gone` until it lands.
+ - `stack shard` splits one Jenkins build list into shards that can
+   build at the same time. A line's set is its closure over
+   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod
+diff --git a/docs/orgmode/howto/module-gap.org b/docs/orgmode/howto/module-gap.org
+index 475f9a5..625f5ee 100644
+--- a/docs/orgmode/howto/module-gap.org
++++ b/docs/orgmode/howto/module-gap.org
+@@ -123,6 +123,14 @@ Each route also has its own file: ~in-stack.tsv~, ~site-only.tsv~,
+ and ~bump.tsv~. An ~open-layer~ match is the easystack line the pull
+ request adds, not a dependency that line would build.
+ 
++~version-change.tsv~ is the user migration table. It keeps the module
++versions exactly as the live dumps spell them, including a toolchain
++suffix. An ~in-stack~ name is ~moved~ and names the target EESSI
++version. An ~excluded~ name is ~site-only~. Every other route is
++~gone~ from the opened stack until that route lands. A name with two
++old versions has two rows; multiple target versions are comma-separated.
++The columns are ~name~, ~old_version~, ~eessi_version~, and ~status~.
++
+ ~eb_stack_gap~ writes the same files. ~open_layer~ and
+ ~open_easyconfigs~ are arrays of the same pull-request JSON
+ ~pr-overlap --pr~ reads.
+diff --git a/docs/orgmode/reference/cli.org b/docs/orgmode/reference/cli.org
+index d172d48..741a5ea 100644
+--- a/docs/orgmode/reference/cli.org
++++ b/docs/orgmode/reference/cli.org
+@@ -677,7 +677,10 @@ version counts. The command writes ~gap.tsv~, one TSV per
+ route (~site-only.tsv~ for ~excluded~, ~bump.tsv~ for ~no-recipe~, and
+ ~in-stack.tsv~, ~filtered.tsv~, ~open-layer.tsv~, ~recipe.tsv~,
+ ~open-easyconfigs.tsv~), ~roots.txt~ for ~stack batch --roots-file~ (the
+-~recipe~ rows only), and ~bump-sources.txt~ for ~package bump --latest~.
++~recipe~ rows only), ~bump-sources.txt~ for ~package bump --latest~, and
++~version-change.tsv~. The last file has one row per old module version:
++~moved~ names the target EESSI version, ~site-only~ is an ~excluded~
++name, and every other missing route is ~gone~ until it lands.
+ 
+ ~stack provided~ reads each ~--build-list~ (a Jenkins list or one
+ easyconfig path per line; ~#~ comments are skipped) and fails when a
+diff --git a/src/gap.rs b/src/gap.rs
+index 1b152b1..98ddbc7 100644
+--- a/src/gap.rs
++++ b/src/gap.rs
+@@ -53,6 +53,12 @@ pub struct OpenCarry {
+     pub label: String,
+ }
+ 
++/// Module names and the versions the live listing exposes.
++///
++/// A name with an empty set came from a bare module name, so its version is
++/// unknown rather than absent from the inventory.
++pub type ModuleInventory = BTreeMap<String, BTreeSet<String>>;
++
+ /// The lists [`gap`] reads.
+ pub struct GapInput<'a> {
+     /// Site package names.
+@@ -100,11 +106,19 @@ pub fn names_from_listing(text: &str) -> BTreeSet<String> {
+ /// not. A file is `module -t avail`, `module spider -t`, or the same
+ /// `Name/version` lines as [`names_from_listing`].
+ pub fn names_from_module_source(path: &Path) -> Result<BTreeSet<String>> {
++    Ok(inventory_from_module_source(path)?.into_keys().collect())
++}
++
++/// Module names and versions from a listing file or an Lmod module tree.
++///
++/// Versions are kept as Lmod spells them, including any toolchain suffix.
++/// Bare names have an empty version set.
++pub fn inventory_from_module_source(path: &Path) -> Result<ModuleInventory> {
+     if path.is_dir() {
+-        names_from_module_tree(path).with_context(|| path.display().to_string())
++        inventory_from_module_tree(path).with_context(|| path.display().to_string())
+     } else {
+         let text = std::fs::read_to_string(path).with_context(|| path.display().to_string())?;
+-        Ok(names_from_live_listing(&text))
++        Ok(inventory_from_live_listing(&text))
+     }
+ }
+ 
+@@ -113,24 +127,35 @@ pub fn names_from_module_source(path: &Path) -> Result<BTreeSet<String>> {
+ /// Path headers, `(default)`, and a `Name: Name/version, ...` spider line
+ /// are read. A plain `Name/version` or bare name is unchanged.
+ pub fn names_from_live_listing(text: &str) -> BTreeSet<String> {
+-    let mut names = BTreeSet::new();
++    inventory_from_live_listing(text).into_keys().collect()
++}
++
++/// Module names and versions in `module -t avail` or `module spider -t`
++/// output.
++pub fn inventory_from_live_listing(text: &str) -> ModuleInventory {
++    let mut inventory = ModuleInventory::new();
+     for line in text.lines() {
+         for module in live_module_tokens(line) {
+-            let Some(name) = module.split('/').next() else {
++            let mut parts = module.splitn(2, '/');
++            let Some(name) = parts.next() else {
+                 continue;
+             };
+-            if !name.is_empty() {
+-                names.insert(name.to_string());
++            if name.is_empty() {
++                continue;
++            }
++            let versions = inventory.entry(name.to_string()).or_default();
++            if let Some(version) = parts.next().filter(|version| !version.is_empty()) {
++                versions.insert(version.to_string());
+             }
+         }
+     }
+-    names
++    inventory
+ }
+ 
+-fn names_from_module_tree(root: &Path) -> std::io::Result<BTreeSet<String>> {
+-    let mut names = BTreeSet::new();
+-    walk_module_tree(root, &mut names)?;
+-    Ok(names)
++fn inventory_from_module_tree(root: &Path) -> std::io::Result<ModuleInventory> {
++    let mut inventory = ModuleInventory::new();
++    walk_module_tree(root, &mut inventory)?;
++    Ok(inventory)
+ }
+ 
+ /// One tab-separated file per route `stack gap` writes, besides `gap.tsv`.
+@@ -318,6 +343,93 @@ pub fn render_tsv(rows: &[GapRow]) -> String {
+     out
+ }
+ 
++/// One previous-stack module version and where users find it in the new
++/// stack.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
++pub struct VersionChangeRow {
++    /// EasyBuild software name.
++    pub name: String,
++    /// Version in the site or older-EESSI inventory. `None` for a bare name.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub old_version: Option<String>,
++    /// Version in the target EESSI inventory. Multiple target versions are
++    /// comma-separated. Set only for `moved`.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub eessi_version: Option<String>,
++    /// `moved`, `gone`, or `site-only`.
++    pub status: String,
++}
++
++fn inventory_versions<'a>(
++    inventory: &'a ModuleInventory,
++    name: &str,
++) -> Option<&'a BTreeSet<String>> {
++    inventory.get(name).or_else(|| {
++        inventory
++            .iter()
++            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
++            .map(|(_, versions)| versions)
++    })
++}
++
++/// Turn gap routes into the user-facing version change table.
++///
++/// An `in-stack` module moved to EESSI, an `excluded` module remains
++/// site-only, and every other route is gone from the opened stack until that
++/// route lands. One row is written per old module version; a bare old name
++/// still contributes one row with no version.
++pub fn version_changes(
++    rows: &[GapRow],
++    old: &ModuleInventory,
++    eessi: &ModuleInventory,
++) -> Vec<VersionChangeRow> {
++    let mut changes = Vec::new();
++    for row in rows {
++        let status = match row.route.as_str() {
++            "in-stack" => "moved",
++            "excluded" => "site-only",
++            _ => "gone",
++        };
++        let eessi_version = (status == "moved")
++            .then(|| inventory_versions(eessi, &row.name))
++            .flatten()
++            .filter(|versions| !versions.is_empty())
++            .map(|versions| versions.iter().cloned().collect::<Vec<_>>().join(","));
++        let old_versions = inventory_versions(old, &row.name);
++        if let Some(versions) = old_versions.filter(|versions| !versions.is_empty()) {
++            changes.extend(versions.iter().map(|version| VersionChangeRow {
++                name: row.name.clone(),
++                old_version: Some(version.clone()),
++                eessi_version: eessi_version.clone(),
++                status: status.to_string(),
++            }));
++        } else {
++            changes.push(VersionChangeRow {
++                name: row.name.clone(),
++                old_version: None,
++                eessi_version,
++                status: status.to_string(),
++            });
++        }
++    }
++    changes
++}
++
++/// A tab-separated version change table with a header line.
++pub fn render_version_changes(rows: &[VersionChangeRow]) -> String {
++    let mut out = String::from("name\told_version\teessi_version\tstatus\n");
++    for row in rows {
++        out.push_str(&format!(
++            "{}\t{}\t{}\t{}\n",
++            row.name,
++            row.old_version.as_deref().unwrap_or("-"),
++            row.eessi_version.as_deref().unwrap_or("-"),
++            row.status
++        ));
++    }
++    out
++}
++
+ /// The package name an easyconfig filename names.
+ ///
+ /// `hwloc-CUDA-2.11.2-GCCcore-15.2.0.eb` is `hwloc-CUDA`. A path contributes
+@@ -388,7 +500,7 @@ pub fn carries_from_layer_version(
+     out
+ }
+ 
+-fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result<()> {
++fn walk_module_tree(dir: &Path, inventory: &mut ModuleInventory) -> std::io::Result<()> {
+     let entries = std::fs::read_dir(dir).map_err(|error| io_at(dir, error))?;
+     for entry in entries {
+         let entry = entry.map_err(|error| io_at(dir, error))?;
+@@ -406,7 +518,7 @@ fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result
+                 Err(_) => continue,
+             }
+         } else if file_type.is_dir() {
+-            walk_module_tree(&path, names)?;
++            walk_module_tree(&path, inventory)?;
+             continue;
+         }
+         if !is_module_file(&file_name) {
+@@ -423,7 +535,10 @@ fn walk_module_tree(dir: &Path, names: &mut BTreeSet<String>) -> std::io::Result
+         if stem.is_empty() || stem == "default" {
+             continue;
+         }
+-        names.insert(software.to_string());
++        inventory
++            .entry(software.to_string())
++            .or_default()
++            .insert(stem.to_string());
+     }
+     Ok(())
+ }
+@@ -866,6 +981,35 @@ Where:
+                 "LAMMPS".to_string(),
+             ])
+         );
++        let inventory = inventory_from_live_listing(text);
++        assert_eq!(
++            inventory["zlib"],
++            BTreeSet::from(["1.2.13".to_string(), "1.3.1".to_string()])
++        );
++        assert_eq!(inventory["GCCcore"], BTreeSet::from(["14.2.0".to_string()]));
++        assert!(inventory["LAMMPS"].is_empty());
++    }
++
++    #[test]
++    fn version_changes_name_moved_gone_and_site_only_rows() {
++        let old = inventory_from_live_listing(
++            "FFTW/3.3.10-gompi-2025b\nLAMMPS/2024.0-foss-2025b\nMATLAB/2024b\n",
++        );
++        let eessi = inventory_from_live_listing("FFTW/3.3.10-gompi-2026.1\n");
++        let rows = vec![
++            row("FFTW", "in-stack", None, None, None),
++            row("LAMMPS", "open-layer", None, None, None),
++            row("MATLAB", "excluded", None, None, None),
++        ];
++        assert_eq!(
++            render_version_changes(&version_changes(&rows, &old, &eessi)),
++            "\
++name\told_version\teessi_version\tstatus
++FFTW\t3.3.10-gompi-2025b\t3.3.10-gompi-2026.1\tmoved
++LAMMPS\t2024.0-foss-2025b\t-\tgone
++MATLAB\t2024b\t-\tsite-only
++"
++        );
+     }
+ 
+     #[test]
+@@ -883,7 +1027,10 @@ Where:
+         let binutils = root.path().join("Compiler/GCCcore/13.2.0/binutils");
+         std::fs::create_dir_all(&binutils).unwrap();
+         std::fs::write(binutils.join("2.42.lua"), "").unwrap();
+-        let names = names_from_module_tree(root.path()).unwrap();
++        let names: BTreeSet<String> = inventory_from_module_tree(root.path())
++            .unwrap()
++            .into_keys()
++            .collect();
+         assert_eq!(
+             names,
+             BTreeSet::from([
+diff --git a/src/main.rs b/src/main.rs
+index 779e30a..e37960d 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1136,7 +1136,8 @@ enum StackCommand {
+     /// this generation), or `excluded`. A directory is an Lmod tree. A file
+     /// is `module -t avail`, `module spider -t`, or `Name/version`. Writes
+     /// `gap.tsv`, one TSV per route, `roots.txt` for `stack batch
+-    /// --roots-file`, and `bump-sources.txt`.
++    /// --roots-file`, `bump-sources.txt`, and `version-change.tsv` with old
++    /// versions moved to EESSI, gone, or kept site-only.
+     #[command(
+         after_long_help = "Examples:\n  eb-stack stack gap --site tests/rebuild_set_fixtures/installed.txt --installed tests/pr_overlap_layer/installed.txt --easyconfigs tests/rebuild_set_fixtures/release --generation 2026.1 --out-dir gap\n\nThose paths are files in this repository. A missing --site file exits 1 and names the path."
+     )]
+diff --git a/src/mcp.rs b/src/mcp.rs
+index bf8df83..7484f61 100644
+--- a/src/mcp.rs
++++ b/src/mcp.rs
+@@ -380,7 +380,7 @@ fn tool_catalog() -> Vec<Value> {
+         ),
+         tool_with_optional(
+             "eb_stack_gap",
+-            "Classify every package in site and older module trees against a target stack, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). A path may be an Lmod directory or module -t avail / module spider -t text. installed repeats for a CPU tree and an accelerator tree. eessi_version keeps open software-layer easystacks of that version. Writes gap.tsv, one TSV per route, roots.txt and bump-sources.txt under out_dir.",
++            "Classify every package in site and older module trees against a target stack, as `stack gap` does: in-stack, excluded (site-only), filtered, open-layer, recipe, open-easyconfigs, or no-recipe (a bump). A path may be an Lmod directory or module -t avail / module spider -t text. installed repeats for a CPU tree and an accelerator tree. eessi_version keeps open software-layer easystacks of that version. Writes gap.tsv, one TSV per route, roots.txt, bump-sources.txt, and version-change.tsv (old versions moved to EESSI, gone, or site-only) under out_dir.",
+             &[
+                 ("installed", "array"),
+                 ("easyconfigs", "array"),
+diff --git a/src/site_commands.rs b/src/site_commands.rs
+index 4e82a7a..30a9646 100644
+--- a/src/site_commands.rs
++++ b/src/site_commands.rs
+@@ -1205,7 +1205,8 @@ impl StackGapRun {
+ /// each gap. Writes `gap.tsv`, one TSV per route, `roots.txt` (the recipes
+ /// on the generation, the input of `stack batch --roots-file`), and
+ /// `bump-sources.txt` (the newest recipe on any toolchain for each name
+-/// without one).
++/// without one), and `version-change.tsv` (old module versions moved to the
++/// target EESSI version, gone, or kept site-only).
+ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
+     use std::collections::{BTreeMap, BTreeSet};
+     if args.site.is_empty() && args.older.is_empty() {
+@@ -1214,26 +1215,31 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
+     if args.installed.is_empty() {
+         return Err(usage("pass at least one --installed target tree"));
+     }
+-    let mut site = BTreeSet::new();
++    let mut site_inventory = crate::gap::ModuleInventory::new();
+     for path in &args.site {
+-        site.extend(
+-            crate::gap::names_from_module_source(path)
++        merge_module_inventory(
++            &mut site_inventory,
++            crate::gap::inventory_from_module_source(path)
+                 .with_context(|| format!("--site {}", path.display()))?,
+         );
+     }
+     for path in &args.older {
+-        site.extend(
+-            crate::gap::names_from_module_source(path)
++        merge_module_inventory(
++            &mut site_inventory,
++            crate::gap::inventory_from_module_source(path)
+                 .with_context(|| format!("--older {}", path.display()))?,
+         );
+     }
+-    let mut stack = BTreeSet::new();
++    let site: BTreeSet<String> = site_inventory.keys().cloned().collect();
++    let mut stack_inventory = crate::gap::ModuleInventory::new();
+     for path in &args.installed {
+-        stack.extend(
+-            crate::gap::names_from_module_source(path)
++        merge_module_inventory(
++            &mut stack_inventory,
++            crate::gap::inventory_from_module_source(path)
+                 .with_context(|| format!("--installed {}", path.display()))?,
+         );
+     }
++    let stack: BTreeSet<String> = stack_inventory.keys().cloned().collect();
+     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
+     let filter = FilterDeps::parse(&filter_specs)
+         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
+@@ -1313,6 +1319,11 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
+         &args.out_dir.join("gap.tsv"),
+         &crate::gap::render_tsv(&rows),
+     )?;
++    let version_changes = crate::gap::version_changes(&rows, &site_inventory, &stack_inventory);
++    crate::write_text(
++        &args.out_dir.join("version-change.tsv"),
++        &crate::gap::render_version_changes(&version_changes),
++    )?;
+     for (route, filename) in crate::gap::ROUTE_FILES {
+         let subset: Vec<_> = rows
+             .iter()
+@@ -1347,6 +1358,15 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
+     })
+ }
+ 
++fn merge_module_inventory(
++    into: &mut crate::gap::ModuleInventory,
++    from: crate::gap::ModuleInventory,
++) {
++    for (name, versions) in from {
++        into.entry(name).or_default().extend(versions);
++    }
++}
++
+ /// Arguments for `stack batch`.
+ pub struct StackBatchRequest {
+     /// Root easyconfig file names.
+diff --git a/tests/stack_gap.rs b/tests/stack_gap.rs
+index f6f6864..e317cf1 100644
+--- a/tests/stack_gap.rs
++++ b/tests/stack_gap.rs
+@@ -212,4 +212,27 @@ fn live_module_trees_union_the_site_an_older_eessi_and_both_target_dirs() {
+     );
+     assert!(gap.contains("QuantumESPRESSO\tno-recipe\t"), "{gap}");
+     assert!(!gap.contains("software-layer#1600"), "{gap}");
++    let changes = std::fs::read_to_string(out.path().join("version-change.tsv")).unwrap();
++    assert!(
++        changes.starts_with("name\told_version\teessi_version\tstatus\n"),
++        "{changes}"
++    );
++    assert!(
++        changes.contains("CUDA\t12.6.0\t12.6.0\tmoved\n"),
++        "{changes}"
++    );
++    assert!(
++        changes.contains("FFTW\t3.3.10\t3.3.10\tmoved\n"),
++        "{changes}"
++    );
++    assert!(
++        changes.contains("LAMMPS\t2023.0\t-\tgone\n")
++            && changes.contains("LAMMPS\t2024.0\t-\tgone\n"),
++        "{changes}"
++    );
++    assert!(
++        changes.contains("MATLAB\t2024b\t-\tsite-only\n")
++            && changes.contains("code-server\t4.96.2\t-\tsite-only\n"),
++        "{changes}"
++    );
+ }
+-- 
+2.43.0
+

@@ -1251,6 +1251,22 @@ struct ShardArgs {
     /// Output directory for `prelude.list`, `shard-NN.list`, and `plan.json`.
     #[arg(long)]
     out_dir: PathBuf,
+    /// Scratch inode quota the shards share. Caps `max_concurrent_shards`
+    /// in `plan.json` so the shards that run at once fit under it minus
+    /// `--inode-margin`. A shard that does not fit on its own fails the run.
+    #[arg(long)]
+    inode_quota: Option<u64>,
+    /// `footprints.json` from `stack footprints`: peak build-tree inodes
+    /// per software name. Absent is the built-in class table.
+    #[arg(long)]
+    inode_footprints: Option<PathBuf>,
+    /// Inodes kept free under `--inode-quota`.
+    #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_MARGIN)]
+    inode_margin: u64,
+    /// Inodes each build-list line keeps on scratch beside its build tree:
+    /// tarballs, the EasyBuild tmpdir, and logs.
+    #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_LINE_OVERHEAD)]
+    inode_line_overhead: u64,
     /// Emit CPU-only prerequisites into `cpu-prerequisites.list` (built under
     /// the CPU prefix) even when only one accelerator root needs them. Shared
     /// accelerator packages stay in `prelude.list` under accelerator settings.
@@ -1259,6 +1275,81 @@ struct ShardArgs {
     /// `/accel/` prefix.
     #[arg(long)]
     lift_cpu_prerequisites: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct FootprintsArgs {
+    /// A ledger JSON Lines file whose records may carry `build.inodes_peak`.
+    /// Repeatable.
+    #[arg(long)]
+    ledger: Vec<PathBuf>,
+    /// A static table, `Name<TAB>inodes` per line, for packages the ledger
+    /// has not seen. Repeatable; a later file wins a name.
+    #[arg(long)]
+    table: Vec<PathBuf>,
+    /// RFC 3339 time written into the file. Absent is now.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// The `footprints.json` to write.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct AdmitArgs {
+    /// The quota as JSON: `inodes_available`, or `inodes_soft` and
+    /// `inodes_used` (and `inodes_hard`). `-` reads stdin.
+    #[arg(
+        long,
+        required_unless_present = "quota_cmd",
+        conflicts_with = "quota_cmd"
+    )]
+    quota_json: Option<PathBuf>,
+    /// A shell command that prints the quota JSON, run under `--lock` so the
+    /// observation and the decision are one step; a failure refuses the job.
+    #[arg(long)]
+    quota_cmd: Option<String>,
+    /// A lock file held from the quota observation to the reservation
+    /// write, shared by every controller of the same quota.
+    #[arg(long)]
+    lock: Option<PathBuf>,
+    /// The lock `--lock` takes: `flock`, or `posix` (an fcntl record lock,
+    /// what Python's lockf takes). It must match the other holders.
+    #[arg(long, default_value = "flock", value_parser = ["flock", "posix"])]
+    lock_kind: String,
+    /// Inodes counted for each live job that has no reservation.
+    #[arg(long, default_value_t = 0)]
+    unknown_reserve: u64,
+    /// Remove the files of stale reservations; otherwise they are kept and
+    /// ignored.
+    #[arg(long)]
+    drop_stale: bool,
+    /// This job's inode footprint, `inode_footprint` of its shard in `plan.json`.
+    #[arg(long)]
+    footprint: u64,
+    /// This job's id, the reservation's file name under `--reservations`.
+    #[arg(long)]
+    job: String,
+    /// Directory of reservations, one `<job>.json` per admitted job.
+    #[arg(long)]
+    reservations: PathBuf,
+    /// Inodes kept free under the quota.
+    #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_MARGIN)]
+    margin: u64,
+    /// Jobs still running, comma-separated, as the scheduler lists them
+    /// (`squeue --all`, hidden partitions included). A reservation of a job
+    /// not listed is stale and ignored. Absent, every other reservation
+    /// counts.
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    live_jobs: Option<Vec<String>>,
+    /// A shell command that prints the running job ids, run inside `--lock`
+    /// after the quota; a list expanded before the lock can miss a job that
+    /// reserved in between. A failure refuses the job.
+    #[arg(long, conflicts_with = "live_jobs")]
+    live_jobs_cmd: Option<String>,
+    /// RFC 3339 time written into the reservation. Absent is now.
+    #[arg(long)]
+    ts: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -1546,10 +1637,37 @@ enum StackCommand {
     /// planned on its own without a closure and reported on stderr. Any other
     /// line whose easyconfig or dependency cannot be resolved fails the run
     /// and nothing is written.
+    /// With `--inode-quota`, `plan.json` also carries each shard's
+    /// `inode_footprint` and `max_concurrent_shards`, the most shards that
+    /// fit under the quota minus `--inode-margin` at once.
     #[command(
         after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs-repo easybuild-easyconfigs --materialize --build-robot-path /sw/easybuild/easyconfigs --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
+    /// Write the peak build-tree inode footprint per software name.
+    ///
+    /// The peak of `build.inodes_peak` over the records of each `--ledger`,
+    /// then each `--table` line (the larger when both name a package), then
+    /// the bundled class table (data/inode-footprint-classes.toml: codes
+    /// with a large regression-test tree, GPU codes and vendor toolchains),
+    /// over a default of 60000. `stack shard
+    /// --inode-footprints` and `stack admit --footprint` read the result.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack footprints --ledger ledger/2025.jsonl --table site-footprints.tsv --out footprints.json"
+    )]
+    Footprints(Box<FootprintsArgs>),
+    /// Decide whether one build job fits under the scratch inode quota.
+    ///
+    /// Admits when the inodes the quota still allows, minus the reservations
+    /// of the jobs in `--live-jobs`, cover `--footprint` plus `--margin`.
+    /// On admit, writes `<job>.json` under `--reservations`. A reservation
+    /// of a job not in `--live-jobs` is dropped; this job's own earlier
+    /// reservation is never counted. Prints one JSON line. Exits 0 when
+    /// admitted, 78 when refused.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack admit --quota-json quota.json --footprint 351000 --job 4411 --reservations reservations --live-jobs 4401,4402\n  mmlsquota-json | eb-stack stack admit --quota-json - --footprint 61000 --job 4412 --reservations reservations --live-jobs \"$(squeue -h -o %i -u jenkins | paste -sd,)\""
+    )]
+    Admit(Box<AdmitArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
     /// that architecture has never installed.
     ///
@@ -3472,6 +3590,10 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 filter_deps,
                 generated_at,
                 out_dir,
+                inode_quota,
+                inode_footprints,
+                inode_margin,
+                inode_line_overhead,
                 lift_cpu_prerequisites,
             } = *args;
             let run = eb_stack::site_commands::run_stack_shard_sources(
@@ -3489,6 +3611,10 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     filter_deps,
                     generated_at,
                     out_dir,
+                    inode_quota,
+                    inode_footprints,
+                    inode_margin,
+                    inode_line_overhead,
                     lift_cpu_prerequisites,
                 },
                 &eb_stack::site_commands::StackShardSources {
@@ -3501,6 +3627,63 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 eprintln!("warning: {warning}");
             }
             println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Footprints(args) => {
+            let FootprintsArgs {
+                ledger,
+                table,
+                generated_at,
+                out,
+            } = *args;
+            let run = eb_stack::inode_budget::run_stack_footprints(
+                &eb_stack::inode_budget::FootprintsRequest {
+                    ledgers: ledger,
+                    tables: table,
+                    out,
+                    generated_at,
+                },
+            )?;
+            println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Admit(args) => {
+            let AdmitArgs {
+                quota_json,
+                quota_cmd,
+                lock,
+                lock_kind,
+                unknown_reserve,
+                drop_stale,
+                footprint,
+                job,
+                reservations,
+                margin,
+                live_jobs,
+                live_jobs_cmd,
+                ts,
+            } = *args;
+            let lock_kind = eb_stack::inode_budget::LockKind::parse(&lock_kind)?;
+            let report =
+                eb_stack::inode_budget::run_stack_admit(&eb_stack::inode_budget::AdmitRequest {
+                    quota_json,
+                    quota_cmd,
+                    lock,
+                    lock_kind,
+                    unknown_reserve,
+                    drop_stale,
+                    footprint,
+                    job,
+                    reservations,
+                    margin,
+                    live_jobs,
+                    live_jobs_cmd,
+                    ts,
+                })?;
+            println!("{}", report.line);
+            if !report.decision.admitted {
+                std::process::exit(eb_stack::inode_budget::REFUSED_EXIT);
+            }
             Ok(())
         }
         StackCommand::Arch {

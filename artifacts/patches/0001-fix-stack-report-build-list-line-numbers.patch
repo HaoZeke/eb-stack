@@ -1,0 +1,147 @@
+From 25f60108093be02fcc6a5ade9431ab5c080f5914 Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:11:43 +0000
+Subject: [PATCH 1/7] fix(stack): report build-list line numbers
+
+---
+ CHANGELOG.md                               |  3 +++
+ docs/orgmode/howto/build-list-provided.org |  8 ++++----
+ docs/orgmode/reference/cli.org             |  2 +-
+ src/provided.rs                            | 24 +++++++++++-----------
+ tests/stack_provided.rs                    | 19 +++++++++++++----
+ 5 files changed, 35 insertions(+), 21 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index ed98bc6..3866917 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
+ 
+ ### Added
+ 
++- `stack provided` includes the one-based build-list line on every
++  `provided` and `unparsed` finding in its text report, as it already did for
++  hook, toolchain, family-lock, and licensed findings.
+ - `stack shard` splits one Jenkins build list into shards that can
+   build at the same time. A line's set is its closure over
+   `--easyconfigs` minus the modules in `--installed-modules-dir` Lmod
+diff --git a/docs/orgmode/howto/build-list-provided.org b/docs/orgmode/howto/build-list-provided.org
+index 77c1d99..b0cc7d6 100644
+--- a/docs/orgmode/howto/build-list-provided.org
++++ b/docs/orgmode/howto/build-list-provided.org
+@@ -29,10 +29,10 @@ eb-stack stack provided \
+ That command printed:
+ 
+ #+begin_example
+-provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list
+-provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list
+-provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list
+-unparsed not-a-version.eb list=tests/provided_fixtures/site.list
++provided GROMACS-2026.0-foss-2026.1.eb name=GROMACS list=tests/provided_fixtures/site.list line=3
++provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4
++provided fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list line=5
++unparsed not-a-version.eb list=tests/provided_fixtures/site.list line=7
+ toolchain fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb name=Python list=tests/provided_fixtures/site.list line=5 uses=foss-2025b; a site-layer line on EESSI 2026.06 must use a 2026.1 toolchain or GCCcore-15.2.0 below it (GCCcore-15.2.0, GCC-15.2.0, gfbf-2026.1, gompi-2026.1, foss-2026.1)
+ hooks FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4 sets=--hooks=/sw/hooks/site.py; which replaces EESSI's hooks
+ hits=3 unparsed=1 allowed=0 provided=3 toolchain=1 hooks=1 family=0 licensed=0
+diff --git a/docs/orgmode/reference/cli.org b/docs/orgmode/reference/cli.org
+index 055fe02..d172d48 100644
+--- a/docs/orgmode/reference/cli.org
++++ b/docs/orgmode/reference/cli.org
+@@ -694,7 +694,7 @@ path, not left as site layer. ~--licensed~ and ~--licensed-file~ warn
+ for group-restricted names; ~data/site-licensed.txt~ is that list for
+ VASP, MATLAB, ANSYS, ORCA, and Gurobi. With neither flag there is no
+ warning. ~--strict~ makes a remaining warning exit 1. Stdout lists each
+-hit as ~provided <file> name=<Name> list=<path>~ and ends with
++hit as ~provided <file> name=<Name> list=<path> line=<N>~ and ends with
+ ~hits= unparsed= allowed= provided= toolchain= hooks= family= licensed=~.
+ ~--format~ is ~text~ by default, ~github~ for workflow commands, or
+ ~json~. ~--json~ is the same as ~--format json~. See [[file:../howto/build-list-provided.org][fail a build list that names software the baseline provides]]
+diff --git a/src/provided.rs b/src/provided.rs
+index 816d5e5..1ea83b8 100644
+--- a/src/provided.rs
++++ b/src/provided.rs
+@@ -19,6 +19,7 @@ use crate::easystack::filename_toolchain;
+ use crate::gap::{names_from_listing, software_name};
+ use crate::hierarchy::known_hierarchy;
+ use crate::jenkins::parse_build_list;
++use crate::shard::parse_lines;
+ use anyhow::{Context, Result};
+ use serde::Serialize;
+ use std::collections::{BTreeMap, BTreeSet};
+@@ -437,16 +438,12 @@ struct Entry {
+ }
+ 
+ fn entries(text: &str) -> Vec<Entry> {
+-    text.lines()
+-        .enumerate()
+-        .filter_map(|(index, raw)| {
+-            let trimmed = raw.trim();
+-            if trimmed.is_empty() || trimmed.starts_with('#') {
+-                return None;
+-            }
+-            let line = parse_build_list(trimmed).into_iter().next()?;
++    parse_lines(text)
++        .into_iter()
++        .filter_map(|shard_line| {
++            let line = parse_build_list(&shard_line.text).into_iter().next()?;
+             Some(Entry {
+-                line: index + 1,
++                line: shard_line.number,
+                 file: line.file,
+                 flags: line.flags,
+             })
+@@ -636,12 +633,15 @@ fn render_text(report: &ProvidedReport) -> String {
+     let mut out = String::new();
+     for hit in &report.hits {
+         out.push_str(&format!(
+-            "provided {} name={} list={}\n",
+-            hit.file, hit.name, hit.list
++            "provided {} name={} list={} line={}\n",
++            hit.file, hit.name, hit.list, hit.line
+         ));
+     }
+     for line in &report.unparsed {
+-        out.push_str(&format!("unparsed {} list={}\n", line.file, line.list));
++        out.push_str(&format!(
++            "unparsed {} list={} line={}\n",
++            line.file, line.list, line.line
++        ));
+     }
+     for note in report
+         .toolchain
+diff --git a/tests/stack_provided.rs b/tests/stack_provided.rs
+index 9b8f4f1..182812a 100644
+--- a/tests/stack_provided.rs
++++ b/tests/stack_provided.rs
+@@ -32,12 +32,23 @@ fn a_line_the_baseline_provides_exits_1_and_an_allow_keeps_it() {
+     let stderr = String::from_utf8_lossy(&failed.stderr);
+     assert_eq!(failed.status.code(), Some(1), "{stdout}{stderr}");
+     assert!(
+-        stdout.contains("provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW "),
++        stdout.contains(
++            "provided FFTW-3.3.10-gompi-2026.1.eb name=FFTW list=tests/provided_fixtures/site.list line=4"
++        ),
++        "{stdout}"
++    );
++    assert!(
++        stdout.contains("name=Python list=tests/provided_fixtures/site.list line=5"),
++        "{stdout}"
++    );
++    assert!(
++        stdout.contains("name=GROMACS list=tests/provided_fixtures/site.list line=3"),
++        "{stdout}"
++    );
++    assert!(
++        stdout.contains("unparsed not-a-version.eb list=tests/provided_fixtures/site.list line=7"),
+         "{stdout}"
+     );
+-    assert!(stdout.contains("name=Python "), "{stdout}");
+-    assert!(stdout.contains("name=GROMACS "), "{stdout}");
+-    assert!(stdout.contains("unparsed not-a-version.eb "), "{stdout}");
+     assert!(!stdout.contains("VASP"), "{stdout}");
+     assert!(
+         stderr.contains("3 build-list lines name software the baseline already provides"),
+-- 
+2.43.0
+

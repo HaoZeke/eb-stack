@@ -191,6 +191,79 @@ message names the cache, the commit, the URL, and the transport error.
 ~eb_stack_shard~ is the same command. See
 [[file:../reference/cli.org][the CLI reference]].
 
+* Plan around a scratch inode quota
+
+A native build job keeps its build tree on scratch while it runs, and a
+GPFS scratch has an inode quota. Seven lanes at once, three of them
+CP2K-sized, put a campaign over a three-million-inode quota, and a check
+that only reads the free count at start time admits one lane too many.
+The planner decides the cap instead, and the controller reserves what
+each lane will hold.
+
+First the footprint table. A ledger record whose ~build~ object carries
+~inodes_peak~ says what one build reached; a static table covers
+packages the ledger has not seen; the built-in classes cover the rest
+(CP2K 350000; LAMMPS, PyTorch, SeisSol, NVHPC, intel 150000; else
+60000):
+
+#+begin_src bash
+eb-stack stack footprints \
+  --ledger ledger/2025.jsonl \
+  --table site-footprints.tsv \
+  --out footprints.json
+#+end_src
+
+Then the plan, with the quota the scratch has and the margin to keep
+free:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list genoa.list \
+  --easyconfigs easyconfigs \
+  --shards 7 \
+  --inode-quota 3000000 --inode-margin 100000 \
+  --inode-footprints footprints.json \
+  --out-dir shards
+#+end_src
+
+Each shard in ~shards/plan.json~ now carries ~inode_footprint~, its
+largest module footprint plus 1000 inodes per line, and the plan carries
+~max_concurrent_shards~, the most shards, largest first, that fit under
+2900000 at once. The shard lists are the ones the command writes without
+the flags.
+
+Before the controller starts a lane it asks the quota and the scheduler,
+and lets ~stack admit~ decide:
+
+#+begin_src bash
+eb-stack stack admit \
+  --lock reservations/admission.lock --lock-kind posix \
+  --quota-cmd 'site-quota-json' \
+  --footprint "$(jq '.shards[] | select(.name=="shard-01") | .inode_footprint' shards/plan.json)" \
+  --job "$SLURM_JOB_ID" \
+  --reservations reservations \
+  --unknown-reserve 150000 \
+  --live-jobs-cmd 'squeue --all -h -t RUNNING -o %i -u jenkins'
+#+end_src
+
+~site-quota-json~ is the site's quota command wrapped to print
+~{"inodes_used": U, "inodes_soft": S, "inodes_hard": H}~; it runs while
+the lock is held, so the observation and the decision are one step and
+two controllers cannot both admit; ~--lock-kind posix~ takes the fcntl
+record lock a controller written in Python (~lockf~) holds on the same
+file. The scheduler snapshot is taken inside the lock too
+(~--live-jobs-cmd~, running jobs only): a ~--live-jobs~ list expanded by
+the shell before the lock can miss a job that reserved in between and
+call its reservation stale, so the expanded list is for a controller
+that already holds the lock itself. ~squeue --all~ lists the hidden
+partitions too. The lane starts when the available inodes minus the
+reservations of the live jobs (and ~--unknown-reserve~ for each live job
+without one) cover its footprint plus the margin; the command then
+writes ~reservations/<job>.json~ and exits 0. Otherwise it exits 78 and
+the controller waits; a failed quota command also exits 78. A
+reservation of a job no longer in the live list is stale: not counted,
+and kept unless ~--drop-stale~. ~eb_stack_footprints~
+and ~eb_stack_admit~ are the same commands over MCP.
 * Plan a list that fetches PETSc
 
 ~tests/stack_shard_fixtures/fetched.list~ is 34 lines whose easyconfigs

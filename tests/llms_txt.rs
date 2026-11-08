@@ -98,22 +98,42 @@ fn llms_txt_matches_the_org_manual() {
     assert!(root.join("docs/llm/reference/cli.md").is_file());
 }
 
-/// The public manual links AGENTS.md. The leakguard allowlists that URL, and
-/// `scripts/llms_leakguard.py` is the pre-check `gen-llms-txt.py` runs.
+/// Every link the generated public files carry stays within the public
+/// document manifest, `scripts/leakguard.toml`, which names CONTRIBUTING.md as
+/// the contributor entry; `scripts/llms_leakguard.py` is the pre-check
+/// `gen-llms-txt.py` runs.
 #[test]
-fn the_agents_md_link_is_allowlisted() {
+fn public_links_stay_within_the_manifest() {
     let root = repo();
     let config =
         std::fs::read_to_string(root.join("scripts/leakguard.toml")).expect("leakguard.toml");
-    assert!(
-        config.contains("https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md"),
-        "{config}"
-    );
+    assert!(config.contains("\"CONTRIBUTING.md\""), "{config}");
+    assert!(config.contains("public_repo_prefixes"), "{config}");
     let output = Command::new("python3")
         .arg(root.join("scripts/llms_leakguard.py"))
         .current_dir(&root)
         .output()
         .expect("python3 scripts/llms_leakguard.py");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The manifest check canonicalizes repository links: traversal out of a
+/// public directory, encoded dot segments, backslashes, other refs and raw
+/// forms all follow the manifest. `scripts/test_llms_leakguard.py` holds the
+/// cases.
+#[test]
+fn the_manifest_check_rejects_traversal_and_other_refs() {
+    let root = repo();
+    let output = Command::new("python3")
+        .args(["-m", "unittest", "scripts.test_llms_leakguard"])
+        .current_dir(&root)
+        .output()
+        .expect("python3 -m unittest scripts.test_llms_leakguard");
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",

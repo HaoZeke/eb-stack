@@ -1,0 +1,29 @@
+From 682ea6513577bafe7ee40cde49de40b38716ef7a Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:22:27 +0000
+Subject: [PATCH 7/7] docs(stack): fix shard API literal
+
+---
+ src/shard.rs | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/shard.rs b/src/shard.rs
+index 8e60a46..870c59d 100644
+--- a/src/shard.rs
++++ b/src/shard.rs
+@@ -267,9 +267,9 @@ pub fn plan(
+     }
+ }
+ 
+-/// Read a weights file: `module<TAB>seconds` per line, `#` comments and blank
+-/// lines skipped. A fractional value rounds up to whole seconds. A later line
+-/// for the same module replaces an earlier one.
++/// Read a weights file: `module`, a tab, then `seconds` per line. `#` comments
++/// and blank lines are skipped. A fractional value rounds up to whole seconds.
++/// A later line for the same module replaces an earlier one.
+ pub fn parse_weights(text: &str) -> Result<BTreeMap<String, u64>, String> {
+     let mut out = BTreeMap::new();
+     for (i, raw) in text.lines().enumerate() {
+-- 
+2.43.0
+

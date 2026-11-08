@@ -73,6 +73,9 @@ const LINKS: &[&str] = &[
 const ENUMERATED: &[&str] = &["stage", "route"];
 
 /// Fields with structured content: free text or an object of references.
+/// `build` as an object may carry `inodes_peak`, the most inodes the build
+/// tree held on scratch, which `stack footprints` reads; it must be a whole
+/// number when present.
 const STRUCTURED: &[&str] = &[
     "reason",
     "easyconfig",
@@ -222,6 +225,15 @@ pub fn check_fields(record: &Map<String, Value>) -> Result<()> {
     }
     if action == "correction" && !record.contains_key("corrects") {
         bail!("a correction record names the record it corrects in corrects");
+    }
+    if let Some(peak) = record
+        .get("build")
+        .and_then(Value::as_object)
+        .and_then(|build| build.get("inodes_peak"))
+    {
+        if peak.as_u64().is_none() {
+            bail!("ledger field build.inodes_peak must be a whole number of inodes, not {peak}");
+        }
     }
     event_id(record)?;
     Ok(())
@@ -1727,6 +1739,25 @@ mod tests {
         let parsed = parse_log(&format!("{}\n", entry.line)).unwrap();
         assert_eq!(parsed[0].id, entry.id);
         assert_eq!(parsed[0].line, entry.line);
+    }
+
+    #[test]
+    fn build_inodes_peak_is_a_whole_number() {
+        let mut with_peak = record("CP2K/2025.2-foss-2025a", "2026-11-03T10:00:00Z");
+        with_peak["build"] = json!({"job": "snellius/4411", "inodes_peak": 412_345});
+        let entry = seal_record(&with_peak, 0, "unused").unwrap();
+        assert_eq!(entry.record["build"]["inodes_peak"], 412_345);
+        let mut negative = with_peak.clone();
+        negative["build"]["inodes_peak"] = json!(-1);
+        let error = seal_record(&negative, 0, "unused").unwrap_err().to_string();
+        assert!(error.contains("build.inodes_peak"), "{error}");
+        let mut text = with_peak.clone();
+        text["build"]["inodes_peak"] = json!("many");
+        assert!(seal_record(&text, 0, "unused").is_err());
+        // A build object without the field, and a build string, still pass.
+        let mut plain = with_peak.clone();
+        plain["build"] = json!("log sha256:00");
+        assert!(seal_record(&plain, 0, "unused").is_ok());
     }
 
     #[test]

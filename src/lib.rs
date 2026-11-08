@@ -46,6 +46,7 @@ mod foreign;
 pub mod from_commit;
 pub mod hierarchy;
 mod index_bump;
+pub mod inode_budget;
 pub mod input_hash;
 mod install_prefix;
 pub mod jenkins;

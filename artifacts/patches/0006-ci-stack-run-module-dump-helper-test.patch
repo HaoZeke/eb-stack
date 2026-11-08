@@ -1,0 +1,24 @@
+From 55b5a7345d4175ba549fb94edad32f6459cd444b Mon Sep 17 00:00:00 2001
+From: Rohit Goswami <rgoswami@ieee.org>
+Date: Tue, 3 Nov 2026 09:18:01 +0000
+Subject: [PATCH 6/7] ci(stack): run module dump helper test
+
+---
+ .github/workflows/ci_test.yml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.github/workflows/ci_test.yml b/.github/workflows/ci_test.yml
+index a193079..e400acd 100644
+--- a/.github/workflows/ci_test.yml
++++ b/.github/workflows/ci_test.yml
+@@ -185,6 +185,7 @@ jobs:
+             --test llms_txt \
+             --test mcp_registry \
+             --test mcp_stdio \
++            --test module_tree_dump_script \
+             --test oom_profile \
+             --test optimisation_criteria \
+             --test pr_merge_order \
+-- 
+2.43.0
+

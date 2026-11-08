@@ -197,6 +197,7 @@ jobs:
             --test stack_provided \
             --test stack_shadow \
             --test stack_shard \
+            --test stack_admit \
             --test stack_shard_cpu_prelude \
             --test stack_shard_sources \
             --test robot_lookup \

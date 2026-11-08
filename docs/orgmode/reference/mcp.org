@@ -88,7 +88,7 @@ absolute path there.
 
 * Tools
 
-The catalog has 57 tools. ~tools/list~ returns one tool for each CLI
+The catalog has 59 tools. ~tools/list~ returns one tool for each CLI
 command in the table, and the recipe and easyblock tools that have no
 command. ~mcp~ publishes that catalog and has no tool of its own. Each
 command's tool calls the same runner as that command. The ~text~ field
@@ -116,6 +116,8 @@ name in the schema ~tools/list~ returns. The
 | ~stack shadow~ | ~eb_stack_shadow~ |
 | ~stack batch~ | ~eb_stack_batch~ |
 | ~stack shard~ | ~eb_stack_shard~ |
+| ~stack footprints~ | ~eb_stack_footprints~ |
+| ~stack admit~ | ~eb_stack_admit~ |
 | ~stack easystack~ | ~eb_stack_easystack~ |
 | ~stack sections~ | ~eb_stack_sections~ |
 | ~stack from-commit~ | ~eb_stack_from_commit~ |
