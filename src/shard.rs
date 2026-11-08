@@ -39,6 +39,85 @@ pub struct ShardLine {
     /// Whether EasyBuild fetches the line's easyconfig itself
     /// (`--from-pr` or `--from-commit`), so it need not be on the robot path.
     pub fetched: bool,
+    /// Where EasyBuild fetches the easyconfigs from, when `fetched`.
+    pub source: Option<LineSource>,
+    /// The options that say where the line's easyconfigs and easyblocks come
+    /// from (`--from-commit`, `--from-pr`, `--include-easyblocks-from-commit`,
+    /// `--include-easyblocks-from-pr`), as written. A prelude line for a
+    /// module this line's tree provides carries them, so it builds the same
+    /// easyconfig with the same easyblock.
+    pub source_options: Vec<String>,
+}
+
+impl ShardLine {
+    /// A dependency-filter override that the list-wide closure cannot model.
+    /// EasyBuild accepts unambiguous prefixes of its long option names.
+    pub fn filter_deps_option(&self) -> Option<&str> {
+        const OPTION: &str = "--filter-deps";
+        const SHORTEST_PREFIX: usize = "--filter-d".len();
+        self.text
+            .split_whitespace()
+            .skip(1)
+            .map(|word| word.split('=').next().unwrap_or(word))
+            .find(|key| key.len() >= SHORTEST_PREFIX && OPTION.starts_with(key))
+    }
+}
+
+/// The easyconfig tree a fetched line is resolved against.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LineSource {
+    /// `--from-commit=SHA`: the easyconfigs of that commit.
+    Commit(String),
+    /// `--from-pr=N[,M...]`: the easyconfig files those pull requests change,
+    /// at their heads.
+    Prs(Vec<u64>),
+    /// The option is there but its value cannot be used; the text says why.
+    Invalid(String),
+}
+
+impl LineSource {
+    /// The option as EasyBuild takes it, `--from-commit=SHA` or
+    /// `--from-pr=N,M`.
+    pub fn option(&self) -> String {
+        match self {
+            Self::Commit(sha) => format!("--from-commit={sha}"),
+            Self::Prs(prs) => format!(
+                "--from-pr={}",
+                prs.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
+            ),
+            Self::Invalid(why) => why.clone(),
+        }
+    }
+}
+
+/// A commit as `--from-commit` takes it: 7 to 40 hexadecimal digits.
+pub fn is_commit_sha(value: &str) -> bool {
+    (7..=40).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn line_source(commit: Option<&str>, prs: Option<&str>) -> Option<LineSource> {
+    match (commit, prs) {
+        (None, None) => None,
+        (Some(_), Some(_)) => Some(LineSource::Invalid(
+            "both --from-commit and --from-pr are given".into(),
+        )),
+        (Some(sha), None) if is_commit_sha(sha) => Some(LineSource::Commit(sha.to_string())),
+        (Some(sha), None) => Some(LineSource::Invalid(format!(
+            "--from-commit wants a commit sha, got '{sha}'"
+        ))),
+        (None, Some(list)) => {
+            let parsed: Option<Vec<u64>> = list
+                .split(',')
+                .map(|n| n.trim().parse::<u64>().ok().filter(|n| *n > 0))
+                .collect();
+            match parsed {
+                Some(prs) if !prs.is_empty() => Some(LineSource::Prs(prs)),
+                _ => Some(LineSource::Invalid(format!(
+                    "--from-pr wants pull request numbers, got '{list}'"
+                ))),
+            }
+        }
+    }
 }
 
 /// Parse a build list. Blank lines and `#` comments are skipped; every other
@@ -55,17 +134,57 @@ pub fn parse_lines(text: &str) -> Vec<ShardLine> {
             }
             let mut words = trimmed.split_whitespace();
             let file = words.next()?.to_string();
-            let keys: Vec<&str> = words.map(|w| w.split('=').next().unwrap_or(w)).collect();
+            let words: Vec<&str> = words.collect();
+            let keys: Vec<&str> = words
+                .iter()
+                .map(|w| w.split('=').next().unwrap_or(w))
+                .collect();
             let forced = keys.iter().any(|k| *k == "--rebuild" || *k == "--force");
             let fetched = keys
                 .iter()
                 .any(|k| *k == "--from-pr" || *k == "--from-commit");
+            // An option's value is after `=`, or the next word when the
+            // option is written on its own, as EasyBuild's parser takes both.
+            let mut commit = None;
+            let mut prs = None;
+            let mut source_options = Vec::new();
+            let mut j = 0;
+            while j < words.len() {
+                let key = keys[j];
+                let sourced = matches!(
+                    key,
+                    "--from-commit"
+                        | "--from-pr"
+                        | "--include-easyblocks-from-commit"
+                        | "--include-easyblocks-from-pr"
+                );
+                if !sourced {
+                    j += 1;
+                    continue;
+                }
+                let (value, used) = match words[j].split_once('=') {
+                    Some((_, value)) => (value, 1),
+                    None => match words.get(j + 1).filter(|w| !w.starts_with("--")) {
+                        Some(next) => (*next, 2),
+                        None => ("", 1),
+                    },
+                };
+                source_options.push(format!("{key}={value}"));
+                match key {
+                    "--from-commit" => commit = Some(value),
+                    "--from-pr" => prs = Some(value),
+                    _ => {}
+                }
+                j += used;
+            }
             Some(ShardLine {
                 number: i + 1,
                 text: line.to_string(),
                 file,
                 forced,
                 fetched,
+                source: line_source(commit, prs),
+                source_options,
             })
         })
         .collect()
@@ -99,10 +218,17 @@ pub struct ShardPlan {
     pub group_of: Vec<usize>,
     /// Shard of each line, 0-based.
     pub shard_of: Vec<usize>,
-    /// Modules two or more groups need, in `order`.
+    /// Modules two or more groups need, in `order`. With
+    /// [`plan_with`] CPU lifts, only the modules that stay under accelerator
+    /// settings (shared accelerator packages) remain here.
     pub prelude: Vec<String>,
     /// Sum of the prelude module weights.
     pub prelude_weight: u64,
+    /// CPU-only prerequisites that must build under the CPU prefix before the
+    /// accelerator prelude. Empty when the opt-in lift set is empty (legacy).
+    pub cpu_prerequisites: Vec<String>,
+    /// Sum of the CPU-prerequisite module weights.
+    pub cpu_prerequisites_weight: u64,
     /// The shards, heaviest first.
     pub shards: Vec<Shard>,
 }
@@ -151,7 +277,7 @@ fn line_order(members: &[usize], closures: &[LineClosure]) -> Vec<usize> {
     out
 }
 
-/// Plan the shards.
+/// Plan the shards with only shared dependencies in the prelude.
 ///
 /// `order` is a dependency order over every module the closures name; the
 /// prelude is written in it. `weight` gives a module's weight.
@@ -160,6 +286,26 @@ pub fn plan(
     order: &[String],
     weight: &dyn Fn(&str) -> u64,
     shards: usize,
+) -> ShardPlan {
+    plan_with(closures, order, weight, shards, &BTreeSet::new())
+}
+
+/// Plan the shards with an optional CPU-prerequisite lift set.
+///
+/// `cpu_prerequisites` is the opt-in set of CPU-only modules that must build
+/// under the CPU prefix before any accelerator work. They are removed from
+/// shard closures and from the shared prelude (so a shared CUDA package can
+/// stay in `prelude` under accelerator settings while HDF5 leaves for the CPU
+/// list). An empty set preserves legacy behaviour: the prelude is exactly the
+/// modules two or more groups share. A module that is any line's root is not
+/// taken from this set into the CPU dependency list; callers place CPU-only
+/// root lines themselves.
+pub fn plan_with(
+    closures: &[LineClosure],
+    order: &[String],
+    weight: &dyn Fn(&str) -> u64,
+    shards: usize,
+    cpu_prerequisites: &BTreeSet<String>,
 ) -> ShardPlan {
     let n = closures.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -209,22 +355,52 @@ pub fn plan(
         .filter(|(_, count)| *count > 1)
         .map(|(module, _)| module.to_string())
         .collect();
+    let line_roots: BTreeSet<&str> = closures.iter().map(|c| c.root.as_str()).collect();
+    let mut cpu_lift: BTreeSet<String> = BTreeSet::new();
+    for module in cpu_prerequisites {
+        if !line_roots.contains(module.as_str()) {
+            cpu_lift.insert(module.clone());
+        }
+    }
+    // Legacy (empty lift): every shared module goes to the accelerator prelude.
+    // Opt-in: shared modules that are CPU lifts leave the prelude for the CPU
+    // list; shared accelerator packages stay.
+    let prelude_set: BTreeSet<String> = if cpu_lift.is_empty() {
+        shared.clone()
+    } else {
+        shared
+            .iter()
+            .filter(|m| !cpu_lift.contains(m.as_str()))
+            .cloned()
+            .collect()
+    };
+    let in_order: BTreeSet<&str> = order.iter().map(String::as_str).collect();
     let mut prelude: Vec<String> = order
         .iter()
-        .filter(|m| shared.contains(*m))
+        .filter(|m| prelude_set.contains(*m))
         .cloned()
         .collect();
-    // A module missing from `order` still has to build; it goes last, sorted.
-    let in_order: BTreeSet<&str> = order.iter().map(String::as_str).collect();
     prelude.extend(
-        shared
+        prelude_set
+            .iter()
+            .filter(|m| !in_order.contains(m.as_str()))
+            .cloned(),
+    );
+    let mut cpu_list: Vec<String> = order
+        .iter()
+        .filter(|m| cpu_lift.contains(*m))
+        .cloned()
+        .collect();
+    cpu_list.extend(
+        cpu_lift
             .iter()
             .filter(|m| !in_order.contains(m.as_str()))
             .cloned(),
     );
     let prelude_weight = prelude.iter().map(|m| weight(m)).sum();
+    let cpu_prerequisites_weight = cpu_list.iter().map(|m| weight(m)).sum();
     for set in &mut modules {
-        set.retain(|m| !shared.contains(m));
+        set.retain(|m| !prelude_set.contains(m) && !cpu_lift.contains(m));
     }
     let group_weight: Vec<u64> = modules
         .iter()
@@ -268,8 +444,38 @@ pub fn plan(
         shard_of,
         prelude,
         prelude_weight,
+        cpu_prerequisites: cpu_list,
+        cpu_prerequisites_weight,
         shards: out,
     }
+}
+
+/// Merge dependency orders into one order every input agrees with: a module
+/// comes after each module that precedes it in any input. A module goes next
+/// when it heads the first input that still has modules and no input has it
+/// further back. Orders that disagree, which closures over one robot path do
+/// not, fall back to the first input's head.
+pub fn merge_orders(orders: &[Vec<String>]) -> Vec<String> {
+    let mut rest: Vec<Vec<&str>> = orders
+        .iter()
+        .map(|o| o.iter().map(String::as_str).collect())
+        .collect();
+    let mut placed: BTreeSet<&str> = BTreeSet::new();
+    let mut out = Vec::new();
+    loop {
+        for order in &mut rest {
+            order.retain(|m| !placed.contains(m));
+        }
+        let heads: Vec<&str> = rest.iter().filter_map(|o| o.first().copied()).collect();
+        let Some(&first) = heads.first() else {
+            break;
+        };
+        let free = |m: &str| rest.iter().all(|o| !o.iter().skip(1).any(|x| *x == m));
+        let pick = heads.iter().copied().find(|m| free(m)).unwrap_or(first);
+        placed.insert(pick);
+        out.push(pick.to_string());
+    }
+    out
 }
 
 /// Read a weights file: `module`, a tab, then `seconds` per line. `#` comments
@@ -347,6 +553,49 @@ mod tests {
     }
 
     #[test]
+    fn a_line_names_the_tree_easybuild_fetches() {
+        let lines = parse_lines(
+            "A-1.eb --from-commit=0123abcd --include-easyblocks-from-commit=4567ef01 --include-systems=x\n\
+             B-2.eb --from-pr 27108,26954\n\
+             C-3.eb --from-commit=main\n\
+             D-4.eb --from-pr=1 --from-commit=0123abcd\n\
+             E-5.eb --include-easyblocks-from-pr=4241\n",
+        );
+        assert_eq!(lines[0].source, Some(LineSource::Commit("0123abcd".into())));
+        assert_eq!(
+            lines[0].source_options,
+            [
+                "--from-commit=0123abcd",
+                "--include-easyblocks-from-commit=4567ef01"
+            ]
+        );
+        assert_eq!(lines[1].source, Some(LineSource::Prs(vec![27108, 26954])));
+        assert_eq!(lines[1].source_options, ["--from-pr=27108,26954"]);
+        assert_eq!(
+            lines[1].source.as_ref().unwrap().option(),
+            "--from-pr=27108,26954"
+        );
+        assert!(matches!(lines[2].source, Some(LineSource::Invalid(_))));
+        assert!(matches!(lines[3].source, Some(LineSource::Invalid(_))));
+        assert_eq!(lines[4].source, None);
+        assert_eq!(
+            lines[4].source_options,
+            ["--include-easyblocks-from-pr=4241"]
+        );
+    }
+
+    #[test]
+    fn merged_orders_keep_every_input_order() {
+        let a: Vec<String> = ["M/1", "A/1"].map(String::from).to_vec();
+        let b: Vec<String> = ["N/1", "P/1", "M/1", "B/1"].map(String::from).to_vec();
+        let merged = merge_orders(&[a, b]);
+        let at = |m: &str| merged.iter().position(|x| x == m).unwrap();
+        assert_eq!(merged.len(), 5);
+        assert!(at("N/1") < at("P/1") && at("P/1") < at("M/1"));
+        assert!(at("M/1") < at("A/1") && at("M/1") < at("B/1"));
+    }
+
+    #[test]
     fn a_shared_dependency_goes_to_the_prelude_and_the_lines_stay_apart() {
         let closures = [
             closure("A/1", &["M/1", "A/1"]),
@@ -402,6 +651,47 @@ mod tests {
         let planned = plan(&closures, &[], &one, 2);
         assert_eq!(planned.shards.len(), 2);
         assert_eq!(planned.shards[0].weight, 0);
+    }
+
+    #[test]
+    fn cpu_lift_uses_a_separate_list_and_leaves_shared_accel_in_prelude() {
+        // Two CUDA roots share UCX-CUDA; only the first needs HDF5. Default
+        // planning puts UCX-CUDA in the prelude and keeps HDF5 in a shard.
+        let closures = [
+            closure(
+                "GROMACS/1-CUDA",
+                &["HDF5/1", "UCX-CUDA/1", "GROMACS/1-CUDA"],
+            ),
+            closure("LAMMPS/1-CUDA", &["UCX-CUDA/1", "LAMMPS/1-CUDA"]),
+        ];
+        let order: Vec<String> = ["HDF5/1", "UCX-CUDA/1", "GROMACS/1-CUDA", "LAMMPS/1-CUDA"]
+            .map(String::from)
+            .to_vec();
+        let default = plan(&closures, &order, &one, 2);
+        assert_eq!(default.prelude, vec!["UCX-CUDA/1".to_string()]);
+        assert!(default.cpu_prerequisites.is_empty());
+        assert!(default.shards[default.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "HDF5/1"));
+
+        let mut cpu = BTreeSet::new();
+        cpu.insert("HDF5/1".into());
+        let planned = plan_with(&closures, &order, &one, 2, &cpu);
+        assert_eq!(planned.prelude, vec!["UCX-CUDA/1".to_string()]);
+        assert_eq!(planned.cpu_prerequisites, vec!["HDF5/1".to_string()]);
+        assert!(!planned.shards[planned.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "HDF5/1"));
+        // A build-list root is never taken into the CPU dependency list.
+        cpu.insert("GROMACS/1-CUDA".into());
+        let planned = plan_with(&closures, &order, &one, 2, &cpu);
+        assert_eq!(planned.cpu_prerequisites, vec!["HDF5/1".to_string()]);
+        assert!(planned.shards[planned.shard_of[0]]
+            .modules
+            .iter()
+            .any(|m| m == "GROMACS/1-CUDA"));
     }
 
     #[test]

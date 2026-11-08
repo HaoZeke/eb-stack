@@ -140,14 +140,7 @@ fn a_from_commit_entry_is_read_from_its_commit_not_the_tree() {
         let st = Command::new("git")
             .arg("-C")
             .arg(&repo)
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "commit.gpgsign=false",
-            ])
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .status()
             .unwrap();
@@ -255,6 +248,7 @@ fn one(name: &str, tc: &str) -> eb_stack::Candidate {
             version: "2026.1".into(),
         },
         versionsuffix: None,
+        versionprefix: None,
         easyconfig_path: format!("{name}-1.0-{tc}-2026.1.eb"),
         dependencies: Vec::new(),
         builddependencies: Vec::new(),

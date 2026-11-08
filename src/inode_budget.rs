@@ -508,15 +508,29 @@ impl PlanBudget {
         prelude: &[String],
         shard_name: impl Fn(usize) -> String,
     ) -> Result<(Vec<Value>, Value, usize)> {
+        let parts: Vec<(Vec<String>, usize)> = shards
+            .iter()
+            .map(|shard| (shard.modules.clone(), shard.lines.len()))
+            .collect();
+        self.apply_parts(&parts, prelude, shard_name)
+    }
+
+    /// [`Self::apply`] over shards given as their modules and line counts,
+    /// for a planner that has already moved lines between shards.
+    ///
+    /// # Errors
+    ///
+    /// A shard that does not fit under the quota minus the margin on its own.
+    pub fn apply_parts(
+        &self,
+        shards: &[(Vec<String>, usize)],
+        prelude: &[String],
+        shard_name: impl Fn(usize) -> String,
+    ) -> Result<(Vec<Value>, Value, usize)> {
         let footprints: Vec<ShardFootprint> = shards
             .iter()
-            .map(|shard| {
-                shard_footprint(
-                    &shard.modules,
-                    shard.lines.len(),
-                    &self.footprints,
-                    self.line_overhead,
-                )
+            .map(|(modules, lines)| {
+                shard_footprint(modules, *lines, &self.footprints, self.line_overhead)
             })
             .collect();
         let prelude_footprint = shard_footprint(
@@ -762,6 +776,69 @@ pub fn decide(
     }
 }
 
+/// Which kind of lock `--lock` takes. The two are separate namespaces on
+/// Linux: a controller that holds a POSIX record lock (`fcntl`, `lockf`)
+/// on the file is not excluded by a `flock`, and the other way round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LockKind {
+    /// BSD `flock`: shared by processes and threads holding the file.
+    #[default]
+    Flock,
+    /// POSIX record lock over the whole file (`fcntl` `F_SETLKW`), the lock
+    /// Python's `fcntl.lockf` takes; held per process.
+    Posix,
+}
+
+impl LockKind {
+    /// The name on the command line and in the JSON line.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Flock => "flock",
+            Self::Posix => "posix",
+        }
+    }
+
+    /// Parse the command-line name.
+    ///
+    /// # Errors
+    ///
+    /// A name that is neither `flock` nor `posix`.
+    pub fn parse(name: &str) -> Result<Self> {
+        match name {
+            "flock" => Ok(Self::Flock),
+            "posix" => Ok(Self::Posix),
+            other => bail!("lock kind {other:?} is neither flock nor posix"),
+        }
+    }
+}
+
+/// Take a POSIX write lock over the whole file, waiting for the holder.
+#[cfg(unix)]
+fn posix_record_lock(file: &std::fs::File) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: `libc::flock` is plain old data, so the zeroed value is a valid
+    // start; the descriptor is open for the lifetime of `file`, and `fcntl`
+    // reads the struct through a valid pointer for the duration of the call.
+    let rc = unsafe {
+        let mut lock: libc::flock = std::mem::zeroed();
+        lock.l_type = libc::F_WRLCK as _;
+        lock.l_whence = libc::SEEK_SET as _;
+        lock.l_start = 0;
+        lock.l_len = 0;
+        libc::fcntl(file.as_raw_fd(), libc::F_SETLKW, &raw const lock)
+    };
+    if rc == -1 {
+        return Err(std::io::Error::last_os_error()).context("fcntl F_SETLKW");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn posix_record_lock(_file: &std::fs::File) -> Result<()> {
+    bail!("POSIX record locks need a Unix platform")
+}
+
 /// Arguments for `stack admit`.
 pub struct AdmitRequest {
     /// The quota document, or `-` for stdin; absent with `quota_cmd`.
@@ -770,9 +847,11 @@ pub struct AdmitRequest {
     /// under the lock so the observation and the decision are one step. A
     /// command that fails refuses the job instead of admitting it.
     pub quota_cmd: Option<String>,
-    /// A lock file held exclusively (flock) from the quota observation to
-    /// the reservation write, so two controllers cannot both admit.
+    /// A lock file held exclusively from the quota observation to the
+    /// reservation write, so two controllers cannot both admit.
     pub lock: Option<PathBuf>,
+    /// Which lock the file takes; it must match what the other holders take.
+    pub lock_kind: LockKind,
     /// Inodes counted for each live job without a reservation.
     pub unknown_reserve: u64,
     /// Remove stale reservation files; otherwise they are ignored and kept.
@@ -786,8 +865,14 @@ pub struct AdmitRequest {
     /// Inodes kept free.
     pub margin: u64,
     /// Jobs still running, from the caller's scheduler; absent counts every
-    /// other reservation.
+    /// other reservation. A list expanded before the lock is taken can miss
+    /// a job that reserved in between; `live_jobs_cmd` takes the snapshot
+    /// inside the lock instead.
     pub live_jobs: Option<Vec<String>>,
+    /// A shell command that prints the running job ids (one per line or
+    /// separated by commas or spaces), run inside the lock after the quota
+    /// observation. A command that fails refuses the job.
+    pub live_jobs_cmd: Option<String>,
     /// RFC 3339 time written into the reservation; absent is now.
     pub ts: Option<String>,
 }
@@ -837,6 +922,32 @@ fn observe_quota(args: &AdmitRequest) -> Result<Quota> {
     parse_quota(&value)
 }
 
+/// Run the scheduler command inside the lock and read the job ids it prints,
+/// one per line or separated by commas or spaces.
+fn observe_live_jobs(cmd: &str) -> Result<Vec<String>> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .context("run --live-jobs-cmd")?;
+    if !output.status.success() {
+        bail!(
+            "--live-jobs-cmd exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let text = String::from_utf8(output.stdout).context("--live-jobs-cmd output is not UTF-8")?;
+    let mut jobs: Vec<String> = text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.split('+').next().unwrap_or(s).to_string())
+        .collect();
+    jobs.sort();
+    jobs.dedup();
+    Ok(jobs)
+}
+
 /// Under the lock when one is named: observe the quota, read the
 /// reservations, decide, write the reservation on admit, and remove stale
 /// reservations only when asked. A failed quota observation refuses.
@@ -851,13 +962,17 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
                 .write(true)
                 .open(path)
                 .with_context(|| format!("open --lock {}", path.display()))?;
-            fs2::FileExt::lock_exclusive(&file)
-                .with_context(|| format!("lock --lock {}", path.display()))?;
+            match args.lock_kind {
+                LockKind::Flock => fs2::FileExt::lock_exclusive(&file)
+                    .with_context(|| format!("lock --lock {}", path.display()))?,
+                LockKind::Posix => posix_record_lock(&file)
+                    .with_context(|| format!("lock --lock {} (posix)", path.display()))?,
+            }
             Some(file)
         }
         None => None,
     };
-    let (quota, refusal) = match observe_quota(args) {
+    let (quota, mut refusal) = match observe_quota(args) {
         Ok(quota) => (quota, None),
         Err(error) if args.quota_cmd.is_some() => (
             Quota {
@@ -870,13 +985,25 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         ),
         Err(error) => return Err(error),
     };
+    let live_jobs = match &args.live_jobs_cmd {
+        None => args.live_jobs.clone(),
+        Some(cmd) => match observe_live_jobs(cmd) {
+            Ok(jobs) => Some(jobs),
+            Err(error) => {
+                if refusal.is_none() {
+                    refusal = Some(format!("scheduler observation failed: {error:#}"));
+                }
+                Some(Vec::new())
+            }
+        },
+    };
     let stamp = crate::site_commands::generated_at(args.ts.clone(), true)?;
     let reservations = read_reservations(&args.reservations)?;
     let mut decision = decide(
         quota.available,
         &reservations,
         &args.job,
-        args.live_jobs.as_deref(),
+        live_jobs.as_deref(),
         args.footprint,
         args.margin,
         args.unknown_reserve,
@@ -922,7 +1049,8 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         "footprint": decision.footprint,
         "margin": decision.margin,
         "headroom": decision.headroom,
-        "live_jobs": args.live_jobs,
+        "live_jobs": live_jobs,
+        "live_jobs_cmd": args.live_jobs_cmd,
         "counted": decision
             .counted
             .iter()
@@ -930,6 +1058,8 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
             .collect::<Vec<_>>(),
         "stale": decision.stale.iter().map(|r| r.job.clone()).collect::<Vec<_>>(),
         "stale_dropped": args.drop_stale,
+        "lock": args.lock.as_ref().map(|p| p.display().to_string()),
+        "lock_kind": args.lock.as_ref().map(|_| args.lock_kind.name()),
         "unknown": decision.unknown,
         "unknown_reserved": decision.unknown_reserved,
         "refusal": refusal,
@@ -1231,6 +1361,7 @@ mod tests {
             quota_json: Some(quota.clone()),
             quota_cmd: None,
             lock: Some(dir.path().join("admission.lock")),
+            lock_kind: LockKind::Flock,
             unknown_reserve: 0,
             drop_stale: true,
             footprint: 351_000,
@@ -1238,6 +1369,7 @@ mod tests {
             reservations: reservations.clone(),
             margin: 100_000,
             live_jobs: Some(vec!["4401".into()]),
+            live_jobs_cmd: None,
             ts: Some("2026-11-07T01:00:00Z".into()),
         };
         let report = run_stack_admit(&request).unwrap();
@@ -1263,6 +1395,7 @@ mod tests {
         let refused = run_stack_admit(&AdmitRequest {
             job: "4404".into(),
             live_jobs: Some(vec!["4401".into(), "4403".into()]),
+            live_jobs_cmd: None,
             ..request
         })
         .unwrap();
@@ -1293,6 +1426,7 @@ mod tests {
             quota_json: Some(quota),
             quota_cmd: None,
             lock: None,
+            lock_kind: LockKind::Flock,
             unknown_reserve: 0,
             drop_stale: false,
             footprint: 200_000,
@@ -1300,6 +1434,7 @@ mod tests {
             reservations,
             margin: 100_000,
             live_jobs: Some(live.iter().map(|s| (*s).to_string()).collect()),
+            live_jobs_cmd: None,
             ts: Some("2026-11-07T01:00:00Z".into()),
         }
     }
@@ -1375,6 +1510,7 @@ mod tests {
             quota_json: request.quota_json.clone(),
             quota_cmd: None,
             lock: Some(lock.clone()),
+            lock_kind: LockKind::Flock,
             unknown_reserve: 0,
             drop_stale: false,
             footprint: request.footprint,
@@ -1382,6 +1518,7 @@ mod tests {
             reservations: request.reservations.clone(),
             margin: request.margin,
             live_jobs: request.live_jobs.clone(),
+            live_jobs_cmd: None,
             ts: request.ts.clone(),
         };
         let reservations = locked.reservations.clone();
@@ -1395,6 +1532,45 @@ mod tests {
         fs2::FileExt::unlock(&held).unwrap();
         assert!(worker.join().unwrap());
         assert!(reservations.join("4404.json").exists());
+    }
+
+    #[test]
+    fn a_posix_record_lock_admits_and_names_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = request_in(dir.path(), "4403", &["4401"]);
+        request.lock = Some(dir.path().join("admission.lock"));
+        request.lock_kind = LockKind::Posix;
+        let report = run_stack_admit(&request).unwrap();
+        assert!(report.decision.admitted, "{}", report.line);
+        assert!(dir.path().join("admission.lock").exists());
+        let line: Value = serde_json::from_str(&report.line).unwrap();
+        assert_eq!(line["lock_kind"], "posix");
+        assert_eq!(LockKind::parse("flock").unwrap(), LockKind::Flock);
+        assert!(LockKind::parse("lockf").is_err());
+    }
+
+    #[test]
+    fn the_scheduler_snapshot_is_taken_inside_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = request_in(dir.path(), "4403", &[]);
+        request.live_jobs = None;
+        request.lock = Some(dir.path().join("admission.lock"));
+        // 4401 running, 4399 gone: 4399 is stale, 4402 is an unknown writer.
+        request.live_jobs_cmd = Some("printf '4401\n4402+0\n'".to_string());
+        request.unknown_reserve = 100_000;
+        let report = run_stack_admit(&request).unwrap();
+        assert!(report.decision.admitted, "{}", report.line);
+        assert_eq!(report.decision.reserved, 400_000);
+        assert_eq!(report.decision.unknown, vec!["4402".to_string()]);
+        assert_eq!(report.decision.stale.len(), 1);
+        request.live_jobs_cmd = Some("exit 2".to_string());
+        let refused = run_stack_admit(&request).unwrap();
+        assert!(!refused.decision.admitted);
+        let line: Value = serde_json::from_str(&refused.line).unwrap();
+        assert!(line["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("scheduler observation failed"));
     }
 
     #[test]

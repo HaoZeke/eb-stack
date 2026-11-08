@@ -647,6 +647,7 @@ fn leaf(name: &str, version: &str, deps: &[(&str, &str)]) -> eb_stack::Candidate
         version: version.into(),
         toolchain: system(),
         versionsuffix: None,
+        versionprefix: None,
         easyconfig_path: format!("{name}-{version}.eb"),
         dependencies: deps
             .iter()

@@ -1,6 +1,7 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 #![warn(missing_docs)]
 
+pub mod accel_install;
 pub mod arch_known_failures;
 pub mod arch_support;
 pub mod artifact_class;
@@ -21,6 +22,7 @@ pub mod dep_versions;
 pub mod domain;
 pub mod easyblock_reach;
 pub mod easyblock_skeleton;
+mod easyconfig_tree;
 pub mod easystack;
 pub mod eb_easyblock;
 mod eb_emit;
@@ -80,10 +82,13 @@ pub mod registry;
 pub mod report;
 pub mod repro_report;
 pub mod resolvo_provider;
+pub mod robot_lookup;
 pub mod sbom;
 pub mod select;
 pub mod shadow;
 pub mod shard;
+mod shard_sources;
+pub mod shard_trees;
 pub mod site_commands;
 pub mod source_fetch;
 pub mod source_probe;
@@ -115,12 +120,13 @@ pub use eb_maintainer::{
 };
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
-    candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
-    existing_versions, filter_toolchain, filter_toolchain_hierarchy, lock_from_candidates,
-    merge_candidates_with_precedence, packaging_gate, parse_easyconfig_file, parse_easyconfig_tree,
-    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_file_for_arch,
-    resolve_easyconfig_file_reporting, resolve_easyconfig_file_reporting_for_arch,
-    resolve_easyconfig_str, resolve_easyconfig_str_for_arch, resolve_easyconfig_str_reporting,
+    candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_basename_with_prefix,
+    easyconfig_letter_dir, existing_versions, filter_toolchain, filter_toolchain_hierarchy,
+    lock_from_candidates, merge_candidates_with_precedence, packaging_gate, parse_easyconfig_file,
+    parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
+    resolve_easyconfig_file_for_arch, resolve_easyconfig_file_reporting,
+    resolve_easyconfig_file_reporting_for_arch, resolve_easyconfig_str,
+    resolve_easyconfig_str_for_arch, resolve_easyconfig_str_reporting,
     resolve_easyconfig_str_reporting_for_arch, validate_lock_deps, version_field_to_req,
     ExistingVersionsQuery, MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep,
     ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,

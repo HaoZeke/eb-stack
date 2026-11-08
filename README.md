@@ -24,7 +24,7 @@ The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation,
 ## Discovery
 
 - [llms.txt](llms.txt) indexes the manual. [llms-full.txt](llms-full.txt) repeats every page in one file.
-- [AGENTS.md](AGENTS.md) lists the build, test, lint, and docs commands.
+- [Contributing](CONTRIBUTING.md) describes contribution and validation requirements.
 - The skills for inspect, plan, bump, a stack SBOM, pull-request overlap, and the stdio server are under [skills/](skills/).
 - The Model Context Protocol manifest is [server.json](server.json). Client configuration is the manual page [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html).
 
@@ -69,7 +69,7 @@ Report these claims independently:
 ## Install
 
 The crate is `eb_stack` on crates.io; the installed binary is `eb-stack`.
-Rust 1.88 or newer is required when building from source. `rustc` 1.83
+Rust 1.90 or newer is required when building from source. `rustc` 1.83
 stops while reading the crate index: the Cargo feature `edition2024` is
 not stabilized. `rustup toolchain install stable` and `rustup default
 stable` provide a new enough compiler.
@@ -473,3 +473,18 @@ The suite covers foreign syntax adapters, conditions, CycloneDX generation, prof
 ## License
 
 [MIT](LICENSE) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+
+## Ledger event retries
+
+A producer can retain one JSON event packet with a unique `build.event_id`
+and retry `ledger append` with that same packet. An identical retry
+acknowledges the recorded entry and signs the current head without adding
+another line. Different content under the same identifier is refused.
+The identifier belongs to one event, including its operation stage.
+
+A failed signed-head write can occur after the record is durable. Retaining
+the packet makes that failure recoverable without duplicating the event.
+An acknowledged retry accepts `--expect-head` only when it matches a prefix
+of the current history. A new append still requires the exact current head.
+Head signature trust is checked through `ledger verify`; the expected-head
+argument is an optimistic history check.

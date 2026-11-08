@@ -183,6 +183,7 @@ mod tests {
                 version: "1.0".into(),
                 toolchain: tc("foss", "2026.1"),
                 versionsuffix: None,
+                versionprefix: None,
                 dependencies: Vec::new(),
                 builddependencies: Vec::new(),
                 easyconfig_path: lib.to_string_lossy().into_owned(),
@@ -195,6 +196,7 @@ mod tests {
                 version: "2.0".into(),
                 toolchain: tc("foss", "2026.1"),
                 versionsuffix: None,
+                versionprefix: None,
                 dependencies: vec![DepReq {
                     name: "Lib".into(),
                     version_req: String::new(),

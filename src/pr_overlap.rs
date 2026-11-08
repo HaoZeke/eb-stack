@@ -2546,6 +2546,36 @@ fn fetch_one_pull(
     }))
 }
 
+/// The head commit of one pull request and the easyconfig files it adds or
+/// changes there, with their head text: the files `eb --from-pr` downloads
+/// and puts first on the robot path. A removed file is left out.
+pub(crate) fn pull_head_easyconfigs(
+    http: &dyn HttpGet,
+    repo: &str,
+    number: u64,
+) -> anyhow::Result<(String, Vec<(String, String)>)> {
+    check_repo(repo)?;
+    let url = format!("https://api.github.com/repos/{repo}/pulls/{number}");
+    let pull: ListedPull =
+        serde_json::from_value(get_json(http, &url)?).with_context(|| format!("parse {url}"))?;
+    check_token("head sha", &pull.head.sha)?;
+    let listed = list_pull_files(http, repo, number, 100)?;
+    if listed.truncated {
+        bail!("pull request {number}: the changed-file list stops at GitHub's limit");
+    }
+    let mut files = Vec::new();
+    for file in listed.files {
+        if file.status == "removed" || !easyconfig_path(&file.filename) {
+            continue;
+        }
+        let url = raw_url(repo, &pull.head.sha, &file.filename);
+        let text = get_raw(http, &url)?
+            .ok_or_else(|| anyhow::anyhow!("pull request {number}: {url}: HTTP 404"))?;
+        files.push((file.filename, text));
+    }
+    Ok((pull.head.sha, files))
+}
+
 /// Reject a repository or base ref that cannot be placed in a GitHub URL.
 ///
 /// An empty or absent base ref means `develop` and is not checked. This does
@@ -2981,6 +3011,7 @@ entries = []
                 version: "system".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: format!("{name}.eb"),
             dependencies: deps
                 .iter()

@@ -4,8 +4,88 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Rust 1.90 is the minimum. `ordered-float` 5.5.1 sets `rust-version`
+  1.90. `uuid` 1.29.0 sets 1.89.0. The CI minimum job builds every
+  target with that compiler.
+- `rfc9162` comes from crates.io at exactly 0.6.1 instead of a git
+  revision of `leidarljos/deedar`. The published crate has the same
+  source as revision `a749a63`, so leaf hashes, roots, and signed heads
+  do not change.
+
+### Added
+
+- `stack shard --lift-cpu-prerequisites` (opt-in) writes CPU-only
+  prerequisites to `cpu-prerequisites.list` (CPU prefix) while shared
+  accelerator packages stay in `prelude.list`. Classification matches
+  EasyBuild 5.4.2 `dependency_names()` / EESSI's install-path hook: build
+  and runtime dependencies after `--filter-deps`, plus accelerator
+  toolchains — not application package-name lists. CPU-only build-list
+  roots and their missing CPU closure join the CPU list; a missing
+  accelerator prerequisite of a CPU package is refused by resolved
+  graph identity. Default behaviour is unchanged. A lifted recipe from
+  a `--from-commit` tree keeps that line's source options for hashing
+  and materialization.
+- `stack shard --easyconfigs-repo DIR` reads the commit of a
+  `--from-commit` line from an easybuild-easyconfigs git repository: one
+  `git ls-tree` per commit, and one `git cat-file --batch` for the
+  easyconfigs that can decide the plan. A blobless clone serves it, and
+  nothing is written to disk. `--commit-cache` serves only a commit the
+  repository lacks.
+- `stack shard --materialize --build-robot-path PATH` writes
+  `sources/v1/<commit>/`, the files the planned closures read from each
+  commit at their commit paths with each named easyconfig at the top, a
+  SHA-256 manifest `sources/v1/<commit>.json`, and `prelude.local.list` and
+  `shard-NN.local.list`, whose `--from-commit` lines read that directory
+  through `--robot-paths` instead of fetching the commit. A line that
+  cannot run that way is copied unchanged and listed with the reason.
+  `prelude.list`, `shard-NN.list`, and their lines are unchanged.
+
 ### Fixed
 
+- `eb_easyblock_dry_run` and `eb_build_test` with `robot` pass those
+  directories and then the robot paths EasyBuild is configured with, as
+  `eb --show-config` reports them, to `--robot-paths`. The trailing `:`
+  they passed stands for EasyBuild's built-in default only, so robot paths
+  set in `EASYBUILD_ROBOT_PATHS` or a configuration file were dropped.
+- `stack shard` resolves a `--from-commit` or `--from-pr` line as EasyBuild
+  5.4 does: the easyconfig the line names comes from the fetched tree, and
+  a dependency comes from the robot path when it has a file of that name
+  and from the fetched tree otherwise. The fetched tree used to win for
+  dependencies too. A dependency whose fetched easyconfig differs from the
+  robot path's is reported as a warning and under `shadowed` in
+  `plan.json`.
+
+## 0.4.0 - 2026-11-05
+
+### Changed
+
+- `scripts/gen-llms-txt.py` runs `scripts/llms_leakguard.py` before it
+  writes `llms.txt` or `llms-full.txt`. A link to `AGENTS.md`,
+  `CLAUDE.md`, or `GEMINI.md` fails that check unless the URL is in
+  `scripts/leakguard.toml`. The manual index link
+  `https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md` is allowlisted.
+  `uvx prek run -a` runs the same check.
+
+### Fixed
+
+- `stack shard` resolves a build-list line with `--from-commit` or
+  `--from-pr` against that commit's or pull request's easyconfigs first,
+  then the robot path, the order EasyBuild uses. A dependency such a line
+  shares with another shard goes to the prelude, so two shards do not
+  build it at once. `petsc4py-3.25.0-foss-2026.1.eb --from-commit=...`
+  and the `PETSc-3.25.0-foss-2026.1.eb` line it needs plan into one
+  shard, PETSc first. Split over two shards, the second build stops on
+  PETSc's install lock. A prelude line for a module only a
+  fetched tree provides carries that line's `--from-commit`,
+  `--from-pr` and `--include-easyblocks-from-*` options. A fetched line
+  that still cannot be resolved stays opaque; `plan.json` gives the cause
+  under `opaque_reason` and the top-level `opaque`, and the command
+  prints a `warning:` line for it and `opaque=<n>` in its summary.
+  A `--commit-cache` download that fails before an HTTP status exits 1
+  and writes nothing; the error names the cache, the commit, the URL,
+  and the transport error. An HTTP status, including 404, stays opaque.
 - `stack shard` plans a build-list line it cannot resolve as an opaque
   line when EasyBuild can still build it: the line carries `--from-pr`
   or `--from-commit`, or its easyconfig is on the robot path but does
@@ -76,6 +156,14 @@ All notable changes to this project are documented here.
   rebuilt. `route` is a new optional record field: `native`, `kvm`, or
   `qemu`. `eb_ledger_tiles` and `eb_ledger_find` are the same commands
   over MCP, and the other ledger tools take `tiles` and `origin`.
+
+- `stack shard --commit-cache DIR` reads the trees of `--from-commit` and
+  `--from-pr` lines from DIR and downloads the missing ones: a commit from
+  `codeload.github.com/easybuilders/easybuild-easyconfigs` (its `.eb`
+  files only), a pull request's changed easyconfigs at its head from
+  `api.github.com`. `--commit-tree COMMIT=DIR` and `--pr-tree N=DIR` name
+  trees already on disk. `eb_stack_shard` takes `commit_cache`,
+  `commit_tree` and `pr_tree`.
 - `ledger append`, `ledger head`, `ledger show`, and `ledger verify` keep
   a per-stack software ledger: one JSON Lines file of install, rebuild,
   retire, move, access, removal, finding, and correction records. Each
@@ -240,7 +328,6 @@ All notable changes to this project are documented here.
   with the node: it gives 8 on 64 cores and on 12. The fixtures are
   `hooks/set-maximum-8.py` and `hooks/divide-8.py`.
 
-## 0.4.0 - 2026-11-01
 
 `stack solve` in 0.3.0 took the policy file as `--policy`. The flag is
 now `--stack-policy`, the same spelling `package plan` and `package bump`

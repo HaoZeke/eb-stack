@@ -7,7 +7,7 @@ win.
 
 ## Development environment
 
-Rust 1.88 is the minimum supported toolchain; current stable is used for the
+Rust 1.90 is the minimum supported toolchain; current stable is used for the
 main test and lint gates. [pixi](https://pixi.sh) provides docs and optional
 dev tasks:
 
@@ -66,7 +66,7 @@ Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 
 ## Packaging campaigns
 
-Follow `AGENTS.md`, `skills/annual-bump/SKILL.md` (generation rebuild), and
+Follow `skills/annual-bump/SKILL.md` (generation rebuild) and
 `skills/new-package/SKILL.md` (conda-forge/Spack: new EasyBuild recipe). Run
 `skills/verify-recipe/SKILL.md` over what they emit before a build or a push,
 and `skills/tool-repair/SKILL.md` when the emitted file needed a hand

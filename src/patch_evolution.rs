@@ -311,6 +311,7 @@ mod tests {
             version: version.into(),
             toolchain: tc(toolchain.0, toolchain.1),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),

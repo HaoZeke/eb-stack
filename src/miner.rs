@@ -439,6 +439,7 @@ mod tests {
             version: version.into(),
             toolchain: toolchain.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: String::new(),
             dependencies: vec![],
             builddependencies: vec![],

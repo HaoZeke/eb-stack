@@ -71,8 +71,124 @@ in that file. ~--weights~ is ~Name/VersionFull~ or the easyconfig
 filename, a tab, then seconds. A module the file does not list weighs
 ~--default-weight~, which is 1. Build the prelude, then the shards.
 
-A line whose easyconfig is not on the robot path exits 1 and writes
-nothing. ~eb_stack_shard~ is the same command. See
+* Lift CPU-only prerequisites of accelerator roots
+
+EESSI installs accelerator packages under an ~/accel/~ prefix and
+refuses a CPU-only package there: its EasyBuild hook calls
+~dependency_names()~ with no arguments (EasyBuild 5.4.2: build and
+runtime dependencies after ~--filter-deps~) and classifies by a CUDA or
+ROCm-LLVM dependency or an accelerator toolchain, not by application
+name. A CUDA root whose unshared CPU dependency is still in that root's
+robot closure therefore fails on the accelerator job. The ordinary
+shared prelude can also hold accelerator packages (CUDA, UCX-CUDA); those
+must not share a list that runs under the CPU prefix.
+
+~--lift-cpu-prerequisites~ is opt-in. It writes CPU-only prerequisites to
+~cpu-prerequisites.list~ (and ~cpu-prerequisites.local.list~ with
+~--materialize~), keeps shared accelerator packages in ~prelude.list~, and
+leaves accelerator-only dependencies on the CUDA shards. CPU-only
+build-list roots and their missing CPU closure join that CPU list too, so
+a shared CPU dependency of two CPU roots is not left in the accelerator
+prelude. Default ~stack shard~ behaviour is unchanged. A lifted recipe
+from a ~--from-commit~ tree keeps that line's source options for hashing
+and materialization. Invocation order:
+
+1. ~cpu-prerequisites.list~ under the CPU install path
+2. ~prelude.list~ under accelerator settings
+3. ~shard-NN.list~ under accelerator settings
+
+~tests/stack_shard_fixtures/accel.list~ is two CUDA roots: AccelApp and
+AccelPeer. Both need GpuLib; only AccelApp needs CpuLib. CUDA and
+GCCcore are already installed.
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/accel.list \
+  --easyconfigs tests/stack_shard_fixtures/accel-easyconfigs \
+  --installed tests/stack_shard_fixtures/accel-installed.txt \
+  --shards 4 \
+  --lift-cpu-prerequisites \
+  --generated-at 2026-11-07T00:00:00Z \
+  --out-dir build/accel-shards
+#+end_src
+
+That command printed:
+
+#+begin_example
+shards=2 prelude=1 cpu_prerequisites=1 lines=2
+#+end_example
+
+~build/accel-shards/cpu-prerequisites.list~ is the CPU-only dependency,
+built under the CPU prefix first:
+
+#+begin_example
+CpuLib-1.0-GCCcore-15.2.0.eb
+#+end_example
+
+~build/accel-shards/prelude.list~ keeps the shared accelerator package
+under accelerator settings:
+
+#+begin_example
+GpuLib-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb
+#+end_example
+
+The shard files keep the CUDA roots verbatim. Without
+~--lift-cpu-prerequisites~, CpuLib would stay in AccelApp's shard closure
+and fail EESSI's install-path check under ~/accel/~.
+
+* Resolve lines EasyBuild fetches from GitHub
+
+A line with ~--from-commit=SHA~ or ~--from-pr=N~ builds an easyconfig
+the robot path may not have. Pass a cache directory and ~stack shard~
+reads each such line's tree there, downloading the ones it lacks:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --commit-cache /scratch-shared/$USER/eb-stack-commit-trees \
+  --shards 4 \
+  --out-dir /tmp/shards
+#+end_src
+
+The line's own easyconfig comes from its tree, and its dependencies from
+the robot path first and the tree second, as EasyBuild 5.4 appends the
+fetched easyconfigs to its robot path. ~petsc4py-3.25.0-foss-2026.1.eb --from-commit=...~
+needs PETSc 3.25.0, which is a line of its own, so the two lines share a
+shard and PETSc builds first. A dependency it shares with another shard
+goes to the prelude. ~--commit-tree SHA=DIR~ and ~--pr-tree N=DIR~ name a
+tree you already have. A fetched line that still cannot be resolved is
+planned on its own without a closure; the command prints a
+~warning:~ line with the reason, and ~plan.json~ keeps it under
+~opaque_reason~.
+
+An easybuild-easyconfigs clone serves the same commits without a cache.
+~--easyconfigs-repo~ reads each commit from its objects, and a blobless
+clone (~git clone --filter=blob:none~) is enough:
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list Snel-2026e.list \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs-repo easybuild-easyconfigs \
+  --materialize \
+  --build-robot-path /sw/easybuild/easyconfigs \
+  --shards 4 \
+  --out-dir /tmp/shards
+#+end_src
+
+~--materialize~ adds ~sources/v1/SHA/~ with the files the plan reads from
+each commit and ~prelude.local.list~ and ~shard-NN.local.list~, whose
+~--from-commit~ lines read that directory instead of downloading the commit
+again. ~--build-robot-path~ is each robot path ~eb --show-config~ lists on
+the build host; the written lines pass those paths and then the directory as
+~--robot-paths~. A line that cannot run that way is copied as it stands.
+
+A line whose easyconfig is not on the robot path, and that EasyBuild
+does not fetch, exits 1 and writes nothing. A ~--commit-cache~ download
+that fails before an HTTP status also exits 1 and writes nothing. The
+message names the cache, the commit, the URL, and the transport error.
+~eb_stack_shard~ is the same command. See
 [[file:../reference/cli.org][the CLI reference]].
 
 * Plan around a scratch inode quota
@@ -121,19 +237,25 @@ and lets ~stack admit~ decide:
 
 #+begin_src bash
 eb-stack stack admit \
-  --lock reservations/admission.lock \
+  --lock reservations/admission.lock --lock-kind posix \
   --quota-cmd 'site-quota-json' \
   --footprint "$(jq '.shards[] | select(.name=="shard-01") | .inode_footprint' shards/plan.json)" \
   --job "$SLURM_JOB_ID" \
   --reservations reservations \
   --unknown-reserve 150000 \
-  --live-jobs "$(squeue --all -h -o %i -u jenkins | paste -sd,)"
+  --live-jobs-cmd 'squeue --all -h -t RUNNING -o %i -u jenkins'
 #+end_src
 
 ~site-quota-json~ is the site's quota command wrapped to print
 ~{"inodes_used": U, "inodes_soft": S, "inodes_hard": H}~; it runs while
 the lock is held, so the observation and the decision are one step and
-two controllers cannot both admit. ~squeue --all~ lists the hidden
+two controllers cannot both admit; ~--lock-kind posix~ takes the fcntl
+record lock a controller written in Python (~lockf~) holds on the same
+file. The scheduler snapshot is taken inside the lock too
+(~--live-jobs-cmd~, running jobs only): a ~--live-jobs~ list expanded by
+the shell before the lock can miss a job that reserved in between and
+call its reservation stale, so the expanded list is for a controller
+that already holds the lock itself. ~squeue --all~ lists the hidden
 partitions too. The lane starts when the available inodes minus the
 reservations of the live jobs (and ~--unknown-reserve~ for each live job
 without one) cover its footprint plus the margin; the command then
@@ -142,3 +264,66 @@ the controller waits; a failed quota command also exits 78. A
 reservation of a job no longer in the live list is stale: not counted,
 and kept unless ~--drop-stale~. ~eb_stack_footprints~
 and ~eb_stack_admit~ are the same commands over MCP.
+* Plan a list that fetches PETSc
+
+~tests/stack_shard_fixtures/fetched.list~ is 34 lines whose easyconfigs
+are in easybuild-easyconfigs
+~0d6b80c34f3553774e93162cf89088e2423ecf89~ (the commit that adds
+~petsc4py-3.25.0-foss-2026.1.eb~). Eleven lines pass ~--from-commit~ for
+that commit, ten pass only
+~--include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287~
+(the peeled commit of easybuild-easyblocks v5.4.1), and the rest are
+plain. ~petsc4py~ depends on ~PETSc~ 3.25.0. The PETSc line is one of
+the fetched lines.
+
+The robot path is that commit's ~easybuild/easyconfigs~ with
+~p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb~ removed, so the file comes
+only from the commit. ~EB_STACK_COMMIT_MIRROR~, when set, is a local
+copy of the codeload ~.tar.gz~ for the commit. The shard command still
+downloads that commit into ~--commit-cache~.
+
+#+begin_src bash
+SHA=0d6b80c34f3553774e93162cf89088e2423ecf89
+MIRROR=${EB_STACK_COMMIT_MIRROR:-/tmp/ec-mirror/${SHA}.tar.gz}
+mkdir -p "$(dirname "$MIRROR")"
+HOST=codeload.github.com
+test -f "$MIRROR" || curl -fsSL -o "$MIRROR" \
+  "https://${HOST}/easybuilders/easybuild-easyconfigs/tar.gz/${SHA}"
+rm -rf /tmp/ec-robot
+mkdir -p /tmp/ec-robot
+tar -xzf "$MIRROR" -C /tmp/ec-robot
+ROBOT=/tmp/ec-robot/easybuild-easyconfigs-${SHA}/easybuild/easyconfigs
+rm -f "$ROBOT"/p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/fetched.list \
+  --easyconfigs "$ROBOT" \
+  --commit-cache /tmp/eb-stack-commit-trees \
+  --shards 4 \
+  --generated-at 2026-11-04T00:00:00Z \
+  --out-dir /tmp/shards-fetched
+#+end_src
+
+That command printed:
+
+#+begin_example
+shards=4 prelude=173 lines=34
+#+end_example
+
+~/tmp/shards-fetched/shard-03.list~ holds the PETSc line and then
+petsc4py. No module is listed in two shards or in a shard and the
+prelude.
+
+#+begin_example
+Hypre-3.1.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+SuperLU_DIST-9.2.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+PETSc-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89 --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+petsc4py-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+HeFFTe-2.4.1-foss-2026.1.eb
+CheMPS2-1.8.12-foss-2026.1.eb
+#+end_example
+
+Without ~--commit-cache~, petsc4py is planned on its own. The summary
+is ~shards=4 prelude=173 lines=34 opaque=1~, and petsc4py is in a
+different shard from PETSc. The same inputs with the cache put them in
+one shard, PETSc first. A second run with ~--generated-at~ writes the
+same files.

@@ -264,7 +264,7 @@ Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebui
 
 * Install
 
-  Rust 1.88 or newer. ~rustc~ 1.83 stops while reading the crate index:
+  Rust 1.90 or newer. ~rustc~ 1.83 stops while reading the crate index:
   the Cargo feature ~edition2024~ is not stabilized. With rustup:
 
 #+begin_src bash
@@ -395,8 +395,8 @@ Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/e
   this manual.
   [[https://github.com/HaoZeke/eb-stack/blob/main/llms-full.txt][llms-full.txt]]
   repeats every page in one file.
-  [[https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md][AGENTS.md]] lists
-  the build, test, lint, and docs commands. The skills for inspect, plan,
+  [[https://github.com/HaoZeke/eb-stack/blob/main/CONTRIBUTING.md][Contributing]] describes
+  contribution and validation requirements. The skills for inspect, plan,
   bump, a stack SBOM, pull-request overlap, and the stdio server are under
   [[https://github.com/HaoZeke/eb-stack/tree/main/skills][skills/]]. The Model
   Context Protocol manifest is

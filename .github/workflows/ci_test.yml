@@ -32,17 +32,27 @@ jobs:
       - name: Cargo source package
         run: cargo package --locked
 
+  ledger:
+    name: ledger proofs and writer exclusion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Records, proofs, and POSIX writer locks
+        run: cargo test --locked --test ledger --test ledger_posix_lock --test ledger_lock_aliases --test ledger_retry --test ledger_durability --test ledger_tile_namespace
+
   msrv:
-    name: Rust 1.88 minimum
+    name: Rust 1.90 minimum
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.90.0
       - uses: Swatinem/rust-cache@v2
-      # `time` 0.3.55 (cyclonedx-bom) declares rust-version 1.88.0. Cargo
-      # 1.83 cannot parse the edition2024 manifests those crates ship.
+      # `ordered-float` 5.5.1 declares rust-version 1.90. `uuid` 1.29.0
+      # declares 1.89.0. Cargo 1.89 rejects the lockfile on ordered-float.
       - name: Locked all-targets build
         run: cargo build --locked --all-targets
 
@@ -88,6 +98,7 @@ jobs:
             --test eon_foss_2026_1 \
             --test qmcpack_foss_2026_1 \
             --test eon_packaging \
+            --test bundle_component_checksums \
             --test goal_scenario \
             -- --nocapture
 
@@ -131,6 +142,7 @@ jobs:
             --test campaign \
             --test ledger \
             --test ledger_tiles \
+            --test ledger_tile_namespace \
             --test mcp_v1
 
   package-closure:
@@ -172,6 +184,7 @@ jobs:
             --test cuda_cc \
             --test component_reach \
             --test doc_walkthrough \
+            --test eb_robot_paths \
             --test easyblock_layers \
             --test easyblock_owed \
             --test extension_provides \
@@ -185,6 +198,12 @@ jobs:
             --test stack_shadow \
             --test stack_shard \
             --test stack_admit \
+            --test stack_shard_cpu_prelude \
+            --test stack_shard_sources \
+            --test robot_lookup \
+            --test robot_lookup_versionprefix_field \
+            --test stack_shard_robot_layout \
+            --test stack_shard_robot_versionprefix_field \
             --test hierarchy_universe \
             --test jenkins_build_list \
             --test lint_fixtures \

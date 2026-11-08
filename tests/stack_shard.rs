@@ -334,6 +334,251 @@ fn the_mcp_tool_writes_the_same_files_as_the_command() {
     }
 }
 
+/// easybuilders/easybuild-easyconfigs commit that adds
+/// `petsc4py-3.25.0-foss-2026.1.eb`.
+/// <https://github.com/easybuilders/easybuild-easyconfigs/commit/0d6b80c34f3553774e93162cf89088e2423ecf89>
+const PETSC4PY_COMMIT: &str = "0d6b80c34f3553774e93162cf89088e2423ecf89";
+
+/// `.eb` files under `easybuild/easyconfigs/` in [`PETSC4PY_COMMIT`].
+/// `find easybuild/easyconfigs -name '*.eb' | wc -l` on the codeload
+/// archive, 2026-11-04.
+const EASYCONFIGS_IN_PETSC4PY_COMMIT: usize = 11897;
+
+/// The fetched fixture is at least this many lines. The lists that built
+/// one dependency in two shards had about 30 lines EasyBuild fetches.
+const MIN_FETCHED_LIST_LINES: usize = 30;
+
+/// Non-comment lines in `tests/stack_shard_fixtures/fetched.list`.
+const FETCHED_LIST_LINES: usize = 34;
+
+/// `--shards` from the how-to. This list has at least that many groups.
+const SHARDS_REQUESTED: &str = "4";
+
+/// Prelude size of `fetched.list` over [`PETSC4PY_COMMIT`] with petsc4py
+/// removed from the robot path. Counted 2026-11-04.
+const FETCHED_LIST_PRELUDE: &str = "173";
+
+/// Stamp written into `plan.json` so two runs match byte for byte.
+const FETCHED_GENERATED_AT: &str = "2026-11-04T00:00:00Z";
+
+/// `EB_STACK_COMMIT_MIRROR`, when set, is a local copy of the codeload
+/// `.tar.gz` for [`PETSC4PY_COMMIT`]. The shard command still downloads
+/// that URL into `--commit-cache`.
+const COMMIT_MIRROR_ENV: &str = "EB_STACK_COMMIT_MIRROR";
+
+/// Path of petsc4py inside the commit. The commit message adds this file.
+const PETSC4PY_RELATIVE: &str = "p/petsc4py/petsc4py-3.25.0-foss-2026.1.eb";
+
+/// Module name `stack shard` records for `PETSc-3.25.0-foss-2026.1.eb`.
+const PETSC_MODULE: &str = "PETSc/3.25.0-foss-2026.1";
+
+fn commit_archive() -> Vec<u8> {
+    if let Ok(path) = std::env::var(COMMIT_MIRROR_ENV) {
+        return std::fs::read(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    }
+    let url = format!(
+        "https://codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/{PETSC4PY_COMMIT}"
+    );
+    use eb_stack::pr_overlap::HttpGet;
+    let response = eb_stack::pr_overlap::UreqGet
+        .get(&url)
+        .unwrap_or_else(|error| panic!("{url}: {error}"));
+    assert_eq!(response.status, 200, "{url}");
+    response.body
+}
+
+fn fetched_lines() -> Vec<String> {
+    let text = std::fs::read_to_string(fixture("fetched.list")).expect("read fetched.list");
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Plan `fetched.list` twice against the public commit archive.
+///
+/// The robot path is that commit with petsc4py removed, so the file is
+/// only in the tree `--commit-cache` downloads. petsc4py depends on PETSc,
+/// and the PETSc line is fetched from the same commit.
+#[test]
+fn a_fetched_petsc_line_stays_with_petsc4py_and_the_plan_is_stable() {
+    let lines = fetched_lines();
+    assert!(
+        lines.len() >= MIN_FETCHED_LIST_LINES,
+        "{} lines, want at least {MIN_FETCHED_LIST_LINES}",
+        lines.len()
+    );
+    assert_eq!(lines.len(), FETCHED_LIST_LINES);
+    assert!(lines.iter().any(|line| !line.contains("--")));
+    assert!(lines.iter().any(|line| line.contains("--from-commit=")));
+    assert!(lines.iter().any(|line| {
+        line.contains("--include-easyblocks-from-commit=") && !line.contains("--from-commit=")
+    }));
+    assert!(lines.iter().any(|line| {
+        line.starts_with("PETSc-3.25.0-foss-2026.1.eb ") && line.contains(PETSC4PY_COMMIT)
+    }));
+    assert!(lines
+        .iter()
+        .any(|line| line.starts_with("petsc4py-3.25.0-foss-2026.1.eb ")));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = commit_archive();
+    let tree = tmp.path().join("tree");
+    let extracted = eb_stack::shard_trees::extract_easyconfigs(&archive, &tree)
+        .unwrap_or_else(|error| panic!("extract: {error}"));
+    assert_eq!(extracted, EASYCONFIGS_IN_PETSC4PY_COMMIT);
+    let robot = tree.join("easybuild/easyconfigs");
+    std::fs::remove_file(robot.join(PETSC4PY_RELATIVE)).expect("petsc4py is in the commit");
+    let cache = tmp.path().join("cache");
+    let summary = format!(
+        "shards={SHARDS_REQUESTED} prelude={FETCHED_LIST_PRELUDE} lines={FETCHED_LIST_LINES}\n"
+    );
+
+    let mut plans = Vec::new();
+    for name in ["first", "second"] {
+        let out = tmp.path().join(name);
+        let run = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+            .env_remove("EASYBUILD_FILTER_DEPS")
+            .args([
+                "stack",
+                "shard",
+                "--build-list",
+                &fixture("fetched.list"),
+                "--easyconfigs",
+                robot.to_str().unwrap(),
+                "--commit-cache",
+                cache.to_str().unwrap(),
+                "--shards",
+                SHARDS_REQUESTED,
+                "--generated-at",
+                FETCHED_GENERATED_AT,
+                "--out-dir",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .expect("run eb-stack");
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), summary);
+        assert!(
+            run.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        plans.push(out);
+    }
+
+    let petsc4py = cache
+        .join(PETSC4PY_COMMIT)
+        .join("easybuild/easyconfigs")
+        .join(PETSC4PY_RELATIVE);
+    assert!(
+        petsc4py.is_file(),
+        "commit cache did not download {PETSC4PY_COMMIT}"
+    );
+
+    for name in listing(&plans[0]) {
+        assert_eq!(
+            std::fs::read(plans[0].join(&name)).unwrap(),
+            std::fs::read(plans[1].join(&name)).unwrap(),
+            "{name} differs across runs"
+        );
+    }
+
+    let plan: Value = serde_json::from_str(&read(plans[0].join("plan.json"))).unwrap();
+    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for shard in plan["shards"].as_array().unwrap() {
+        for module in shard["modules"].as_array().unwrap() {
+            *seen
+                .entry(module.as_str().unwrap().to_string())
+                .or_default() += 1;
+        }
+    }
+    let mut prelude_modules = Vec::new();
+    for module in plan["prelude"]["modules"].as_array().unwrap() {
+        let name = module["module"].as_str().unwrap().to_string();
+        prelude_modules.push(name.clone());
+        *seen.entry(name).or_default() += 1;
+    }
+    let twice: Vec<_> = seen.iter().filter(|(_, n)| **n > 1).collect();
+    assert!(twice.is_empty(), "built by two jobs: {twice:?}");
+
+    let line = |file: &str| {
+        plan["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|line| line["easyconfig"] == file)
+            .unwrap_or_else(|| panic!("{file} not in the plan"))
+            .clone()
+    };
+    let petsc = line("PETSc-3.25.0-foss-2026.1.eb");
+    let py = line("petsc4py-3.25.0-foss-2026.1.eb");
+    assert!(py["opaque"].is_null(), "{py}");
+    assert!(py["closure"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|module| module == PETSC_MODULE));
+    let together =
+        petsc["shard"] == py["shard"] || prelude_modules.iter().any(|m| m == PETSC_MODULE);
+    assert!(together, "PETSc {petsc} petsc4py {py}");
+    let shard_file = plans[0].join(format!("{}.list", py["shard"].as_str().unwrap()));
+    let shard_text = read(shard_file);
+    let petsc_at = shard_text
+        .find("PETSc-3.25.0-foss-2026.1.eb ")
+        .expect("PETSc line in the petsc4py shard");
+    let py_at = shard_text
+        .find("petsc4py-3.25.0-foss-2026.1.eb ")
+        .expect("petsc4py line");
+    assert!(petsc_at < py_at, "{shard_text}");
+}
+
+#[test]
+fn line_dependency_filters_are_refused_before_writing_a_plan() {
+    for option in [
+        "--filter-deps=zlib",
+        "--filter-deps zlib",
+        "--filter-dep=zlib",
+        "--filter-d zlib",
+    ] {
+        for source in ["", " --from-commit=0123abcd"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let list = tmp.path().join("build.list");
+            let out = tmp.path().join("out");
+            std::fs::write(&list, format!("# list\nAlpha.eb {option}{source}\n")).unwrap();
+            let run = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+                .env_remove("EASYBUILD_FILTER_DEPS")
+                .args(["stack", "shard", "--shards", "4", "--build-list"])
+                .arg(&list)
+                .arg("--easyconfigs")
+                .arg(fixture("easyconfigs"))
+                .arg("--out-dir")
+                .arg(&out)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&run.stderr);
+            assert!(!run.status.success(), "{option}{source}: {stderr}");
+            assert!(stderr.contains("line 2: Alpha.eb"), "{stderr}");
+            assert!(stderr.contains("dependency-filter override"), "{stderr}");
+            assert!(!out.exists(), "a refused list wrote {}", out.display());
+        }
+    }
+}
+
+#[test]
+fn other_line_filters_do_not_count_as_dependency_overrides() {
+    for option in ["--filter-ecs=example", "--filter-env-vars=TMP"] {
+        let line = eb_stack::shard::parse_lines(&format!("Alpha.eb {option}"));
+        assert_eq!(line[0].filter_deps_option(), None, "{option}");
+    }
+}
+
 #[test]
 fn an_inode_quota_caps_the_concurrent_shards_without_changing_the_lists() {
     let tmp = tempfile::tempdir().unwrap();

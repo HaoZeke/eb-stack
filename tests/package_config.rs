@@ -492,6 +492,7 @@ roles = ["run"]
         version: "2.4.0".into(),
         toolchain: plan.build.toolchain.clone(),
         versionsuffix: None,
+        versionprefix: None,
         easyconfig_path: "NumericsRuntime-2.4.0-foss-2026.1.eb".into(),
         dependencies: Vec::new(),
         builddependencies: Vec::new(),

@@ -21,14 +21,13 @@
 //! the sources of released easyconfigs but not of licensed software.
 
 use crate::cli_parse::usage;
+use crate::easyconfig_tree::{found_in, git_output, join, letter_dir, Lookup, Tree};
 use crate::easystack::{parse_easystack_written, EasystackEntry};
 use crate::eb_parse::{resolve_local_files, LocalFile, LocalFileKind, LocalFileOwner};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Arguments for `stack files`.
 #[derive(Debug, Clone, Default)]
@@ -113,150 +112,6 @@ pub struct FilePresenceReport {
     pub files: usize,
 }
 
-enum TreeKind {
-    Dir(PathBuf),
-    Git {
-        repo: PathBuf,
-        commit: String,
-        files: BTreeSet<String>,
-    },
-}
-
-/// A directory, or `easybuild/easyconfigs` at one commit of a git checkout.
-/// Paths inside it are `/`-separated and relative to its root.
-struct Tree {
-    kind: TreeKind,
-    by_basename: OnceCell<BTreeMap<String, String>>,
-}
-
-impl Tree {
-    fn dir(root: &Path) -> Self {
-        let nested = root.join("easybuild").join("easyconfigs");
-        let root = if nested.is_dir() {
-            nested
-        } else {
-            root.to_path_buf()
-        };
-        Self {
-            kind: TreeKind::Dir(root),
-            by_basename: OnceCell::new(),
-        }
-    }
-
-    fn git(repo: &Path, pin: &str) -> Result<Option<Self>> {
-        let Some(commit) = git_output(
-            repo,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("{pin}^{{commit}}"),
-            ],
-        )?
-        else {
-            return Ok(None);
-        };
-        let listing = git_output(
-            repo,
-            &[
-                "ls-tree",
-                "-r",
-                "--name-only",
-                &commit,
-                "--",
-                "easybuild/easyconfigs/",
-            ],
-        )?
-        .unwrap_or_default();
-        let files = listing
-            .lines()
-            .filter_map(|line| line.strip_prefix("easybuild/easyconfigs/"))
-            .map(str::to_string)
-            .collect();
-        Ok(Some(Self {
-            kind: TreeKind::Git {
-                repo: repo.to_path_buf(),
-                commit,
-                files,
-            },
-            by_basename: OnceCell::new(),
-        }))
-    }
-
-    fn has(&self, rel: &str) -> bool {
-        match &self.kind {
-            TreeKind::Dir(root) => root.join(rel).is_file(),
-            TreeKind::Git { files, .. } => files.contains(rel),
-        }
-    }
-
-    fn read(&self, rel: &str) -> Result<String> {
-        match &self.kind {
-            TreeKind::Dir(root) => {
-                let path = root.join(rel);
-                std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
-            }
-            TreeKind::Git { repo, commit, .. } => {
-                let spec = format!("{commit}:easybuild/easyconfigs/{rel}");
-                git_output(repo, &["show", &spec])?
-                    .ok_or_else(|| anyhow::anyhow!("git show {spec} in {}", repo.display()))
-            }
-        }
-    }
-
-    /// Where EasyBuild's robot finds `file`: `<letter>/<name>/file`, then
-    /// anywhere in the tree.
-    fn find_easyconfig(&self, file: &str) -> Option<String> {
-        if let Some(name) = crate::arch_support::easyconfig_name(file) {
-            let rel = format!("{}/{name}/{file}", letter_dir(&name));
-            if self.has(&rel) {
-                return Some(rel);
-            }
-        }
-        self.by_basename
-            .get_or_init(|| self.index())
-            .get(file)
-            .cloned()
-    }
-
-    fn index(&self) -> BTreeMap<String, String> {
-        let mut out = BTreeMap::new();
-        let mut add = |rel: String| {
-            if !rel.ends_with(".eb") {
-                return;
-            }
-            let base = rel.rsplit('/').next().unwrap_or(&rel).to_string();
-            out.entry(base).or_insert(rel);
-        };
-        match &self.kind {
-            TreeKind::Git { files, .. } => files.iter().cloned().for_each(&mut add),
-            TreeKind::Dir(root) => {
-                let mut stack = vec![(root.clone(), String::new())];
-                while let Some((dir, prefix)) = stack.pop() {
-                    let Ok(read) = std::fs::read_dir(&dir) else {
-                        continue;
-                    };
-                    let mut children: Vec<_> = read.flatten().collect();
-                    children.sort_by_key(|entry| entry.file_name());
-                    for child in children {
-                        let name = child.file_name().to_string_lossy().into_owned();
-                        if name.starts_with('.') {
-                            continue;
-                        }
-                        let rel = join(&prefix, &name);
-                        if child.path().is_dir() {
-                            stack.push((child.path(), rel));
-                        } else {
-                            add(rel);
-                        }
-                    }
-                }
-            }
-        }
-        out
-    }
-}
-
 /// Easyblocks that derive from PythonPackage, which sets `source_urls` to
 /// PyPI when a recipe leaves it unset. From easybuild-easyblocks 5.x.
 const PYPI_DEFAULT_EASYBLOCKS: &[&str] = &[
@@ -304,39 +159,6 @@ fn easyblock_defaults_urls(easyblock: Option<&str>, name: &str) -> bool {
     PYPI_DEFAULT_EASYBLOCKS.contains(&class.as_str())
 }
 
-fn git_output(repo: &Path, args: &[&str]) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .with_context(|| format!("run git in {}", repo.display()))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(
-        String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_string(),
-    ))
-}
-
-fn join(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}/{name}", prefix.trim_end_matches('/'))
-    }
-}
-
-/// EasyBuild's `letter_dir_for`: the lowercased first letter, `0` otherwise.
-fn letter_dir(name: &str) -> String {
-    match name.chars().next() {
-        Some(c) if c.is_ascii_alphabetic() => c.to_ascii_lowercase().to_string(),
-        _ => "0".to_string(),
-    }
-}
-
 fn short(commit: &str) -> &str {
     &commit[..commit.len().min(12)]
 }
@@ -353,37 +175,8 @@ struct Located<'t> {
     on_robot: bool,
 }
 
-/// One lookup EasyBuild makes for a file.
-struct Lookup<'a> {
-    location: &'a str,
-    beside: bool,
-    extension: bool,
-}
-
 fn found(file: &str, lookup: &Lookup<'_>, at: &Located<'_>, roots: &[&Tree]) -> bool {
-    let mut bases: Vec<(&Tree, &str)> = Vec::new();
-    if lookup.beside {
-        bases.push((at.tree, at.dir.as_str()));
-    }
-    bases.extend(roots.iter().map(|tree| (*tree, "")));
-    let letter = letter_dir(lookup.location);
-    let subdirs: &[&str] = if lookup.extension {
-        &["extensions", "packages", ""]
-    } else {
-        &[""]
-    };
-    bases.iter().any(|(tree, base)| {
-        let candidates = [
-            join(&join(base, &letter), lookup.location),
-            join(base, lookup.location),
-            base.to_string(),
-        ];
-        candidates.iter().any(|dir| {
-            subdirs
-                .iter()
-                .any(|sub| tree.has(&join(&join(dir, sub), file)))
-        })
-    })
+    found_in(file, lookup, at.tree, &at.dir, roots)
 }
 
 struct Sources<'t> {
@@ -580,10 +373,7 @@ fn check_entry(
             ));
             return;
         };
-        written_tree = Tree {
-            kind: TreeKind::Dir(parent.to_path_buf()),
-            by_basename: OnceCell::new(),
-        };
+        written_tree = Tree::at(parent);
         let label = ctx
             .written
             .rsplit_once('/')

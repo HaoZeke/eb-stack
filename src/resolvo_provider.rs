@@ -811,16 +811,19 @@ impl EbProvider {
             // 5.0.3-GCC-13.3.0. Both spell out what EasyBuild would install
             // the module as, so all three forms are compared.
             let suffix = c.versionsuffix.as_deref().unwrap_or("");
-            let with_suffix = format!("{}{suffix}", c.version);
-            let with_toolchain = if crate::hierarchy::is_system_toolchain(&c.toolchain) {
+            // Install stem (versionprefix + bare version) is what EasyBuild
+            // puts in the module version; bare `c.version` stays for metadata.
+            let stem = c.install_version_stem();
+            let with_suffix = format!("{stem}{suffix}");
+            let with_toolchain = if crate::robot_lookup::is_module_system_toolchain(&c.toolchain) {
                 with_suffix.clone()
             } else {
                 format!(
-                    "{}-{}-{}{suffix}",
-                    c.version, c.toolchain.name, c.toolchain.version
+                    "{stem}-{}-{}{suffix}",
+                    c.toolchain.name, c.toolchain.version
                 )
             };
-            if !matches_req(&c.version, version_req)
+            if !matches_req(&stem, version_req)
                 && !matches_req(&with_suffix, version_req)
                 && !matches_req(&with_toolchain, version_req)
             {
@@ -1598,6 +1601,7 @@ mod tests {
             version: version.into(),
             toolchain: tc(),
             versionsuffix: versionsuffix.map(str::to_string),
+            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: deps,
             builddependencies: vec![],
@@ -1825,6 +1829,7 @@ mod tests {
             version: version.into(),
             toolchain: system.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: format!("{name}-{version}.eb"),
             dependencies: deps,
             builddependencies: vec![],

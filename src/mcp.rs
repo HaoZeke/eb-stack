@@ -298,7 +298,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_easyblock_dry_run",
-            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log. When the run fails, failure_kind is setup (EasyBuild never started because a module failed to load; errors has the module system's message), environment (the recipe's toolchain or dependencies cannot be set up here; no easyblock code ran) or easyblock (a Python error in a module), and warnings holds the WARNING lines EasyBuild printed about errors it ignored. next says what to do after a dry run on this server: build with eb_build_test when builds are on, since a dry run never links or runs the tests.",
+            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the robot paths EasyBuild is configured with (EASYBUILD_ROBOT_PATHS, a configuration file, or its built-in default, as eb --show-config reports them); try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log. When the run fails, failure_kind is setup (EasyBuild never started because a module failed to load; errors has the module system's message), environment (the recipe's toolchain or dependencies cannot be set up here; no easyblock code ran) or easyblock (a Python error in a module), and warnings holds the WARNING lines EasyBuild printed about errors it ignored. next says what to do after a dry run on this server: build with eb_build_test when builds are on, since a dry run never links or runs the tests.",
             &[("recipe", "string"), ("easyblocks", "array_min1")],
             &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer"), ("env_filter", "string")],
         ),
@@ -458,7 +458,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_shard",
-            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line that cannot be resolved is a tool error and nothing is written.",
+            "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr takes the easyconfig it names from that tree, and its dependencies from easyconfigs first and that tree second, as EasyBuild appends the fetched files to its robot path. Trees come from commit_tree (COMMIT=DIR), easyconfigs_repo (a git repository whose objects hold the commits, read in place), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. With materialize, also writes sources/v1/<commit>/ (the files the plan reads from each commit, with a SHA-256 manifest) and prelude.local.list and shard-NN.local.list, whose --from-commit lines read that directory through --robot-paths set to build_robot_path (the build host's robot paths, in EasyBuild's order) and then the directory; a line that cannot run that way is copied unchanged. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
             &[
                 ("build_list", "string"),
                 ("easyconfigs", "array_min1"),
@@ -466,6 +466,12 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
             &[
+                ("commit_tree", "array"),
+                ("pr_tree", "array"),
+                ("commit_cache", "string"),
+                ("easyconfigs_repo", "string"),
+                ("materialize", "boolean"),
+                ("build_robot_path", "array"),
                 ("installed", "array"),
                 ("installed_modules_dir", "array"),
                 ("weights", "string"),
@@ -476,6 +482,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("inode_footprints", "string"),
                 ("inode_margin", "integer"),
                 ("inode_line_overhead", "integer"),
+                ("lift_cpu_prerequisites", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -500,10 +507,12 @@ fn tool_catalog() -> Vec<Value> {
                 ("quota_json", "string"),
                 ("quota_cmd", "string"),
                 ("lock", "string"),
+                ("lock_kind", "string"),
                 ("unknown_reserve", "integer"),
                 ("drop_stale", "boolean"),
                 ("margin", "integer"),
                 ("live_jobs", "array"),
+                ("live_jobs_cmd", "string"),
                 ("ts", "string"),
             ],
         ),
@@ -1374,7 +1383,7 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         && maintainer.ok_for_upstream()
         && easyblock_error.is_none()
         && !source_failed
-        && !(strict && !skipped.is_empty())
+        && (!strict || skipped.is_empty())
         && duplicate_error.is_none()
         && (metadata_only || (dep_ok && toolchain_verified));
     let skipped_text: Vec<String> = skipped.iter().map(ToString::to_string).collect();
@@ -2063,12 +2072,23 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     let dir = eb_run_dir(&root, "dry-run")?;
     let output = dir.join("eb.out");
     let guard = dry_run_guard(&dir)?;
-    let run = run_eb_or_absent_with(
-        &invocation.dry_run_args(&dir),
-        timeout_arg(arguments, 600, 10, 3600),
-        &output,
-        &guard,
-    )?;
+    // timeout_s covers the robot-path probe and the dry run together.
+    let deadline = crate::eb_run::Deadline::after(timeout_arg(arguments, 600, 10, 3600));
+    // Extra robot paths go before the ones EasyBuild is configured with; an
+    // eb that cannot be found is reported by the run below.
+    let args = match (invocation.robot.is_empty(), resolve_eb()) {
+        (false, Ok(program)) => {
+            let configured = crate::eb_run::configured_robot_paths(
+                &program,
+                &dir.join("show-config.out"),
+                deadline,
+                &guard,
+            )?;
+            invocation.dry_run_args_with_configured(&dir, &configured)?
+        }
+        _ => invocation.dry_run_args(&dir),
+    };
+    let run = run_eb_or_absent_with(&args, deadline.remaining(), &output, &guard)?;
     let (text, _) = read_tail(&output, 4 * 1024 * 1024)?;
     let lines = text.lines().collect::<Vec<_>>();
     let steps = parse_dry_run(&text);
@@ -2257,12 +2277,21 @@ fn build_test(arguments: &Value) -> Result<Value, String> {
         format!("--tmpdir={}", dir.join("tmp").display()),
         format!("--buildpath={}", dir.join("build").display()),
     ];
-    let run = run_eb_build(
-        &resolve_eb()?,
-        &invocation.args(&extra),
-        timeout_arg(arguments, 7200, 60, 6 * 3600),
-        &output,
-    )?;
+    let program = resolve_eb()?;
+    // timeout_s covers the robot-path probe and the build together.
+    let deadline = crate::eb_run::Deadline::after(timeout_arg(arguments, 7200, 60, 6 * 3600));
+    let args = if invocation.robot.is_empty() {
+        invocation.args(&extra)
+    } else {
+        let configured = crate::eb_run::configured_robot_paths(
+            &program,
+            &dir.join("show-config.out"),
+            deadline,
+            &[],
+        )?;
+        invocation.args_with_configured(&configured, &extra)?
+    };
+    let run = run_eb_build(&program, &args, deadline.remaining(), &output)?;
     let (text, start_truncated) = read_tail(&output, 16 * 1024 * 1024)?;
     let steps = split_steps(&text);
     let completed = run.exit_code == Some(0)
@@ -3250,6 +3279,9 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
     let request = crate::site_commands::StackShardRequest {
         build_list: required_path(arguments, "build_list")?,
         easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        pr_trees: string_array(arguments, "pr_tree")?,
+        commit_cache: optional_path(arguments, "commit_cache"),
         installed: path_array(arguments, "installed")?,
         installed_modules_dirs: path_array(arguments, "installed_modules_dir")?,
         shards: usize::try_from(shards).map_err(|error| format!("shards: {error}"))?,
@@ -3264,14 +3296,25 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
             .unwrap_or(crate::inode_budget::DEFAULT_MARGIN),
         inode_line_overhead: optional_u64(arguments, "inode_line_overhead")?
             .unwrap_or(crate::inode_budget::DEFAULT_LINE_OVERHEAD),
+        lift_cpu_prerequisites: optional_bool(arguments, "lift_cpu_prerequisites"),
     };
-    let run = crate::site_commands::run_stack_shard(&request).map_err(workflow_error)?;
+    let sources = crate::site_commands::StackShardSources {
+        easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
+        materialize: optional_bool(arguments, "materialize"),
+        build_robot_paths: string_array(arguments, "build_robot_path")?,
+    };
+    let run = crate::site_commands::run_stack_shard_sources(&request, &sources)
+        .map_err(workflow_error)?;
     Ok(json!({
         "text": run.summary(),
         "shards": run.shards,
         "prelude": run.prelude,
+        "cpu_prerequisites": run.cpu_prerequisites,
+        "lift_cpu_prerequisites": run.lift_cpu_prerequisites,
         "lines": run.lines,
         "max_concurrent_shards": run.max_concurrent,
+        "opaque": run.opaque,
+        "warnings": run.warnings,
     }))
 }
 
@@ -3302,6 +3345,10 @@ fn stack_admit_tool(arguments: &Value) -> Result<Value, String> {
         quota_json: optional_path(arguments, "quota_json"),
         quota_cmd: optional_string(arguments, "quota_cmd"),
         lock: optional_path(arguments, "lock"),
+        lock_kind: match optional_string(arguments, "lock_kind") {
+            None => crate::inode_budget::LockKind::default(),
+            Some(name) => crate::inode_budget::LockKind::parse(&name).map_err(|e| e.to_string())?,
+        },
         unknown_reserve: optional_u64(arguments, "unknown_reserve")?.unwrap_or(0),
         drop_stale: optional_bool(arguments, "drop_stale"),
         footprint: optional_u64(arguments, "footprint")?.ok_or("footprint is required")?,
@@ -3309,6 +3356,7 @@ fn stack_admit_tool(arguments: &Value) -> Result<Value, String> {
         reservations: required_path(arguments, "reservations")?,
         margin: optional_u64(arguments, "margin")?.unwrap_or(crate::inode_budget::DEFAULT_MARGIN),
         live_jobs,
+        live_jobs_cmd: optional_string(arguments, "live_jobs_cmd"),
         ts: optional_string(arguments, "ts"),
     };
     let report = crate::inode_budget::run_stack_admit(&request).map_err(workflow_error)?;
@@ -3713,6 +3761,7 @@ fn ledger_append_tool(arguments: &Value) -> Result<Value, String> {
         "size": report.head.size,
         "root": report.head.root,
         "signed": report.signed,
+        "replayed": report.replayed,
         "tiles": report.tiles,
         "checkpoint": report.checkpoint,
     }))

@@ -716,6 +716,7 @@ mod tests {
                 version: tc.1.into(),
             },
             versionsuffix: suffix.map(String::from),
+            versionprefix: None,
             easyconfig_path: format!("/ec/{name}-{version}{tcs}{}.eb", suffix.unwrap_or("")),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),

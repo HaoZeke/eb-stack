@@ -17,7 +17,7 @@ reachability, toolchain family, and the claim ladder are defined in
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved, and writes nothing; ~--shards 0~ and a list with no lines are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide. ~ledger verify~ is status 1 when a proof or a head signature does not check, and status 2 without exactly one of ~--record~ with ~--head~ and ~--from~ with ~--to~. ~ledger append~ is status 1 when the record is outside the format, the log no longer reads, or the log is not at ~--expect-head~; it then writes nothing.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack known-failures~ is status 0 when it prints warnings: they are advice for the pull request, not a refusal; with ~--strict~ it is status 1 when a warning remains, and status 0 when every hit is remedied. ~stack oom~ is status 0 when it warns: the warnings are advice, not a failed check. A ~--node~ value that is not ~CORES:MEMORY_MIB~ or ~CORES:MEMORY_MIB:TARGET~ is status 2, and so is a command with none of ~--easystack~, ~--node~, and ~--hooks~, or a ~--parallel~ or ~--max-parallel~ of 0. A ~--hooks~ file that is not valid Python, has no module-level ~PARALLELISM_LIMITS~, or has a row the model cannot follow is status 1, and the message names the line. ~stack bot-classify~ is status 0 for every class, and status 2 when a path is a directory. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build. ~stack provided~ is status 1 when a build-list line names software the baseline already provides, names no package, uses a toolchain other than 2026.1 or GCCcore-15.2.0 below it, sets ~--hooks~, or belongs in a ~--family-lock~. A group-restricted warning is status 0 unless ~--strict~. Status 2 is when neither ~--installed~ nor ~--baseline-lock~ is set. ~stack shard~ is status 1 when a build-list line cannot be resolved and is not fetched by EasyBuild, or when a ~--commit-cache~ download fails before an HTTP status, and writes nothing in either case. ~--shards 0~, a list with no lines, and a ~--commit-tree~ or ~--pr-tree~ that is not ~COMMIT=DIR~ or ~N=DIR~ are status 2. ~stack shadow~ is status 1 when a site-layer recipe shadows a base-stack module, or when a recipe does not parse, and status 0 when every recipe names software the base does not provide. ~ledger verify~ is status 1 when a proof or a head signature does not check, and status 2 without exactly one of ~--record~ with ~--head~ and ~--from~ with ~--to~. ~ledger append~ is status 1 when the record is outside the format, the log no longer reads, or the log is not at ~--expect-head~; it then writes nothing.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -500,10 +500,14 @@ eb-stack stack batch \
 eb-stack stack shard \
   --build-list NODE-TYPE.list \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--commit-cache DIR] [--commit-tree COMMIT=DIR]... [--pr-tree N=DIR]... \
+  [--easyconfigs-repo EASYBUILD-EASYCONFIGS] \
+  [--materialize --build-robot-path PATH [--build-robot-path PATH]...] \
   [--installed-modules-dir MODULES/all]... [--installed INSTALLED.txt]... \
   --shards 4 \
   [--weights SECONDS.tsv] [--default-weight 1] \
   [--filter-deps NAME,NAME...] \
+  [--lift-cpu-prerequisites] \
   [--generated-at 2026-11-03T00:00:00Z] \
   [--inode-quota 3000000] [--inode-footprints footprints.json] \
   [--inode-margin 100000] [--inode-line-overhead 1000] \
@@ -517,8 +521,10 @@ eb-stack stack footprints \
 eb-stack stack admit \
   --quota-json QUOTA.json|- | --quota-cmd 'CMD' \
   --footprint 351000 --job 4411 \
-  --reservations RESERVATIONS/ [--margin 100000] [--lock LOCKFILE] \
-  [--live-jobs 4401,4402] [--unknown-reserve 150000] [--drop-stale] \
+  --reservations RESERVATIONS/ [--margin 100000] \
+  [--lock LOCKFILE [--lock-kind flock|posix]] \
+  [--live-jobs 4401,4402 | --live-jobs-cmd 'CMD'] \
+  [--unknown-reserve 150000] [--drop-stale] \
   [--ts 2026-11-07T00:00:00Z]
 
 eb-stack stack arch \
@@ -845,18 +851,111 @@ a fraction rounds up), or ~--default-weight~ (1) when the file does not
 list it. ~--filter-deps~, or ~EASYBUILD_FILTER_DEPS~ when the flag is
 absent, drops dependencies the way EasyBuild does.
 
+A line with ~--from-commit=SHA~ or ~--from-pr=N~ is resolved the way
+EasyBuild 5.4 resolves it. The easyconfig the line names comes from that
+commit's or pull request's easyconfigs, because EasyBuild replaces a named
+file with the fetched copy. A dependency comes from the robot path when the
+robot path has a file of that name, and from the fetched easyconfigs
+otherwise, because EasyBuild appends them to the robot path after every
+configured path. A fetched easyconfig the robot path also has, with other
+content, therefore loses to the robot path's for a dependency: each such
+module a closure builds is printed as a ~warning:~ and listed under
+~shadowed~ in ~plan.json~. ~--commit-tree COMMIT=DIR~ names the easyconfigs
+directory of one commit (an abbreviated commit matches) and
+~--pr-tree N=DIR~ the easyconfigs one pull request changes; both repeat.
+~--easyconfigs-repo DIR~ is an easybuild-easyconfigs git repository: a
+checkout, a bare repository, or a blobless clone. A commit it holds is read
+in place: one ~git ls-tree~ lists the tree, and only the easyconfigs that
+can decide the plan (those the robot path has no file of, and those a line
+names) are read, through one ~git cat-file --batch~. Nothing is written to
+disk for it. A ~--commit-tree~ for the same commit comes first.
+~--commit-cache DIR~ holds every other tree. A commit missing there is
+downloaded over https from
+~codeload.github.com/easybuilders/easybuild-easyconfigs/tar.gz/~
+plus the commit. That address also serves a fork commit a pull request
+carries, and only its ~.eb~ files under ~easybuild/easyconfigs/~ are
+kept, at ~DIR/SHA/easybuild/easyconfigs~.
+A pull request's head commit and changed easyconfigs come from
+~api.github.com~ and are kept at ~DIR/pr-N-HEAD~, so a pull request that
+moves is read again. ~GITHUB_TOKEN~ or ~GH_TOKEN~ is sent to
+~api.github.com~ when set. A tree is written under a temporary name and
+renamed into place, so several planners can share one cache. A module the
+closures of two or more shards need goes to the prelude whichever tree it
+comes from; a prelude line for a module only a fetched tree provides
+carries that line's ~--from-commit~, ~--from-pr~ and
+~--include-easyblocks-from-*~ options, so it builds the same easyconfig
+with the same easyblock.
+
+~--lift-cpu-prerequisites~ is opt-in. It writes CPU-only prerequisites
+(including CPU-only build-list roots and their missing CPU closure) to
+~cpu-prerequisites.list~, keeps shared accelerator packages in
+~prelude.list~, and leaves accelerator-only work on the CUDA shards.
+Off by default: only modules two or more shards share go to the prelude.
+EESSI refuses to install a CPU-only package into an ~/accel/~ prefix; build
+the CPU list under the CPU install path first, then the accelerator
+prelude, then the shards.
+
 ~--out-dir~ gets ~prelude.list~ (the prelude as easyconfig filenames in
 dependency order; empty when nothing is shared), ~shard-NN.list~ (the input
 lines verbatim, dependencies first), and ~plan.json~ (each line's closure,
 group and shard, the weight of every shard and of the prelude, and a
 SHA-256 over the build list, the weights, the installed modules and every
-easyconfig a closure reached). A ~shard-NN.list~ that an earlier run left
-and this run does not write is removed. ~--generated-at~ fixes the time in
-~plan.json~, so the same inputs give identical files. A line whose
-easyconfig is not on the robot path, whose first word is not an ~.eb~
-file, or whose closure has a requirement nothing satisfies exits 1, names
-every such line, and writes nothing. The command prints
-~shards=<k> prelude=<n> lines=<m>~.
+easyconfig a closure reached). With ~--lift-cpu-prerequisites~, it also
+gets ~cpu-prerequisites.list~ when any CPU-only module or root was lifted.
+A ~shard-NN.list~ that an earlier run left and this run does not write is
+removed.
+
+~--materialize~ also writes, for each ~--from-commit~ source, the directory
+~sources/v1/SHA/~ and its manifest ~sources/v1/SHA.json~ (schema version 1:
+each file's path, the commit path it was copied from, its SHA-256 and size,
+and a SHA-256 over the list), and ~prelude.local.list~ and
+~shard-NN.local.list~ beside the verbatim lists. The directory is the part of
+the ~files_commit_SHA~ directory EasyBuild would build that the planned
+closures read: each named easyconfig at the top, and each easyconfig, patch,
+and local source at its path in the commit, selected wherever EasyBuild's
+lookup finds it first in the commit. In the ~.local.list~ files such a line
+names that top copy (or keeps its file name when the robot path supplies the
+easyconfig), drops ~--from-commit~, keeps every other option, and ends with
+~--robot-paths=~ the ~--build-robot-path~ values and then the directory. Give
+~--build-robot-path~ once per robot path EasyBuild uses on the build host, in
+EasyBuild's order, as ~eb --show-config~ lists ~robot-paths~; it is required
+with ~--materialize~. An empty element in ~--robot-paths~ stands for
+EasyBuild's built-in default, not for a value set in ~EASYBUILD_ROBOT_PATHS~
+or a configuration file, so the line spells every path out. A line is copied
+unchanged, and listed with the reason under ~materialized.unchanged~ in
+~plan.json~, when it is opaque or planned over the robot path only, when its
+source is not a commit, when it carries an option that changes how EasyBuild
+finds easyconfigs (~--robot~ with a path, ~--robot-paths~, ~--try-*~,
+~--from-pr~, a second ~--from-commit~, a value written as its own word, and
+so on), or when a recipe in its closure names a patch through a template, or
+a patch that is neither on the robot path nor in the commit. A prelude line
+is rewritten only when a rewritten line's closure selected its module.
+~materialized~ in ~plan.json~ lists the build robot paths, the lists, each
+line written and whether its easyconfig came from the commit or the robot
+path, and each source directory with its manifest digest. Without
+~--materialize~, a ~prelude.local.list~ or ~sources/v1~ an earlier run left
+is removed. ~--generated-at~ fixes the time in
+~plan.json~, so the same inputs give identical files. A
+~--commit-cache~ download that fails before an HTTP status (the cache has
+no tree and the client never gets a status) exits 1 and writes nothing;
+the message names the cache, the commit, the URL, and the transport
+error. An HTTP error status is not that case, and neither is a commit
+~--easyconfigs-repo~ lacks when no cache is given. A fetched line
+that still cannot be resolved (no tree for its commit, its easyconfig in
+neither its tree nor the robot path, or a requirement neither provides),
+and a line whose easyconfig is on the robot path but does not parse, is
+planned as an opaque line: its own group, no closure, the default weight,
+written to its shard unchanged. ~plan.json~ gives the kind under each
+line's ~opaque~, the cause under ~opaque_reason~, and every opaque line
+under the top-level ~opaque~; ~inputs.trees~ maps each fetched source to
+~null~ when its tree was read or to the reason it was not. Each opaque line
+and each other caveat (a fetched line planned over the robot path only, a
+module two trees resolve differently) is printed to stderr as
+~warning: ...~ and kept under ~warnings~. Any other line whose easyconfig is
+not on the robot path, whose first word is not an ~.eb~ file, or whose
+closure has a requirement nothing satisfies exits 1, names every such line,
+and writes nothing. The command prints ~shards=<k> prelude=<n> lines=<m>~,
+followed by ~opaque=<o>~ when a line is opaque.
 
 *Inode budget.* A native build job keeps its build tree on the scratch
 file system while it runs, and that file system has an inode quota. Each
@@ -913,11 +1012,18 @@ not counted, and its file kept unless ~--drop-stale~; without
 ~--live-jobs~ every other reservation counts and none is stale. The
 job's own earlier reservation is never counted, so a job that asks again
 is judged on the others alone. ~--lock~ names a file held exclusively
-(flock) from the quota observation to the reservation write, so two
-controllers of one quota cannot both admit; ~--quota-cmd~ runs the
+from the quota observation to the reservation write, so two controllers
+of one quota cannot both admit; ~--lock-kind~ is ~flock~ (default) or
+~posix~, an fcntl record lock over the whole file, the lock a controller
+written with Python's ~fcntl.lockf~ holds, and it must match the other
+holders because the two are separate lock namespaces on Linux; ~--quota-cmd~ runs the
 quota command inside that window and reads its output as the quota, and
-a command that fails refuses the job (~refusal~ says why) rather than
-admitting it. On admit the reservation ~<job>.json~ (~job~,
+~--live-jobs-cmd~ runs the scheduler command there too (running jobs
+only, ids one per line or comma-separated, a ~+step~ suffix dropped);
+either command failing refuses the job (~refusal~ says why) rather than
+admitting it. A ~--live-jobs~ list the shell expanded before the lock
+can miss a job that reserved in between, so it belongs to a controller
+that holds the lock itself. On admit the reservation ~<job>.json~ (~job~,
 ~footprint~, ~margin~, ~ts~) is written; ~--ts~ fixes its time. ~--job~
 is a file name: letters, digits, ~.~, ~_~, and ~-~. The command prints
 one JSON line (~job~, ~admitted~, ~available~, ~used~, ~soft~, ~hard~,
@@ -1889,7 +1995,27 @@ with ~--key~ and ~--head-out~, writes the signed head after the append. It
 prints ~appended record N id ID; head size S root ROOT~, then the tile
 log line below. ~head~ signs the
 log's current head into ~--out~, at ~--ts~ or now, and the tile log's
-checkpoint. ~show~ prints ~index~,
+checkpoint.
+
+*Locking and crashes.* Writers take an exclusive POSIX record lock on
+~LOG.posix-lock~ beside the log; ~head~ takes a shared lock on the same
+file, so a head is the log between two appends and an older head never
+replaces a newer one. ~head~ opens the log and the lock file read-only and
+needs no write access to the ledger directory, but refuses a log whose
+lock file no writer has created. ~append~ flushes the log and its
+directory before it reports a record, including a record it acknowledges
+as already recorded. A write that fails part way is cut back. Bytes after
+the last newline that are not a JSON value, left by an append that never
+finished, are copied to a new ~LOG.quarantine.*~ file and flushed before
+the next ~append~ cuts them from the log; ~append~ then adds
+~; moved N bytes of an interrupted append to PATH~ to its line. A complete
+JSON value without its newline is refused and left in place. A head file is
+replaced by renaming a flushed new file over it. A head path that names
+the log, its lock file, a quarantine file, or the signing key, directly or
+through a symbolic or hard link, is refused, and so is a head path that is
+a symbolic link. A signing key with more than one hard link is refused. The
+lock is a POSIX record lock: whether it excludes writers on several hosts
+depends on the shared file system's lock support. ~show~ prints ~index~,
 ~ts~, ~action~, ~target~, ~module~ and ~actor~ per record, newest first, then
 ~K of N records~. ~--package~ matches a whole module name, or the software
 name before its ~/~. ~--json~ prints the records as a JSON array.

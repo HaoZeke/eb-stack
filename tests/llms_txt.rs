@@ -42,7 +42,7 @@ fn llms_txt_matches_the_org_manual() {
     assert!(index.contains("https://eb-stack.rgoswami.me/reference/mcp.html.md"));
     assert!(index.contains("server.json"));
     assert!(index.contains("skills/new-package/SKILL.md"));
-    assert!(index.contains("AGENTS.md"));
+    assert!(index.contains("CONTRIBUTING.md"));
 
     // A page summary is already markdown, so summarize() must not re-read it
     // as Org. A regression ran inline_plain() over the markdown and paired
@@ -96,4 +96,48 @@ fn llms_txt_matches_the_org_manual() {
         String::from_utf8_lossy(&pages.stderr)
     );
     assert!(root.join("docs/llm/reference/cli.md").is_file());
+}
+
+/// Every link the generated public files carry stays within the public
+/// document manifest, `scripts/leakguard.toml`, which names CONTRIBUTING.md as
+/// the contributor entry; `scripts/llms_leakguard.py` is the pre-check
+/// `gen-llms-txt.py` runs.
+#[test]
+fn public_links_stay_within_the_manifest() {
+    let root = repo();
+    let config =
+        std::fs::read_to_string(root.join("scripts/leakguard.toml")).expect("leakguard.toml");
+    assert!(config.contains("\"CONTRIBUTING.md\""), "{config}");
+    assert!(config.contains("public_repo_prefixes"), "{config}");
+    let output = Command::new("python3")
+        .arg(root.join("scripts/llms_leakguard.py"))
+        .current_dir(&root)
+        .output()
+        .expect("python3 scripts/llms_leakguard.py");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The manifest check canonicalizes repository links: traversal out of a
+/// public directory, encoded dot segments, backslashes, other refs and raw
+/// forms all follow the manifest. `scripts/test_llms_leakguard.py` holds the
+/// cases.
+#[test]
+fn the_manifest_check_rejects_traversal_and_other_refs() {
+    let root = repo();
+    let output = Command::new("python3")
+        .args(["-m", "unittest", "scripts.test_llms_leakguard"])
+        .current_dir(&root)
+        .output()
+        .expect("python3 -m unittest scripts.test_llms_leakguard");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

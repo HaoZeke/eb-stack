@@ -48,6 +48,11 @@ def main() -> int:
     args = parser.parse_args()
     pages = load_pages()
     files = render(pages)
+    blocked = leakguard_violations(files)
+    if blocked:
+        for line in blocked:
+            print(line, file=sys.stderr)
+        return 1
     if args.check and args.pages_only:
         print("pass only one of --check and --pages-only", file=sys.stderr)
         return 2
@@ -365,10 +370,10 @@ def render_index(pages: list[dict[str, str]]) -> str:
         + "Raku, and EasyBuild recipes into one package plan, a planned "
         + "CycloneDX SBOM, Resolvo locks, and conventional EasyBuild recipes.",
         "",
-        "The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or "
+        "The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or "
         "newer builds it from source. Each link below is the markdown form "
         "of a page on https://eb-stack.rgoswami.me/. `llms-full.txt` repeats "
-        "those pages in one file. Contributor instructions are in AGENTS.md. "
+        "those pages in one file. Contribution guidelines are in CONTRIBUTING.md. "
         "The Model Context Protocol server is `eb-stack mcp`.",
         "",
     ]
@@ -417,12 +422,12 @@ def project_entries() -> list[str]:
         (
             "README",
             f"{REPO}/README.md",
-            "Install, the claim ladder, llms.txt, AGENTS.md, the skills, and the Model Context Protocol server.",
+            "Install, the claim ladder, the skills, and the Model Context Protocol server.",
         ),
         (
-            "AGENTS.md",
-            f"{REPO}/AGENTS.md",
-            "Build, test, lint, and documentation commands for a contributor.",
+            "Contributing",
+            f"{REPO}/CONTRIBUTING.md",
+            "Contribution guidelines and validation commands.",
         ),
     ]
     if (ROOT / "server.json").is_file():
@@ -434,6 +439,20 @@ def project_entries() -> list[str]:
             )
         )
     return [f"- [{title}]({url}): {summary}" for title, url, summary in entries]
+
+
+def leakguard_violations(files: dict[str, str]) -> list[str]:
+    """The same check `scripts/llms_leakguard.py` runs for prek."""
+    import importlib.util
+
+    path = ROOT / "scripts" / "llms_leakguard.py"
+    spec = importlib.util.spec_from_file_location("llms_leakguard", path)
+    if spec is None or spec.loader is None:
+        print(f"leakguard: cannot load {path}", file=sys.stderr)
+        return [f"leakguard: cannot load {path}"]
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.violations_in(files)
 
 
 def write(files: dict[str, str]) -> None:

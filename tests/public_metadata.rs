@@ -112,10 +112,48 @@ fn generated_documentation_builds_stay_out_of_source_packages() {
 #[test]
 fn local_agent_state_stays_out_of_public_commits() {
     let gitignore = std::fs::read_to_string(repo().join(".gitignore")).expect("read .gitignore");
-    for path in [".claude/", ".codex/"] {
-        assert!(
-            gitignore.lines().any(|line| line == path),
-            ".gitignore must exclude {path}"
+    assert!(gitignore.lines().any(|line| line == ".*/"));
+    assert!(gitignore.lines().any(|line| line == "!/.github/"));
+    let fixture = tempfile::tempdir().expect("temporary repository");
+    std::fs::write(fixture.path().join(".gitignore"), gitignore).expect("write ignore policy");
+    let init = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(fixture.path())
+        .output()
+        .expect("initialize temporary repository");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    for (path, ignored) in [
+        (".working-state/marker", true),
+        (".cache/marker", true),
+        ("nested/.working-state/marker", true),
+        (".github/.working-state/marker", true),
+        (".github/workflows/check.yml", false),
+    ] {
+        let file = fixture.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).expect("create fixture directory");
+        std::fs::write(file, "fixture").expect("write fixture file");
+        let result = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args([
+                "-c",
+                "core.excludesFile=/dev/null",
+                "check-ignore",
+                "--no-index",
+                "--",
+                path,
+            ])
+            .output()
+            .expect("check ignore behavior");
+        assert_eq!(
+            result.status.code(),
+            Some(if ignored { 0 } else { 1 }),
+            "unexpected ignore behavior for {path}: {}",
+            String::from_utf8_lossy(&result.stderr)
         );
     }
 }
@@ -123,12 +161,12 @@ fn local_agent_state_stays_out_of_public_commits() {
 #[test]
 fn ci_enforces_the_declared_msrv_and_quality_gates() {
     let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
-    assert!(cargo.contains("rust-version = \"1.88\""));
+    assert!(cargo.contains("rust-version = \"1.90\""));
 
     let ci = std::fs::read_to_string(repo().join(".github/workflows/ci_test.yml"))
         .expect("read test workflow");
     for command in [
-        "toolchain: 1.88.0",
+        "toolchain: 1.90.0",
         "cargo build --locked --all-targets",
         "cargo fmt --all --check",
         "cargo clippy --locked --all-targets -- -D warnings",
@@ -267,8 +305,6 @@ fn easyconfigs_env_is_the_robot_directory_and_the_ucx_diff_uses_it() {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(&clone)
-            .arg("-c")
-            .arg("commit.gpgsign=false")
             .arg("-c")
             .arg("user.name=Rohit Goswami")
             .arg("-c")
@@ -586,7 +622,7 @@ fn discovery_metadata_uses_real_index_terms() {
     for needle in [
         "llms.txt",
         "llms-full.txt",
-        "AGENTS.md",
+        "CONTRIBUTING.md",
         "server.json",
         "skills/",
     ] {
@@ -597,7 +633,7 @@ fn discovery_metadata_uses_real_index_terms() {
     for needle in [
         "llms.txt",
         "llms-full.txt",
-        "AGENTS.md",
+        "CONTRIBUTING.md",
         "server.json",
         "skills/",
         "reference/mcp.org",

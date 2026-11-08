@@ -1185,6 +1185,45 @@ struct ShardArgs {
     /// Robot-path easyconfig tree. Repeatable; later trees take precedence.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
+    /// Easyconfigs of one `--from-commit` pin, as `COMMIT=DIR`. A line with
+    /// that pin takes the easyconfig it names from DIR; its dependencies come
+    /// from the robot path first and DIR second. Repeatable; an abbreviated
+    /// commit matches.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Easyconfigs one `--from-pr` pull request changes, at its head, as
+    /// `N=DIR`. Repeatable.
+    #[arg(long = "pr-tree")]
+    pr_trees: Vec<String>,
+    /// Directory holding the trees of `--from-commit` and `--from-pr` lines
+    /// that no `--commit-tree` or `--pr-tree` names. A missing commit is
+    /// downloaded from codeload.github.com (easybuilders/easybuild-easyconfigs,
+    /// its `.eb` files only); a pull request's changed easyconfigs from
+    /// api.github.com at its head. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+    /// api.github.com when set.
+    #[arg(long)]
+    commit_cache: Option<PathBuf>,
+    /// easybuild-easyconfigs git repository (a checkout, a bare repository,
+    /// or a blobless clone) holding the commits of `--from-commit` lines.
+    /// A commit found there is read in place, without writing its tree to
+    /// disk; `--commit-cache` serves only a commit it lacks. A
+    /// `--commit-tree` for the same commit comes first.
+    #[arg(long)]
+    easyconfigs_repo: Option<PathBuf>,
+    /// Also write `sources/v1/<commit>/`, the files the planned closures
+    /// read from each commit, with a SHA-256 manifest `sources/v1/<commit>.json`,
+    /// and `prelude.local.list` and `shard-NN.local.list`. Their
+    /// `--from-commit` lines read that directory instead of fetching the
+    /// commit again. A line that cannot run that way is copied unchanged.
+    #[arg(long)]
+    materialize: bool,
+    /// One robot path EasyBuild uses on the build host, in EasyBuild's
+    /// order, as `eb --show-config` lists `robot-paths`. Repeatable;
+    /// required by `--materialize`. A written line passes these, then its
+    /// sources directory, as `--robot-paths`, because an empty element there
+    /// stands for EasyBuild's built-in default, not a configured value.
+    #[arg(long = "build-robot-path", requires = "materialize")]
+    build_robot_paths: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line. Repeatable.
     #[arg(long)]
     installed: Vec<PathBuf>,
@@ -1228,6 +1267,14 @@ struct ShardArgs {
     /// tarballs, the EasyBuild tmpdir, and logs.
     #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_LINE_OVERHEAD)]
     inode_line_overhead: u64,
+    /// Emit CPU-only prerequisites into `cpu-prerequisites.list` (built under
+    /// the CPU prefix) even when only one accelerator root needs them. Shared
+    /// accelerator packages stay in `prelude.list` under accelerator settings.
+    /// Off by default: only modules two or more shards share go to the
+    /// prelude (legacy). EESSI refuses to install a CPU-only package into an
+    /// `/accel/` prefix.
+    #[arg(long)]
+    lift_cpu_prerequisites: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1262,10 +1309,14 @@ struct AdmitArgs {
     /// observation and the decision are one step; a failure refuses the job.
     #[arg(long)]
     quota_cmd: Option<String>,
-    /// A lock file held (flock) from the quota observation to the
-    /// reservation write, shared by every controller of the same quota.
+    /// A lock file held from the quota observation to the reservation
+    /// write, shared by every controller of the same quota.
     #[arg(long)]
     lock: Option<PathBuf>,
+    /// The lock `--lock` takes: `flock`, or `posix` (an fcntl record lock,
+    /// what Python's lockf takes). It must match the other holders.
+    #[arg(long, default_value = "flock", value_parser = ["flock", "posix"])]
+    lock_kind: String,
     /// Inodes counted for each live job that has no reservation.
     #[arg(long, default_value_t = 0)]
     unknown_reserve: u64,
@@ -1291,6 +1342,11 @@ struct AdmitArgs {
     /// counts.
     #[arg(long, value_delimiter = ',', num_args = 0..)]
     live_jobs: Option<Vec<String>>,
+    /// A shell command that prints the running job ids, run inside `--lock`
+    /// after the quota; a list expanded before the lock can miss a job that
+    /// reserved in between. A failure refuses the job.
+    #[arg(long, conflicts_with = "live_jobs")]
+    live_jobs_cmd: Option<String>,
     /// RFC 3339 time written into the reservation. Absent is now.
     #[arg(long)]
     ts: Option<String>,
@@ -1566,18 +1622,26 @@ enum StackCommand {
     /// Split one Jenkins build list into shards that can build at once.
     ///
     /// Each line's closure is computed over the robot path minus the
-    /// installed modules, as `pr-overlap` computes a root's set. Lines whose
-    /// own easyconfig another line needs share a shard; any other module the
+    /// installed modules, as `pr-overlap` computes a root's set. A line with
+    /// `--from-commit` or `--from-pr` takes the easyconfig it names from that
+    /// tree, and its dependencies from the robot path first and that tree
+    /// second, as EasyBuild appends the fetched files to its robot path; the
+    /// trees come from `--commit-tree`, `--easyconfigs-repo`, `--pr-tree`, or
+    /// `--commit-cache`. Lines whose own
+    /// easyconfig another line needs share a shard; any other module the
     /// closures of two or more shards need goes to `prelude.list`, which
     /// builds first. Groups are packed into at most `--shards` shards by
     /// weight. Writes `prelude.list`, `shard-NN.list` (input lines verbatim,
-    /// dependencies first), and `plan.json`. A line whose easyconfig or
-    /// dependency cannot be resolved fails the run and nothing is written.
+    /// dependencies first), and `plan.json`. A fetched line that still cannot
+    /// be resolved, or a robot-path easyconfig that does not parse, is
+    /// planned on its own without a closure and reported on stderr. Any other
+    /// line whose easyconfig or dependency cannot be resolved fails the run
+    /// and nothing is written.
     /// With `--inode-quota`, `plan.json` also carries each shard's
     /// `inode_footprint` and `max_concurrent_shards`, the most shards that
     /// fit under the quota minus `--inode-margin` at once.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list genoa.list --easyconfigs easyconfigs --shards 7 --inode-quota 3000000 --inode-footprints footprints.json --out-dir shards"
+        after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs-repo easybuild-easyconfigs --materialize --build-robot-path /sw/easybuild/easyconfigs --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
     /// Write the peak build-tree inode footprint per software name.
@@ -3512,6 +3576,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let ShardArgs {
                 build_list,
                 easyconfigs,
+                commit_trees,
+                pr_trees,
+                commit_cache,
+                easyconfigs_repo,
+                materialize,
+                build_robot_paths,
                 installed,
                 installed_modules_dirs,
                 shards,
@@ -3524,11 +3594,15 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 inode_footprints,
                 inode_margin,
                 inode_line_overhead,
+                lift_cpu_prerequisites,
             } = *args;
-            let run = eb_stack::site_commands::run_stack_shard(
+            let run = eb_stack::site_commands::run_stack_shard_sources(
                 &eb_stack::site_commands::StackShardRequest {
                     build_list,
                     easyconfigs,
+                    commit_trees,
+                    pr_trees,
+                    commit_cache,
                     installed,
                     installed_modules_dirs,
                     shards,
@@ -3541,8 +3615,17 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     inode_footprints,
                     inode_margin,
                     inode_line_overhead,
+                    lift_cpu_prerequisites,
+                },
+                &eb_stack::site_commands::StackShardSources {
+                    easyconfigs_repo,
+                    materialize,
+                    build_robot_paths,
                 },
             )?;
+            for warning in &run.warnings {
+                eprintln!("warning: {warning}");
+            }
             println!("{}", run.summary());
             Ok(())
         }
@@ -3569,6 +3652,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 quota_json,
                 quota_cmd,
                 lock,
+                lock_kind,
                 unknown_reserve,
                 drop_stale,
                 footprint,
@@ -3576,13 +3660,16 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 reservations,
                 margin,
                 live_jobs,
+                live_jobs_cmd,
                 ts,
             } = *args;
+            let lock_kind = eb_stack::inode_budget::LockKind::parse(&lock_kind)?;
             let report =
                 eb_stack::inode_budget::run_stack_admit(&eb_stack::inode_budget::AdmitRequest {
                     quota_json,
                     quota_cmd,
                     lock,
+                    lock_kind,
                     unknown_reserve,
                     drop_stale,
                     footprint,
@@ -3590,6 +3677,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     reservations,
                     margin,
                     live_jobs,
+                    live_jobs_cmd,
                     ts,
                 })?;
             println!("{}", report.line);

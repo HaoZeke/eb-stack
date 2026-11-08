@@ -1,0 +1,13 @@
+easyblock = 'Binary'
+
+name = 'CUDA'
+version = '13.3.0'
+
+homepage = 'https://example.org/CUDA'
+description = "Fixture accelerator runtime for stack shard CPU lift."
+
+toolchain = SYSTEM
+
+sources = ['cuda.sh']
+
+moduleclass = 'lang'

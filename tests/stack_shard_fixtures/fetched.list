@@ -1,0 +1,36 @@
+# easybuilders/easybuild-easyconfigs 0d6b80c34f3553774e93162cf89088e2423ecf89
+# easybuilders/easybuild-easyblocks 9607addb10e02da5e3f44916a0be6222f9795287 (easybuild-easyblocks-v5.4.1)
+PETSc-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89 --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+petsc4py-3.25.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+OpenFOAM-14-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+ParaView-6.1.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+Hypre-3.1.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+SuperLU_DIST-9.2.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+h5py-3.16.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+AmberTools-26.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+Wannier90-3.1.0-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+RDKit-2026.03.4-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+scanpy-1.12.1-foss-2026.1.eb --from-commit=0d6b80c34f3553774e93162cf89088e2423ecf89
+phonopy-4.5.0-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+PLUMED-2.10.0-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+PyFR-3.1-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+pymatgen-2026.5.4-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+MDAnalysis-2.10.0-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+MDTraj-1.11.1-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+numba-0.65.1-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+netcdf4-python-1.7.4-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+geopandas-1.1.4-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+GDAL-3.13.0-foss-2026.1.eb --include-easyblocks-from-commit=9607addb10e02da5e3f44916a0be6222f9795287
+aiida-core-2.9.2-foss-2026.1.eb
+anndata-0.13.3.post0-foss-2026.1.eb
+Armadillo-15.2.7-foss-2026.1.eb
+arpack-ng-3.9.1-foss-2026.1.eb
+HPL-2.3-foss-2026.1.eb
+HeFFTe-2.4.1-foss-2026.1.eb
+Kokkos-Kernels-5.1.1-foss-2026.1.eb
+OpenMM-8.5.2-foss-2026.1.eb
+Fiona-1.10.1-foss-2026.1.eb
+Cartopy-0.25.0-foss-2026.1.eb
+cooler-0.10.4-foss-2026.1.eb
+CheMPS2-1.8.12-foss-2026.1.eb
+Zoltan-3.901-foss-2026.1.eb

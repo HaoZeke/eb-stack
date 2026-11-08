@@ -96,7 +96,7 @@ only when `EB_STACK_ALLOW_BUILD=1`.
 
 ## Build, test, lint, and docs
 
-Rust 1.88 is the minimum. CI uses current stable. Run builds and tests on
+Rust 1.90 is the minimum. CI uses current stable. Run builds and tests on
 the repository's configured build machine when local compilation is prohibited.
 
 ```sh

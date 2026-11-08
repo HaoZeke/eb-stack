@@ -34,7 +34,7 @@ fn recipe_lint_json_marks_escaped_percent_entries_as_info() {
     let recipe = temp.path().join("escaped.eb");
     std::fs::write(
         &recipe,
-        "postinstallcmds = ['echo %s \"%%(installdir)s\"' % local_path]\n",
+        "local_path = 'bin'\npostinstallcmds = ['echo %s \"%%(installdir)s\"' % local_path]\neasyblock = 'Bundle'\nname = 'escaped'\nversion = '1.0'\nhomepage = 'https://example.invalid/escaped'\ndescription = 'synthetic'\ntoolchain = SYSTEM\n",
     )
     .expect("write recipe");
     let output = Command::new(binary)

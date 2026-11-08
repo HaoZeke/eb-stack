@@ -196,11 +196,11 @@ struct ReleasedPin {
 
 /// Remove the named pins from easystack text, keeping every other line.
 ///
-/// An entry is `  - FILE:` followed by its more-indented option lines. A pin
+/// An entry starts with two spaces and `- FILE:`, followed by its more-indented option lines. A pin
 /// line goes only when its option and commit both match, so an entry that
 /// repeats a file with another pin keeps that pin. The comment lines
 /// directly above a removed pin go with it. When nothing but `options:` and
-/// comments is left, the entry collapses to `  - FILE`. Returns the new text
+/// comments is left, the entry collapses to `- FILE` preceded by two spaces. Returns the new text
 /// and the pins dropped.
 fn drop_pins(text: &str, drop: &[ReleasedPin]) -> (String, usize) {
     let lines: Vec<&str> = text.lines().collect();
@@ -650,8 +650,6 @@ mod tests {
         let output = Command::new("git")
             .arg("-C")
             .arg(dir)
-            .arg("-c")
-            .arg("commit.gpgsign=false")
             .arg("-c")
             .arg("user.name=Rohit Goswami")
             .arg("-c")

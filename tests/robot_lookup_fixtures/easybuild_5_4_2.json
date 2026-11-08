@@ -1,0 +1,878 @@
+{
+ "easybuild": "5.4.2",
+ "scenarios": [
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "r/A/1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "A",
+      "reached": true
+     },
+     "r/B/B-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "B",
+      "reached": true
+     },
+     "r/D-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "D",
+      "reached": true
+     },
+     "r/c/C/C-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "C",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": false,
+      "found": "r/A/1.0.eb",
+      "name": "A",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "r/B/B-1.0.eb",
+      "name": "B",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "r/c/C/C-1.0.eb",
+      "name": "C",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "r/D-1.0.eb",
+      "name": "D",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "B-1.0.eb",
+      "found": "r/B/B-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/B/B-1.0.eb"
+      ]
+     },
+     {
+      "file": "C-1.0.eb",
+      "found": "r/c/C/C-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/c/C/C-1.0.eb"
+      ]
+     },
+     {
+      "file": "D-1.0.eb",
+      "found": "r/D-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/D-1.0.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "r"
+    ]
+   },
+   "files": {
+    "r/A/1.0.eb": "name = 'A'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout A'\n",
+    "r/B/B-1.0.eb": "name = 'B'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout B'\n",
+    "r/D-1.0.eb": "name = 'D'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout D'\n",
+    "r/c/C/C-1.0.eb": "name = 'C'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout C'\n"
+   },
+   "lookups": [
+    [
+     "A",
+     "1.0"
+    ],
+    [
+     "B",
+     "1.0"
+    ],
+    [
+     "C",
+     "1.0"
+    ],
+    [
+     "D",
+     "1.0"
+    ]
+   ],
+   "name": "all four create_paths layouts",
+   "named": [
+    "B-1.0.eb",
+    "C-1.0.eb",
+    "D-1.0.eb"
+   ],
+   "roots": [
+    "r"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "r/P/1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "P",
+      "reached": true
+     },
+     "r/P/P-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "P",
+      "reached": false
+     },
+     "r/Q/Q-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Q",
+      "reached": true
+     },
+     "r/S-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "S",
+      "reached": false
+     },
+     "r/q/Q/Q-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Q",
+      "reached": false
+     },
+     "r/s/S/S-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "S",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": false,
+      "found": "r/P/1.0.eb",
+      "name": "P",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "r/Q/Q-1.0.eb",
+      "name": "Q",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "r/s/S/S-1.0.eb",
+      "name": "S",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "Q-1.0.eb",
+      "found": "r/Q/Q-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/Q/Q-1.0.eb",
+       "r/q/Q/Q-1.0.eb"
+      ]
+     },
+     {
+      "file": "S-1.0.eb",
+      "found": "r/s/S/S-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/S-1.0.eb",
+       "r/s/S/S-1.0.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "r"
+    ]
+   },
+   "files": {
+    "r/P/1.0.eb": "name = 'P'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout layout 1'\n",
+    "r/P/P-1.0.eb": "name = 'P'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout layout 2'\n",
+    "r/Q/Q-1.0.eb": "name = 'Q'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout layout 2'\n",
+    "r/S-1.0.eb": "name = 'S'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout flat layout 4'\n",
+    "r/q/Q/Q-1.0.eb": "name = 'Q'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout layout 3'\n",
+    "r/s/S/S-1.0.eb": "name = 'S'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout nested layout 3'\n"
+   },
+   "lookups": [
+    [
+     "P",
+     "1.0"
+    ],
+    [
+     "Q",
+     "1.0"
+    ],
+    [
+     "S",
+     "1.0"
+    ]
+   ],
+   "name": "duplicates in two layouts of one root",
+   "named": [
+    "Q-1.0.eb",
+    "S-1.0.eb"
+   ],
+   "roots": [
+    "r"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "r/.git/objects/Hidden-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Hidden",
+      "reached": false
+     },
+     "r/build/plan/sources/v1/0123456789abcdef0123456789abcdef01234567/d/Dep/Dep-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": false
+     },
+     "r/d/Dep/Dep-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": true
+     },
+     "r/outputs/x/Only-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Only",
+      "reached": false
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "r/d/Dep/Dep-1.0.eb",
+      "name": "Dep",
+      "version": "1.0"
+     },
+     {
+      "accepted": null,
+      "found": null,
+      "name": "Only",
+      "version": "1.0"
+     },
+     {
+      "accepted": null,
+      "found": null,
+      "name": "Hidden",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "Dep-1.0.eb",
+      "found": "r/build/plan/sources/v1/0123456789abcdef0123456789abcdef01234567/d/Dep/Dep-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/build/plan/sources/v1/0123456789abcdef0123456789abcdef01234567/d/Dep/Dep-1.0.eb",
+       "r/d/Dep/Dep-1.0.eb"
+      ]
+     },
+     {
+      "file": "Only-1.0.eb",
+      "found": "r/outputs/x/Only-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/outputs/x/Only-1.0.eb"
+      ]
+     },
+     {
+      "file": "Hidden-1.0.eb",
+      "found": null,
+      "picks_over_hash_seeds": [
+       null
+      ]
+     }
+    ],
+    "robot_path": [
+     "r"
+    ]
+   },
+   "files": {
+    "r/.git/objects/Hidden-1.0.eb": "name = 'Hidden'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Hidden'\n",
+    "r/build/plan/sources/v1/0123456789abcdef0123456789abcdef01234567/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout generated output'\n",
+    "r/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout robot'\n",
+    "r/outputs/x/Only-1.0.eb": "name = 'Only'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout nested only'\n"
+   },
+   "lookups": [
+    [
+     "Dep",
+     "1.0"
+    ],
+    [
+     "Only",
+     "1.0"
+    ],
+    [
+     "Hidden",
+     "1.0"
+    ]
+   ],
+   "name": "unreachable build outputs and nested copies",
+   "named": [
+    "Dep-1.0.eb",
+    "Only-1.0.eb",
+    "Hidden-1.0.eb"
+   ],
+   "roots": [
+    "r"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "r/__archive__/n/New/New-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "New",
+      "reached": false
+     },
+     "r/__archive__/o/Old/Old-0.1.eb": {
+      "effective": false,
+      "full_version": "0.1",
+      "name": "Old",
+      "reached": false
+     },
+     "r/n/New/New-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "New",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": null,
+      "found": null,
+      "name": "Old",
+      "version": "0.1"
+     },
+     {
+      "accepted": true,
+      "found": "r/n/New/New-1.0.eb",
+      "name": "New",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "Old-0.1.eb",
+      "found": null,
+      "picks_over_hash_seeds": [
+       null
+      ]
+     },
+     {
+      "file": "New-1.0.eb",
+      "found": "r/n/New/New-1.0.eb",
+      "picks_over_hash_seeds": [
+       "r/n/New/New-1.0.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "r"
+    ]
+   },
+   "files": {
+    "r/__archive__/n/New/New-1.0.eb": "name = 'New'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout archived'\n",
+    "r/__archive__/o/Old/Old-0.1.eb": "name = 'Old'\nversion = '0.1'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Old'\n",
+    "r/n/New/New-1.0.eb": "name = 'New'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout current'\n"
+   },
+   "lookups": [
+    [
+     "Old",
+     "0.1"
+    ],
+    [
+     "New",
+     "1.0"
+    ]
+   ],
+   "name": "archive ignored by default",
+   "named": [
+    "Old-0.1.eb",
+    "New-1.0.eb"
+   ],
+   "roots": [
+    "r"
+   ]
+  },
+  {
+   "archived": true,
+   "easybuild": {
+    "files": {
+     "a/__archive__/n/New/New-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "New",
+      "reached": false
+     },
+     "a/__archive__/o/Old/Old-0.1.eb": {
+      "effective": false,
+      "full_version": "0.1",
+      "name": "Old",
+      "reached": false
+     },
+     "a/__archive__/x/X/X-2.eb": {
+      "effective": true,
+      "full_version": "2",
+      "name": "X",
+      "reached": true
+     },
+     "a/n/New/New-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "New",
+      "reached": true
+     },
+     "b/Old-0.1.eb": {
+      "effective": true,
+      "full_version": "0.1",
+      "name": "Old",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "b/Old-0.1.eb",
+      "name": "Old",
+      "version": "0.1"
+     },
+     {
+      "accepted": true,
+      "found": "a/__archive__/x/X/X-2.eb",
+      "name": "X",
+      "version": "2"
+     },
+     {
+      "accepted": true,
+      "found": "a/n/New/New-1.0.eb",
+      "name": "New",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "X-2.eb",
+      "found": "a/__archive__/x/X/X-2.eb",
+      "picks_over_hash_seeds": [
+       "a/__archive__/x/X/X-2.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "a",
+     "b"
+    ]
+   },
+   "files": {
+    "a/__archive__/n/New/New-1.0.eb": "name = 'New'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout archived'\n",
+    "a/__archive__/o/Old/Old-0.1.eb": "name = 'Old'\nversion = '0.1'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout archived in a'\n",
+    "a/__archive__/x/X/X-2.eb": "name = 'X'\nversion = '2'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout X'\n",
+    "a/n/New/New-1.0.eb": "name = 'New'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout current'\n",
+    "b/Old-0.1.eb": "name = 'Old'\nversion = '0.1'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout plain in b'\n"
+   },
+   "lookups": [
+    [
+     "Old",
+     "0.1"
+    ],
+    [
+     "X",
+     "2"
+    ],
+    [
+     "New",
+     "1.0"
+    ]
+   ],
+   "name": "archive considered after every plain root",
+   "named": [
+    "X-2.eb"
+   ],
+   "roots": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "a/d/Dep/Dep-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": true
+     },
+     "b/Dep/Dep-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": false
+     },
+     "b/e/Extra/Extra-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Extra",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "a/d/Dep/Dep-1.0.eb",
+      "name": "Dep",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "b/e/Extra/Extra-1.0.eb",
+      "name": "Extra",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "Dep-1.0.eb",
+      "found": "a/d/Dep/Dep-1.0.eb",
+      "picks_over_hash_seeds": [
+       "a/d/Dep/Dep-1.0.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "a",
+     "b"
+    ]
+   },
+   "files": {
+    "a/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout root a'\n",
+    "b/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout root b'\n",
+    "b/e/Extra/Extra-1.0.eb": "name = 'Extra'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Extra'\n"
+   },
+   "lookups": [
+    [
+     "Dep",
+     "1.0"
+    ],
+    [
+     "Extra",
+     "1.0"
+    ]
+   ],
+   "name": "effective root order a then b",
+   "named": [
+    "Dep-1.0.eb"
+   ],
+   "roots": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "a/d/Dep/Dep-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": false
+     },
+     "b/Dep/Dep-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "b/Dep/Dep-1.0.eb",
+      "name": "Dep",
+      "version": "1.0"
+     }
+    ],
+    "named": [
+     {
+      "file": "Dep-1.0.eb",
+      "found": "b/Dep/Dep-1.0.eb",
+      "picks_over_hash_seeds": [
+       "b/Dep/Dep-1.0.eb"
+      ]
+     }
+    ],
+    "robot_path": [
+     "b",
+     "a"
+    ]
+   },
+   "files": {
+    "a/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout root a'\n",
+    "b/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout root b'\n"
+   },
+   "lookups": [
+    [
+     "Dep",
+     "1.0"
+    ]
+   ],
+   "name": "effective root order b then a",
+   "named": [
+    "Dep-1.0.eb"
+   ],
+   "roots": [
+    "b",
+    "a"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "r/d/Daisy/Daisy-1-dummy-dummy.eb": {
+      "effective": true,
+      "full_version": "1-dummy-dummy",
+      "name": "Daisy",
+      "reached": true
+     },
+     "r/d/Daisy/Daisy-1.eb": {
+      "effective": false,
+      "full_version": "1-dummy-dummy",
+      "name": "Daisy",
+      "reached": false
+     },
+     "r/l/Lib/Lib-2.0-GCCcore-15.2.0-x.eb": {
+      "effective": true,
+      "full_version": "2.0-GCCcore-15.2.0-x",
+      "name": "Lib",
+      "reached": true
+     },
+     "r/m/Mango/Mango-3.0.eb": {
+      "effective": false,
+      "full_version": "2.0",
+      "name": "Mango",
+      "reached": false
+     },
+     "r/m/Molpro/Molpro-mpp-2024.1.0.linux.eb": {
+      "effective": true,
+      "full_version": "mpp-2024.1.0.linux",
+      "name": "Molpro",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "r/l/Lib/Lib-2.0-GCCcore-15.2.0-x.eb",
+      "name": "Lib",
+      "version": "2.0-GCCcore-15.2.0-x"
+     },
+     {
+      "accepted": true,
+      "found": "r/m/Molpro/Molpro-mpp-2024.1.0.linux.eb",
+      "name": "Molpro",
+      "version": "mpp-2024.1.0.linux"
+     },
+     {
+      "accepted": true,
+      "found": "r/d/Daisy/Daisy-1-dummy-dummy.eb",
+      "name": "Daisy",
+      "version": "1-dummy-dummy"
+     },
+     {
+      "accepted": false,
+      "found": "r/d/Daisy/Daisy-1.eb",
+      "name": "Daisy",
+      "version": "1"
+     },
+     {
+      "accepted": null,
+      "found": null,
+      "name": "Mango",
+      "version": "2.0"
+     },
+     {
+      "accepted": false,
+      "found": "r/m/Mango/Mango-3.0.eb",
+      "name": "Mango",
+      "version": "3.0"
+     }
+    ],
+    "named": [],
+    "robot_path": [
+     "r"
+    ]
+   },
+   "files": {
+    "r/d/Daisy/Daisy-1-dummy-dummy.eb": "name = 'Daisy'\nversion = '1'\ntoolchain = {'name': 'dummy', 'version': 'dummy'}\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout dummy named for its full version'\n",
+    "r/d/Daisy/Daisy-1.eb": "name = 'Daisy'\nversion = '1'\ntoolchain = {'name': 'dummy', 'version': 'dummy'}\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout dummy named as if system'\n",
+    "r/l/Lib/Lib-2.0-GCCcore-15.2.0-x.eb": "name = 'Lib'\nversion = '2.0'\nversionsuffix = '-x'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Lib'\n",
+    "r/m/Mango/Mango-3.0.eb": "name = 'Mango'\nversion = '2.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout file says 3.0, content 2.0'\n",
+    "r/m/Molpro/Molpro-mpp-2024.1.0.linux.eb": "name = 'Molpro'\nversionprefix = 'mpp-'\nversion = '2024.1.0'\nversionsuffix = '.linux'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Molpro'\n"
+   },
+   "lookups": [
+    [
+     "Lib",
+     "2.0-GCCcore-15.2.0-x"
+    ],
+    [
+     "Molpro",
+     "mpp-2024.1.0.linux"
+    ],
+    [
+     "Daisy",
+     "1-dummy-dummy"
+    ],
+    [
+     "Daisy",
+     "1"
+    ],
+    [
+     "Mango",
+     "2.0"
+    ],
+    [
+     "Mango",
+     "3.0"
+    ]
+   ],
+   "name": "toolchains, versionsuffix, versionprefix and misnamed files",
+   "named": [],
+   "roots": [
+    "r"
+   ]
+  },
+  {
+   "archived": false,
+   "easybuild": {
+    "files": {
+     "commit/Root-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Root",
+      "reached": false
+     },
+     "commit/build/x/Nested-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Nested",
+      "reached": false
+     },
+     "commit/d/Dep/Dep-1.0.eb": {
+      "effective": false,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": false
+     },
+     "commit/n/NewDep/NewDep-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "NewDep",
+      "reached": true
+     },
+     "commit/r/Root/Root-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Root",
+      "reached": true
+     },
+     "robot/d/Dep/Dep-1.0.eb": {
+      "effective": true,
+      "full_version": "1.0",
+      "name": "Dep",
+      "reached": true
+     }
+    },
+    "lookups": [
+     {
+      "accepted": true,
+      "found": "robot/d/Dep/Dep-1.0.eb",
+      "name": "Dep",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "commit/n/NewDep/NewDep-1.0.eb",
+      "name": "NewDep",
+      "version": "1.0"
+     },
+     {
+      "accepted": true,
+      "found": "commit/r/Root/Root-1.0.eb",
+      "name": "Root",
+      "version": "1.0"
+     },
+     {
+      "accepted": null,
+      "found": null,
+      "name": "Nested",
+      "version": "1.0"
+     }
+    ],
+    "named": [],
+    "robot_path": [
+     "robot",
+     "commit"
+    ]
+   },
+   "files": {
+    "commit/Root-1.0.eb": "name = 'Root'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout named copy at the top'\n",
+    "commit/build/x/Nested-1.0.eb": "name = 'Nested'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout Nested'\n",
+    "commit/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout commit'\n",
+    "commit/n/NewDep/NewDep-1.0.eb": "name = 'NewDep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout NewDep'\n",
+    "commit/r/Root/Root-1.0.eb": "name = 'Root'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout commit path'\n",
+    "robot/d/Dep/Dep-1.0.eb": "name = 'Dep'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid/'\ndescription = 'robot layout robot'\n"
+   },
+   "lookups": [
+    [
+     "Dep",
+     "1.0"
+    ],
+    [
+     "NewDep",
+     "1.0"
+    ],
+    [
+     "Root",
+     "1.0"
+    ],
+    [
+     "Nested",
+     "1.0"
+    ]
+   ],
+   "name": "from-commit fallback after the robot path",
+   "named": [],
+   "roots": [
+    "robot",
+    "commit"
+   ]
+  }
+ ]
+}

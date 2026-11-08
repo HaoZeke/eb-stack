@@ -448,6 +448,7 @@ mod tests {
                 version: "system".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "App.eb".into(),
             dependencies: vec![DepReq {
                 name: "zlib".into(),

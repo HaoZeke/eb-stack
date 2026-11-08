@@ -71,6 +71,10 @@ pub struct ResolvedEasyconfig {
     #[serde(default)]
     /// Versionsuffix, when the easyconfig sets one.
     pub versionsuffix: Option<String>,
+    /// EasyBuild `versionprefix` after the common parse boundary (evaluated
+    /// env value, then templates). `None` when unset or empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versionprefix: Option<String>,
     /// Toolchain this recipe builds against.
     pub toolchain: Toolchain,
     #[serde(default)]
@@ -131,6 +135,9 @@ pub struct ResolvedEasyconfig {
     /// easyblock is called.
     #[serde(default)]
     pub has_components: bool,
+    /// Every parsed component source, patch, and postinstall patch carries a checksum.
+    #[serde(default)]
+    pub component_checksums_complete: bool,
 }
 
 impl ResolvedEasyconfig {
@@ -141,6 +148,7 @@ impl ResolvedEasyconfig {
             version: self.version.clone(),
             toolchain: self.toolchain.clone(),
             versionsuffix: self.versionsuffix.clone(),
+            versionprefix: self.versionprefix.clone(),
             easyconfig_path: self.easyconfig_path.clone(),
             dependencies: self.dependencies.iter().map(resolved_dep_to_req).collect(),
             builddependencies: self
@@ -2750,6 +2758,15 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
                 .map_err(|e| ParseError::Parse("<string>".into(), e))?,
         ),
     };
+    // Same boundary as `versionsuffix`: read the evaluated env value (so
+    // `local_p = 'v'; versionprefix = local_p` resolves), then template it.
+    let versionprefix_raw = match parser.env.get("versionprefix") {
+        None => None,
+        Some(v) => Some(
+            v.expect_str("versionprefix")
+                .map_err(|e| ParseError::Parse("<string>".into(), e))?,
+        ),
+    };
     let toolchain_val = parser.env.get("toolchain").ok_or_else(|| {
         ParseError::Parse(
             "<string>".into(),
@@ -2771,6 +2788,7 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
     let name = apply_templates_str(&name, &templates);
     let version = apply_templates_str(&version, &templates);
     let versionsuffix = versionsuffix_raw.map(|s| apply_templates_str(&s, &templates));
+    let versionprefix = versionprefix_raw.map(|s| apply_templates_str(&s, &templates));
     // Rebuild templates if name/version changed (rare for name/version themselves).
     let mut templates = build_templates(
         &name,
@@ -2795,13 +2813,15 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
     // result is a build order that silently omits what a recipe needs. A
     // recipe that assigns one of these and whose value did not survive parsing
     // cannot be planned with, so it is refused here rather than half-read.
-    // `versionsuffix` belongs to the same rule: it is part of the module name,
-    // so a suffix that was assigned and not read gives the recipe a different
-    // identity than the one it will install under.
+    // `versionsuffix` and `versionprefix` belong to the same rule: they are
+    // part of the module name, so a prefix/suffix that was assigned and not
+    // read gives the recipe a different identity than the one it will install
+    // under.
     for field in [
         "dependencies",
         "builddependencies",
         "versionsuffix",
+        "versionprefix",
         "sources",
     ] {
         if assigns_at_top_level(src, field) && !parser.env.contains_key(field) {
@@ -2831,29 +2851,59 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
     // the dependency list has to be read before those can be resolved. Only a
     // second pass, and only when the dependencies define something.
     let dep_tv = dependency_version_templates(&[&dependencies, &builddependencies]);
-    let (mut templates, versionsuffix, dependencies, builddependencies) = if dep_tv.is_empty() {
-        (templates, versionsuffix, dependencies, builddependencies)
-    } else {
-        let mut templates = templates;
-        templates.extend(dep_tv);
-        let versionsuffix = versionsuffix.map(|s| apply_templates_str(&s, &templates));
-        let redo = |val: Option<&Value>| -> Result<Vec<ResolvedDep>, ParseError> {
-            let applied = val.map(|v| apply_templates_value(v, &templates));
-            value_list_as_slice(applied.as_ref())
-                .map_err(|e| ParseError::Parse("<string>".into(), e))?
-                .iter()
-                .map(|entry| value_to_dep(entry, arch))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| ParseError::Parse("<string>".into(), e))
+    let (mut templates, versionsuffix, versionprefix, dependencies, builddependencies) =
+        if dep_tv.is_empty() {
+            (
+                templates,
+                versionsuffix,
+                versionprefix,
+                dependencies,
+                builddependencies,
+            )
+        } else {
+            let mut templates = templates;
+            templates.extend(dep_tv);
+            let versionsuffix = versionsuffix.map(|s| apply_templates_str(&s, &templates));
+            let versionprefix = versionprefix.map(|s| apply_templates_str(&s, &templates));
+            let redo = |val: Option<&Value>| -> Result<Vec<ResolvedDep>, ParseError> {
+                let applied = val.map(|v| apply_templates_value(v, &templates));
+                value_list_as_slice(applied.as_ref())
+                    .map_err(|e| ParseError::Parse("<string>".into(), e))?
+                    .iter()
+                    .map(|entry| value_to_dep(entry, arch))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| ParseError::Parse("<string>".into(), e))
+            };
+            let dependencies = redo(parser.env.get("dependencies"))?;
+            let builddependencies = redo(parser.env.get("builddependencies"))?;
+            (
+                templates,
+                versionsuffix,
+                versionprefix,
+                dependencies,
+                builddependencies,
+            )
         };
-        let dependencies = redo(parser.env.get("dependencies"))?;
-        let builddependencies = redo(parser.env.get("builddependencies"))?;
-        (templates, versionsuffix, dependencies, builddependencies)
-    };
     // After both build_templates calls. Each one installs the namelower
     // fallback, so an earlier override would be discarded. Dependency
     // version templates only extend the map; they do not reset accounts.
     overlay_config_templates(&mut templates, &parser.env);
+
+    // Identity fields that still hold `%(…)s` after the final template pass
+    // cannot be planned with: refuse rather than silently drop the prefix.
+    let versionprefix = match versionprefix {
+        Some(prefix) if prefix.contains("%(") => {
+            return Err(ParseError::Parse(
+                "<string>".into(),
+                format!(
+                    "versionprefix {prefix:?} keeps a template eb-stack does not resolve, \
+                     so the install identity cannot be told"
+                ),
+            ));
+        }
+        Some(prefix) if prefix.is_empty() => None,
+        other => other,
+    };
 
     // Extensions carry `%(pyver)s` too, so they use the final template set.
     let exts_val = parser
@@ -2883,6 +2933,11 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
             .skipped
             .iter()
             .any(|stmt| stmt.text.trim_start().starts_with("components"));
+    let component_checksums_complete = component_checksums_complete(&parser.env, &templates)
+        && !parser.skipped.iter().any(|stmt| {
+            let text = stmt.text.trim_start();
+            text.starts_with("components") || text.starts_with("default_component_specs")
+        });
     let local_files = local_files_from(
         src,
         &parser.env,
@@ -2902,6 +2957,7 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
         name,
         version,
         versionsuffix,
+        versionprefix,
         toolchain,
         dependencies,
         builddependencies,
@@ -2919,6 +2975,7 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
         checksum_entry_keys,
         checksums_by_filename,
         has_components,
+        component_checksums_complete,
     };
     let mut sites = easyblock_sites_from(&parser.env, &templates);
     recover_named_easyblocks(&mut sites, &parser.skipped);
@@ -3786,7 +3843,12 @@ fn candidate_matches_dep_core(
     if c.name != dep.name {
         return false;
     }
-    if !matches_req(&c.version, &version_field_to_req(&dep.version)) {
+    // Match the EasyBuild install stem (versionprefix + bare version), so a
+    // dep of mpp-1.0 selects the prefixed Mol and a dep of 1.0 selects plain.
+    if !matches_req(
+        &c.install_version_stem(),
+        &version_field_to_req(&dep.version),
+    ) {
         return false;
     }
     let want_vs = dep.versionsuffix.as_deref().unwrap_or("");
@@ -3920,6 +3982,67 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
     }
 }
 
+fn component_checksums_complete(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> bool {
+    let Some(raw) = env.get("components") else {
+        return false;
+    };
+    let Ok(items) = value_list_as_slice(Some(raw)) else {
+        return false;
+    };
+    let entries = sub_entries(Some(raw), templates);
+    if items.is_empty() || entries.len() != items.len() {
+        return false;
+    }
+    let defaults = match env.get("default_component_specs") {
+        None => Vec::new(),
+        Some(Value::Dict(values)) => values.clone(),
+        _ => return false,
+    };
+    entries.into_iter().all(|(_, _, options)| {
+        let mut fields: HashMap<String, Value> = defaults.iter().cloned().collect();
+        match options {
+            None => {}
+            Some(Value::Dict(values)) => fields.extend(values),
+            _ => return false,
+        }
+        let count = |key| {
+            value_list_as_slice(fields.get(key))
+                .ok()
+                .map(<[Value]>::len)
+        };
+        // EasyBuild's check_checksums_for counts sources, then patches, then
+        // postinstallpatches. A component dict may spell that last list
+        // post_install_patches, and only when postinstallpatches is absent.
+        let postinstall_key = if fields.contains_key("postinstallpatches") {
+            "postinstallpatches"
+        } else {
+            "post_install_patches"
+        };
+        let (Some(sources), Some(patches), Some(postinstall)) =
+            (count("sources"), count("patches"), count(postinstall_key))
+        else {
+            return false;
+        };
+        let expected = sources + patches + postinstall;
+        let Ok(checksums) = value_list_as_slice(fields.get("checksums")) else {
+            return false;
+        };
+        expected > 0
+            && checksums.len() == expected
+            && checksums.iter().all(|entry| {
+                let tokens = checksum_strings_from_value(entry);
+                !tokens.is_empty()
+                    && tokens.iter().all(|token| {
+                        matches!(token.len(), 32 | 40 | 64 | 128)
+                            && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+            })
+    })
+}
+
 /// Packaging gate: checksums present, moduleclass set, and optional required
 /// configopts substrings (e.g. `-Dwith_tests=false`).
 ///
@@ -3942,7 +4065,11 @@ pub fn packaging_gate(
             recipe.easyblock.as_deref(),
             Some("PythonBundle" | "RPackage" | "Bundle")
         ) && !recipe.exts_list.is_empty();
-        if !extension_bundle {
+        let component_bundle = recipe.easyblock.as_deref() == Some("Bundle")
+            && recipe.sources_count == 0
+            && recipe.patch_names.is_empty()
+            && recipe.component_checksums_complete;
+        if !extension_bundle && !component_bundle {
             errs.push("missing checksums".into());
         }
     }
@@ -3967,29 +4094,53 @@ pub fn easyconfig_letter_dir(name: &str) -> String {
         .unwrap_or_else(|| "x".into())
 }
 
-/// Conventional basename: `Name-version-Toolchain-tcver.eb` (+ versionsuffix).
+/// Conventional basename: `Name-{versionprefix}{version}-Toolchain-tcver.eb`
+/// (+ versionsuffix). `version` is the bare recipe version; pass the
+/// candidate's `versionprefix` separately so callers never fold the install
+/// stem into `version`.
 pub fn easyconfig_basename(
     name: &str,
     version: &str,
     tc: &Toolchain,
     versionsuffix: Option<&str>,
 ) -> String {
+    easyconfig_basename_with_prefix(name, "", version, tc, versionsuffix)
+}
+
+/// Like [`easyconfig_basename`], with an EasyBuild `versionprefix`.
+///
+/// Toolchain spelling matches EasyBuild 5.4.2 module/filename identity: only
+/// the exact name `system` omits the toolchain segment (`dummy` / `System`
+/// keep theirs).
+pub fn easyconfig_basename_with_prefix(
+    name: &str,
+    versionprefix: &str,
+    version: &str,
+    tc: &Toolchain,
+    versionsuffix: Option<&str>,
+) -> String {
+    let stem =
+        crate::domain::install_version_stem(Some(versionprefix).filter(|p| !p.is_empty()), version);
     let vs = versionsuffix.unwrap_or("");
-    if is_system_toolchain(tc) {
-        format!("{name}-{version}{vs}.eb")
+    if crate::robot_lookup::is_module_system_toolchain(tc) {
+        format!("{name}-{stem}{vs}.eb")
     } else {
-        format!("{name}-{version}-{0}-{1}{vs}.eb", tc.name, tc.version)
+        format!("{name}-{stem}-{0}-{1}{vs}.eb", tc.name, tc.version)
     }
 }
 
+#[allow(dead_code)] // retained for recipe-level SYSTEM spelling checks
 fn is_system_toolchain(tc: &Toolchain) -> bool {
+    // Recipe toolchains still treat SYSTEM case-insensitively when reading;
+    // module/filename routes use [`crate::robot_lookup::is_module_system_toolchain`].
     tc.name.eq_ignore_ascii_case("system")
 }
 
-fn candidate_identity_key(c: &Candidate) -> (String, String, String, String) {
+fn candidate_identity_key(c: &Candidate) -> (String, String, String, String, String) {
     (
         c.name.clone(),
         c.version.clone(),
+        c.versionprefix.clone().unwrap_or_default(),
         c.toolchain.label(),
         c.versionsuffix.clone().unwrap_or_default(),
     )
@@ -4000,19 +4151,21 @@ fn sort_candidates(cands: &mut [Candidate]) {
         a.name
             .cmp(&b.name)
             .then_with(|| a.version.cmp(&b.version))
+            .then_with(|| a.versionprefix.cmp(&b.versionprefix))
             .then_with(|| a.toolchain.version.cmp(&b.toolchain.version))
             .then_with(|| a.versionsuffix.cmp(&b.versionsuffix))
     });
 }
 
 /// Merge candidate layers with **later-layer precedence**: when two candidates
-/// share the same name + version + toolchain + versionsuffix, the later layer
-/// wins (overlay). Distinct installable variants remain separate candidates.
+/// share the same name + version + versionprefix + toolchain + versionsuffix,
+/// the later layer wins (overlay). Distinct installable variants remain
+/// separate candidates.
 ///
 /// Used for site overlays on top of an upstream easyconfigs tree.
 pub fn merge_candidates_with_precedence(layers: &[Vec<Candidate>]) -> Vec<Candidate> {
     use std::collections::BTreeMap;
-    let mut map: BTreeMap<(String, String, String, String), Candidate> = BTreeMap::new();
+    let mut map: BTreeMap<(String, String, String, String, String), Candidate> = BTreeMap::new();
     for layer in layers {
         for c in layer {
             map.insert(candidate_identity_key(c), c.clone());
@@ -4259,7 +4412,7 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
     Ok(())
 }
 
-/// `{class}[{toolchain}] Name vX`, then ` w/ ` and the resolved versionsuffix.
+/// `{class}[{toolchain}] Name vX`, then `w/` surrounded by spaces and the resolved versionsuffix.
 pub fn pr_title(ecs: &[ResolvedEasyconfig]) -> String {
     fn mode(items: &[String]) -> String {
         let mut ranked: Vec<(usize, &str)> = Vec::new();
@@ -4457,6 +4610,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: version.into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: String::new(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -4933,6 +5087,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: version.into(),
             toolchain: system.clone(),
             versionsuffix: suffix.map(str::to_string),
+            versionprefix: None,
             easyconfig_path: format!("{name}-{version}{}.eb", suffix.unwrap_or("")),
             dependencies: deps,
             builddependencies: vec![],
@@ -4964,6 +5119,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Root-1.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![DepReq {
@@ -4981,6 +5137,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Tool-1.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -5106,6 +5263,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             name: "App".into(),
             version: "1.0".into(),
             versionsuffix: None,
+            versionprefix: None,
             toolchain: Toolchain {
                 name: "foss".into(),
                 version: "2025b".into(),
@@ -5146,6 +5304,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
             has_components: false,
+            component_checksums_complete: false,
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -5755,6 +5914,7 @@ builddependencies = [
                 version: "1.0".into(),
                 toolchain: tc.clone(),
                 versionsuffix: None,
+                versionprefix: None,
                 easyconfig_path: "upstream/Lib-1.0.eb".into(),
                 dependencies: vec![],
                 builddependencies: vec![],
@@ -5767,6 +5927,7 @@ builddependencies = [
                 version: "2.0".into(),
                 toolchain: tc.clone(),
                 versionsuffix: None,
+                versionprefix: None,
                 easyconfig_path: "upstream/Keep-2.0.eb".into(),
                 dependencies: vec![],
                 builddependencies: vec![],
@@ -5780,6 +5941,7 @@ builddependencies = [
             version: "1.0".into(),
             toolchain: tc.clone(),
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "overlay/Lib-1.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -5810,6 +5972,7 @@ builddependencies = [
             version: "2.9.1".into(),
             toolchain: tc.clone(),
             versionsuffix: suffix.map(str::to_string),
+            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
@@ -5837,6 +6000,7 @@ builddependencies = [
             name: "X".into(),
             version: "1.0".into(),
             versionsuffix: None,
+            versionprefix: None,
             toolchain: Toolchain {
                 name: "gfbf".into(),
                 version: "2024a".into(),
@@ -5857,6 +6021,7 @@ builddependencies = [
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
             has_components: false,
+            component_checksums_complete: false,
         }
     }
 
@@ -5980,6 +6145,7 @@ moduleclass = 'tools'
                 version: "13.3.0".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "quill.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6032,6 +6198,7 @@ moduleclass = 'tools'
                 version: "14.3.0".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "CapnProto-1.4.0-GCCcore-14.3.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6047,6 +6214,7 @@ moduleclass = 'tools'
                 version: "2024a".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "xtb.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6063,6 +6231,7 @@ moduleclass = 'tools'
                 version: String::new(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "foss-2026.1.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6148,6 +6317,7 @@ moduleclass = 'tools'
                 version: String::new(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "BuildTool-3.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6190,6 +6360,7 @@ moduleclass = 'tools'
                 version: "2022a".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Wannier90-3.1.0-foss-2022a.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6244,6 +6415,7 @@ moduleclass = 'tools'
                 version: "13.3.0".into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: "Python.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
@@ -6342,6 +6514,7 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
             version: ver.into(),
             toolchain: t,
             versionsuffix: None,
+            versionprefix: None,
             easyconfig_path: String::new(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
@@ -6443,6 +6616,7 @@ mod hierarchy_universe_tests {
                 version: tc_version.into(),
             },
             versionsuffix: None,
+            versionprefix: None,
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
             easyconfig_path: format!("x/{name}/{name}-{version}.eb"),
