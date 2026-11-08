@@ -554,8 +554,9 @@ fn run_check_contrib(
 /// The `eb` that runs `--check-contrib`: the explicit path, else
 /// `EB_STACK_EB` (a path, or `none` to skip the check), else `eb` on PATH.
 /// `none` makes a lint deterministic on a host whose `eb` would judge a
-/// recipe the local checks accept, such as a test fixture with no
-/// homepage; the report says the check was skipped and why.
+/// recipe the local checks accept (EasyBuild 5.4.1 refuses a fixture with
+/// no toolchain, homepage or description); the report says the check was
+/// skipped and why.
 fn resolve_eb(explicit: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = explicit {
         if path.is_file() {

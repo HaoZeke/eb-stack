@@ -19,9 +19,10 @@ All notable changes to this project are documented here.
 - `EB_STACK_EB` names the `eb` that `recipe lint` runs for
   `--check-contrib`, and `EB_STACK_EB=none` skips that check with the
   report saying so. A host whose `eb` judges a synthetic recipe that the
-  local checks accept (a fixture with no homepage under EasyBuild 5.4.1)
-  made the lint tests and the SBOM page drift check fail there; the
-  default CI, with no `eb`, never saw it.
+  local checks accept (EasyBuild 5.4.1 refuses the lint fixtures with
+  "mandatory parameters not provided in pyheader: toolchain, homepage,
+  description") made the lint tests and the SBOM page drift check fail
+  there; the default CI, with no `eb`, never saw it.
 - `stack shard --lift-cpu-prerequisites` (opt-in) writes CPU-only
   prerequisites to `cpu-prerequisites.list` (CPU prefix) while shared
   accelerator packages stay in `prelude.list`. Classification matches
