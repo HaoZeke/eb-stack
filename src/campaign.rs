@@ -1695,98 +1695,6 @@ fn bundle_easyblocks(bundle: &Path) -> Vec<PathBuf> {
     out
 }
 
-#[cfg(test)]
-mod campaign_lock_tests {
-    use super::*;
-
-    fn local_host() -> String {
-        std::env::var("HOSTNAME")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                std::fs::read_to_string("/etc/hostname")
-                    .expect("host identity")
-                    .trim()
-                    .to_string()
-            })
-    }
-
-    #[test]
-    fn campaign_lock_records_process_identity() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let state = temp.path().join("campaign.json");
-        let lock_path = temp.path().join("campaign.json.lock");
-
-        let lock = CampaignLock::acquire(&state).expect("campaign lock");
-        let record: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&lock_path).expect("read campaign lock"))
-                .expect("lock metadata JSON");
-
-        assert_eq!(record["schema_version"], 1);
-        assert_eq!(record["host"], local_host());
-        assert_eq!(record["pid"], std::process::id());
-        assert!(record["process_start_ticks"].as_u64().is_some());
-        drop(lock);
-        assert!(!lock_path.exists());
-        assert!(!temp.path().join("campaign.json.lock.guard").exists());
-    }
-
-    #[test]
-    fn campaign_lock_reclaims_dead_same_host_owner() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let state = temp.path().join("campaign.json");
-        let lock_path = temp.path().join("campaign.json.lock");
-        std::fs::write(
-            &lock_path,
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": 1,
-                "host": local_host(),
-                "pid": u32::MAX,
-                "process_start_ticks": 1,
-            }))
-            .expect("lock JSON"),
-        )
-        .expect("stale lock");
-
-        let lock = CampaignLock::acquire(&state).expect("reclaimed campaign lock");
-        let record: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&lock_path).expect("read reclaimed lock"),
-        )
-        .expect("reclaimed lock metadata JSON");
-        assert_eq!(record["pid"], std::process::id());
-        drop(lock);
-        assert!(!lock_path.exists());
-        assert!(!temp.path().join("campaign.json.lock.guard").exists());
-    }
-
-    #[test]
-    fn campaign_lock_keeps_live_owner_exclusive() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let state = temp.path().join("campaign.json");
-        let lock = CampaignLock::acquire(&state).expect("campaign lock");
-
-        assert!(matches!(
-            CampaignLock::acquire(&state),
-            Err(CampaignError::Busy(_))
-        ));
-
-        drop(lock);
-        assert!(!temp.path().join("campaign.json.lock").exists());
-        assert!(!temp.path().join("campaign.json.lock.guard").exists());
-    }
-
-    #[test]
-    fn claim_on_a_missing_state_removes_the_lock_guard() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let state = temp.path().join("nope.json");
-        let error = claim_finding(&state, "FINDING", "worker").expect_err("missing state");
-        let text = error.to_string();
-        assert!(text.contains("nope.json"), "{text}");
-        assert!(!std::path::PathBuf::from(format!("{}.lock", state.display())).exists());
-        assert!(!std::path::PathBuf::from(format!("{}.lock.guard", state.display())).exists());
-    }
-}
-
 /// Identical causal signatures this many times means the retry is stuck.
 pub const MAX_ATTEMPTS_PER_SIGNATURE: u32 = 2;
 
@@ -1901,16 +1809,6 @@ fn is_generic_failure_footer(line: &str) -> bool {
         || stripped.starts_with("installation of ") && stripped.contains(" failed")
         || stripped.starts_with("installation ended unsuccessfully")
         || stripped.starts_with("shell command failed")
-}
-
-fn has_compiler_error_line(text: &str) -> bool {
-    text.lines().any(|line| {
-        if is_generic_failure_footer(line) {
-            return false;
-        }
-        let line = line.to_ascii_lowercase();
-        line.contains("error:") || line.contains("compilation terminated")
-    })
 }
 
 fn cmake_error_signature(lines: &[&str], index: usize) -> String {
@@ -2059,4 +1957,96 @@ fn lock_identity(locks: &[PathBuf]) -> Option<String> {
             .map(|byte| format!("{byte:02x}"))
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod campaign_lock_tests {
+    use super::*;
+
+    fn local_host() -> String {
+        std::env::var("HOSTNAME")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                std::fs::read_to_string("/etc/hostname")
+                    .expect("host identity")
+                    .trim()
+                    .to_string()
+            })
+    }
+
+    #[test]
+    fn campaign_lock_records_process_identity() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("campaign.json");
+        let lock_path = temp.path().join("campaign.json.lock");
+
+        let lock = CampaignLock::acquire(&state).expect("campaign lock");
+        let record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&lock_path).expect("read campaign lock"))
+                .expect("lock metadata JSON");
+
+        assert_eq!(record["schema_version"], 1);
+        assert_eq!(record["host"], local_host());
+        assert_eq!(record["pid"], std::process::id());
+        assert!(record["process_start_ticks"].as_u64().is_some());
+        drop(lock);
+        assert!(!lock_path.exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
+    }
+
+    #[test]
+    fn campaign_lock_reclaims_dead_same_host_owner() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("campaign.json");
+        let lock_path = temp.path().join("campaign.json.lock");
+        std::fs::write(
+            &lock_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "host": local_host(),
+                "pid": u32::MAX,
+                "process_start_ticks": 1,
+            }))
+            .expect("lock JSON"),
+        )
+        .expect("stale lock");
+
+        let lock = CampaignLock::acquire(&state).expect("reclaimed campaign lock");
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&lock_path).expect("read reclaimed lock"),
+        )
+        .expect("reclaimed lock metadata JSON");
+        assert_eq!(record["pid"], std::process::id());
+        drop(lock);
+        assert!(!lock_path.exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
+    }
+
+    #[test]
+    fn campaign_lock_keeps_live_owner_exclusive() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("campaign.json");
+        let lock = CampaignLock::acquire(&state).expect("campaign lock");
+
+        assert!(matches!(
+            CampaignLock::acquire(&state),
+            Err(CampaignError::Busy(_))
+        ));
+
+        drop(lock);
+        assert!(!temp.path().join("campaign.json.lock").exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
+    }
+
+    #[test]
+    fn claim_on_a_missing_state_removes_the_lock_guard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("nope.json");
+        let error = claim_finding(&state, "FINDING", "worker").expect_err("missing state");
+        let text = error.to_string();
+        assert!(text.contains("nope.json"), "{text}");
+        assert!(!std::path::PathBuf::from(format!("{}.lock", state.display())).exists());
+        assert!(!std::path::PathBuf::from(format!("{}.lock.guard", state.display())).exists());
+    }
 }
