@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- `stack admit` follows GPFS on which inode limit governs: the soft limit
+  below it, the hard limit while the grace period runs (`inodes_grace` in
+  the quota document, a remaining time), the soft limit again once the
+  grace has expired. The decision reports `grace` and `soft_exceeded`.
 - Rust 1.90 is the minimum. `ordered-float` 5.5.1 sets `rust-version`
   1.90. `uuid` 1.29.0 sets 1.89.0. The CI minimum job builds every
   target with that compiler.
