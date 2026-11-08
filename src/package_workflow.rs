@@ -2442,7 +2442,12 @@ pub fn write_package_bundle_into(
         for recipe in &bundle.easyconfigs {
             validate_path_segment(&recipe.filename, "easyconfig filename")?;
             let path = recipe_directory.join(&recipe.filename);
-            claim_overlay_path(recipe_bundle_root, &path, recipe.text.as_bytes(), claimed_paths)?;
+            claim_overlay_path(
+                recipe_bundle_root,
+                &path,
+                recipe.text.as_bytes(),
+                claimed_paths,
+            )?;
             std::fs::write(&path, &recipe.text)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             easyconfigs.push(path);

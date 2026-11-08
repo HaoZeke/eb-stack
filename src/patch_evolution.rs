@@ -500,8 +500,6 @@ mod tests {
     }
 
     fn candidate(name: &str, version: &str, toolchain: (&str, &str), path: &str) -> Candidate {
-        versionprefix: None,
-        easyblock: None,
         Candidate {
             versionprefix: None,
             easyblock: None,

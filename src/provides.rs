@@ -12,8 +12,8 @@
 //! depend on the parent bundle at its exact version.
 
 use crate::domain::{Candidate, DepReq, ExtEntry};
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Marker embedded in `easyconfig_path` for a virtual extension provide.
 pub const EXT_PROVIDE_MARKER: &str = "#ext:";
