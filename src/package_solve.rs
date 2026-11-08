@@ -350,7 +350,7 @@ pub fn solve_package_profile_with_hierarchy(
     let result = solve_curated_with_stack_policy(&universe, &policy, None, stack_policy)
         .map_err(ProfileSolveError::Resolve)?;
 
-    let mut dependencies = Vec::new();
+    let mut dependencies: Vec<LockedDependency> = Vec::new();
     let mut seen_providers = HashSet::new();
     for (name, build) in direct_roles {
         let selected = result
