@@ -33,6 +33,7 @@ fn admit(
         reservations.to_str().unwrap(),
         "--ts",
         "2026-11-07T12:00:00Z",
+        "--drop-stale",
     ];
     if let Some(live) = live {
         args.push("--live-jobs");
@@ -73,7 +74,7 @@ fn a_lane_is_admitted_then_the_next_is_refused_and_a_stale_reservation_is_droppe
     assert_eq!(first["admitted"], true, "{first}");
     assert_eq!(first["reserved"], 0);
     assert_eq!(first["headroom"], 349_000);
-    assert_eq!(first["dropped"], serde_json::json!(["4390"]));
+    assert_eq!(first["stale"], serde_json::json!(["4390"]));
     assert!(!reservations.join("4390.json").exists());
     let written: Value =
         serde_json::from_str(&std::fs::read_to_string(reservations.join("4401.json")).unwrap())

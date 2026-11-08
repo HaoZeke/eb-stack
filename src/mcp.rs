@@ -492,12 +492,16 @@ fn tool_catalog() -> Vec<Value> {
             "eb_stack_admit",
             "Decide whether one build job fits under the scratch inode quota, as `stack admit` does. quota_json is a file with inodes_available, or inodes_soft and inodes_used. The job is admitted when the available inodes minus the reservations of the jobs in live_jobs cover footprint plus margin (100000); on admit its reservation <job>.json is written under reservations. A reservation of a job not in live_jobs is dropped; the job's own earlier reservation is never counted. A refusal is a result with admitted false, not a tool error.",
             &[
-                ("quota_json", "string"),
                 ("footprint", "integer"),
                 ("job", "string"),
                 ("reservations", "string"),
             ],
             &[
+                ("quota_json", "string"),
+                ("quota_cmd", "string"),
+                ("lock", "string"),
+                ("unknown_reserve", "integer"),
+                ("drop_stale", "boolean"),
                 ("margin", "integer"),
                 ("live_jobs", "array"),
                 ("ts", "string"),
@@ -3295,7 +3299,11 @@ fn stack_admit_tool(arguments: &Value) -> Result<Value, String> {
         Some(_) => Some(string_array(arguments, "live_jobs")?),
     };
     let request = crate::inode_budget::AdmitRequest {
-        quota_json: required_path(arguments, "quota_json")?,
+        quota_json: optional_path(arguments, "quota_json"),
+        quota_cmd: optional_string(arguments, "quota_cmd"),
+        lock: optional_path(arguments, "lock"),
+        unknown_reserve: optional_u64(arguments, "unknown_reserve")?.unwrap_or(0),
+        drop_stale: optional_bool(arguments, "drop_stale"),
         footprint: optional_u64(arguments, "footprint")?.ok_or("footprint is required")?,
         job: required_string(arguments, "job")?,
         reservations: required_path(arguments, "reservations")?,

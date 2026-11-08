@@ -1252,8 +1252,23 @@ struct FootprintsArgs {
 struct AdmitArgs {
     /// The quota as JSON: `inodes_available`, or `inodes_soft` and
     /// `inodes_used` (and `inodes_hard`). `-` reads stdin.
+    #[arg(long, required_unless_present = "quota_cmd", conflicts_with = "quota_cmd")]
+    quota_json: Option<PathBuf>,
+    /// A shell command that prints the quota JSON, run under `--lock` so the
+    /// observation and the decision are one step; a failure refuses the job.
     #[arg(long)]
-    quota_json: PathBuf,
+    quota_cmd: Option<String>,
+    /// A lock file held (flock) from the quota observation to the
+    /// reservation write, shared by every controller of the same quota.
+    #[arg(long)]
+    lock: Option<PathBuf>,
+    /// Inodes counted for each live job that has no reservation.
+    #[arg(long, default_value_t = 0)]
+    unknown_reserve: u64,
+    /// Remove the files of stale reservations; otherwise they are kept and
+    /// ignored.
+    #[arg(long)]
+    drop_stale: bool,
     /// This job's inode footprint, `inode_footprint` of its shard in `plan.json`.
     #[arg(long)]
     footprint: u64,
@@ -1266,9 +1281,10 @@ struct AdmitArgs {
     /// Inodes kept free under the quota.
     #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_MARGIN)]
     margin: u64,
-    /// Jobs still running, comma-separated, as the scheduler lists them. A
-    /// reservation of a job not listed is stale and dropped. Absent, every
-    /// other reservation counts.
+    /// Jobs still running, comma-separated, as the scheduler lists them
+    /// (`squeue --all`, hidden partitions included). A reservation of a job
+    /// not listed is stale and ignored. Absent, every other reservation
+    /// counts.
     #[arg(long, value_delimiter = ',', num_args = 0..)]
     live_jobs: Option<Vec<String>>,
     /// RFC 3339 time written into the reservation. Absent is now.
@@ -3547,6 +3563,10 @@ fn run_stack(command: StackCommand) -> Result<()> {
         StackCommand::Admit(args) => {
             let AdmitArgs {
                 quota_json,
+                quota_cmd,
+                lock,
+                unknown_reserve,
+                drop_stale,
                 footprint,
                 job,
                 reservations,
@@ -3557,6 +3577,10 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let report =
                 eb_stack::inode_budget::run_stack_admit(&eb_stack::inode_budget::AdmitRequest {
                     quota_json,
+                    quota_cmd,
+                    lock,
+                    unknown_reserve,
+                    drop_stale,
                     footprint,
                     job,
                     reservations,

@@ -28,7 +28,7 @@
 //!   minus what the jobs that are still running have reserved, must cover
 //!   this job's footprint and the margin. The reservation is a file per
 //!   job under one directory; a reservation whose job the caller does not
-//!   list as live is stale and dropped.
+//!   list as live is stale: ignored, and removed only on request.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -693,14 +693,20 @@ pub struct Decision {
     pub headroom: i64,
     /// Reservations counted, by job.
     pub counted: Vec<Reservation>,
-    /// Reservations of jobs not in the live list, dropped.
-    pub dropped: Vec<Reservation>,
+    /// Reservations of jobs not in the live list: stale, not counted.
+    pub stale: Vec<Reservation>,
+    /// Live jobs with no reservation, this job left out.
+    pub unknown: Vec<String>,
+    /// Inodes counted for the unknown jobs.
+    pub unknown_reserved: u64,
 }
 
 /// Decide admission. `live` is the jobs still running, as the caller's
 /// scheduler lists them; absent, every reservation but this job's own is
-/// counted and none is dropped. This job's own earlier reservation is never
-/// counted, so a job that asks again is judged on the others alone.
+/// counted and none is stale. A live job with no reservation is an unknown
+/// writer and counts `unknown_reserve` inodes. This job's own earlier
+/// reservation is never counted, so a job that asks again is judged on the
+/// others alone.
 #[must_use]
 pub fn decide(
     available: u64,
@@ -709,21 +715,35 @@ pub fn decide(
     live: Option<&[String]>,
     footprint: u64,
     margin: u64,
+    unknown_reserve: u64,
 ) -> Decision {
     let mut counted = Vec::new();
-    let mut dropped = Vec::new();
+    let mut stale = Vec::new();
     for reservation in reservations {
         if reservation.job == job {
             continue;
         }
         match live {
             Some(live) if !live.iter().any(|id| id == &reservation.job) => {
-                dropped.push(reservation.clone());
+                stale.push(reservation.clone());
             }
             _ => counted.push(reservation.clone()),
         }
     }
-    let reserved = counted.iter().map(|r| r.footprint).sum::<u64>();
+    let unknown: Vec<String> = live
+        .map(|live| {
+            live.iter()
+                .filter(|id| id.as_str() != job && !reservations.iter().any(|r| &r.job == *id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let unknown_reserved = unknown_reserve.saturating_mul(unknown.len() as u64);
+    let reserved = counted
+        .iter()
+        .map(|r| r.footprint)
+        .sum::<u64>()
+        .saturating_add(unknown_reserved);
     let headroom =
         i128::from(available) - i128::from(reserved) - i128::from(footprint) - i128::from(margin);
     let headroom =
@@ -736,14 +756,27 @@ pub fn decide(
         margin,
         headroom,
         counted,
-        dropped,
+        stale,
+        unknown,
+        unknown_reserved,
     }
 }
 
 /// Arguments for `stack admit`.
 pub struct AdmitRequest {
-    /// The quota document, or `-` for stdin.
-    pub quota_json: PathBuf,
+    /// The quota document, or `-` for stdin; absent with `quota_cmd`.
+    pub quota_json: Option<PathBuf>,
+    /// A shell command whose standard output is the quota document, run
+    /// under the lock so the observation and the decision are one step. A
+    /// command that fails refuses the job instead of admitting it.
+    pub quota_cmd: Option<String>,
+    /// A lock file held exclusively (flock) from the quota observation to
+    /// the reservation write, so two controllers cannot both admit.
+    pub lock: Option<PathBuf>,
+    /// Inodes counted for each live job without a reservation.
+    pub unknown_reserve: u64,
+    /// Remove stale reservation files; otherwise they are ignored and kept.
+    pub drop_stale: bool,
     /// This job's footprint, from `plan.json`.
     pub footprint: u64,
     /// This job's id.
@@ -769,40 +802,97 @@ pub struct AdmitReport {
     pub line: String,
 }
 
-/// Read the quota and the reservations, decide, write the reservation on
-/// admit, and drop stale reservations.
+/// Read the quota document from a file, stdin, or the observation command.
+fn observe_quota(args: &AdmitRequest) -> Result<Quota> {
+    let text = if let Some(cmd) = &args.quota_cmd {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .context("run --quota-cmd")?;
+        if !output.status.success() {
+            bail!(
+                "--quota-cmd exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        String::from_utf8(output.stdout).context("--quota-cmd output is not UTF-8")?
+    } else if let Some(path) = &args.quota_json {
+        if path == Path::new("-") {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .context("read --quota-json from stdin")?;
+            text
+        } else {
+            std::fs::read_to_string(path)
+                .with_context(|| format!("--quota-json {}: not readable", path.display()))?
+        }
+    } else {
+        return Err(crate::cli_parse::usage(
+            "--quota-json or --quota-cmd is required".to_string(),
+        ));
+    };
+    let value: Value = serde_json::from_str(&text).context("quota is not JSON")?;
+    parse_quota(&value)
+}
+
+/// Under the lock when one is named: observe the quota, read the
+/// reservations, decide, write the reservation on admit, and remove stale
+/// reservations only when asked. A failed quota observation refuses.
 pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
     check_job(&args.job).map_err(|error| crate::cli_parse::usage(error.to_string()))?;
-    let quota_text = if args.quota_json == Path::new("-") {
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
-            .context("read --quota-json from stdin")?;
-        text
-    } else {
-        std::fs::read_to_string(&args.quota_json)
-            .with_context(|| format!("--quota-json {}: not readable", args.quota_json.display()))?
+    let _lock = match &args.lock {
+        Some(path) => {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(path)
+                .with_context(|| format!("open --lock {}", path.display()))?;
+            fs2::FileExt::lock_exclusive(&file)
+                .with_context(|| format!("lock --lock {}", path.display()))?;
+            Some(file)
+        }
+        None => None,
     };
-    let quota_value: Value = serde_json::from_str(&quota_text)
-        .with_context(|| format!("--quota-json {}: not JSON", args.quota_json.display()))?;
-    let quota = parse_quota(&quota_value)
-        .with_context(|| format!("--quota-json {}", args.quota_json.display()))?;
+    let (quota, refusal) = match observe_quota(args) {
+        Ok(quota) => (quota, None),
+        Err(error) if args.quota_cmd.is_some() => (
+            Quota {
+                available: 0,
+                used: None,
+                soft: None,
+                hard: None,
+            },
+            Some(format!("quota observation failed: {error:#}")),
+        ),
+        Err(error) => return Err(error),
+    };
     let stamp = crate::site_commands::generated_at(args.ts.clone(), true)?;
     let reservations = read_reservations(&args.reservations)?;
-    let decision = decide(
+    let mut decision = decide(
         quota.available,
         &reservations,
         &args.job,
         args.live_jobs.as_deref(),
         args.footprint,
         args.margin,
+        args.unknown_reserve,
     );
-    for stale in &decision.dropped {
-        let path = args.reservations.join(format!("{}.json", stale.job));
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("drop stale {}", path.display()))
+    if refusal.is_some() {
+        decision.admitted = false;
+    }
+    if args.drop_stale {
+        for stale in &decision.stale {
+            let path = args.reservations.join(format!("{}.json", stale.job));
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| format!("drop stale {}", path.display()))
+                }
             }
         }
     }
@@ -838,7 +928,11 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
             .iter()
             .map(|r| json!({"job": r.job, "footprint": r.footprint}))
             .collect::<Vec<_>>(),
-        "dropped": decision.dropped.iter().map(|r| r.job.clone()).collect::<Vec<_>>(),
+        "stale": decision.stale.iter().map(|r| r.job.clone()).collect::<Vec<_>>(),
+        "stale_dropped": args.drop_stale,
+        "unknown": decision.unknown,
+        "unknown_reserved": decision.unknown_reserved,
+        "refusal": refusal,
         "reservation": reservation.as_ref().map(|p| p.display().to_string()),
         "ts": stamp,
     }))?;
@@ -1134,7 +1228,11 @@ mod tests {
         )
         .unwrap();
         let request = AdmitRequest {
-            quota_json: quota.clone(),
+            quota_json: Some(quota.clone()),
+            quota_cmd: None,
+            lock: Some(dir.path().join("admission.lock")),
+            unknown_reserve: 0,
+            drop_stale: true,
             footprint: 351_000,
             job: "4403".into(),
             reservations: reservations.clone(),
@@ -1153,8 +1251,9 @@ mod tests {
         assert_eq!(written["ts"], "2026-11-07T01:00:00Z");
         let line: Value = serde_json::from_str(&report.line).unwrap();
         assert_eq!(line["admitted"], true);
-        assert_eq!(line["dropped"], json!(["4399"]));
+        assert_eq!(line["stale"], json!(["4399"]));
         assert_eq!(line["headroom"], 198_000);
+        assert!(dir.path().join("admission.lock").exists(), "lock file created");
 
         // A second job asks with 4401 and 4403 live: 1,000,000 - 702,000 -
         // 351,000 - 100,000 < 0, refused, and no file is written.
@@ -1170,6 +1269,125 @@ mod tests {
         let line: Value = serde_json::from_str(&refused.line).unwrap();
         assert_eq!(line["admitted"], false);
         assert_eq!(line["reserved"], 702_000);
+    }
+
+    fn request_in(dir: &Path, job: &str, live: &[&str]) -> AdmitRequest {
+        let reservations = dir.join("reservations");
+        std::fs::create_dir_all(&reservations).unwrap();
+        std::fs::write(
+            reservations.join("4401.json"),
+            r#"{"job":"4401","footprint":300000,"ts":"2026-11-07T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            reservations.join("4399.json"),
+            r#"{"job":"4399","footprint":300000,"ts":"2026-11-06T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let quota = dir.join("quota.json");
+        std::fs::write(&quota, r#"{"inodes_available":1000000}"#).unwrap();
+        AdmitRequest {
+            quota_json: Some(quota),
+            quota_cmd: None,
+            lock: None,
+            unknown_reserve: 0,
+            drop_stale: false,
+            footprint: 200_000,
+            job: job.into(),
+            reservations,
+            margin: 100_000,
+            live_jobs: Some(live.iter().map(|s| (*s).to_string()).collect()),
+            ts: Some("2026-11-07T01:00:00Z".into()),
+        }
+    }
+
+    #[test]
+    fn stale_reservations_are_kept_unless_dropping_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = request_in(dir.path(), "4403", &["4401"]);
+        let report = run_stack_admit(&request).unwrap();
+        assert!(report.decision.admitted, "{}", report.line);
+        // 4399 is stale: not counted, and its file stays.
+        assert_eq!(report.decision.reserved, 300_000);
+        assert!(request.reservations.join("4399.json").exists());
+        let line: Value = serde_json::from_str(&report.line).unwrap();
+        assert_eq!(line["stale"], json!(["4399"]));
+        assert_eq!(line["stale_dropped"], false);
+    }
+
+    #[test]
+    fn live_jobs_without_a_reservation_count_the_unknown_allowance() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = request_in(dir.path(), "4403", &["4401", "4402", "4403"]);
+        request.unknown_reserve = 150_000;
+        // 1,000,000 - 300,000 (4401) - 150,000 (4402 unknown) - 200,000 - 100,000 >= 0.
+        let report = run_stack_admit(&request).unwrap();
+        assert!(report.decision.admitted, "{}", report.line);
+        assert_eq!(report.decision.unknown, vec!["4402".to_string()]);
+        assert_eq!(report.decision.unknown_reserved, 150_000);
+        assert_eq!(report.decision.reserved, 450_000);
+        request.unknown_reserve = 400_000;
+        let refused = run_stack_admit(&request).unwrap();
+        assert!(!refused.decision.admitted, "{}", refused.line);
+        assert!(refused.reservation.is_none());
+    }
+
+    #[test]
+    fn a_failed_quota_observation_refuses_instead_of_admitting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = request_in(dir.path(), "4403", &["4401"]);
+        request.quota_json = None;
+        request.quota_cmd = Some("echo scheduler down >&2; exit 3".to_string());
+        let report = run_stack_admit(&request).unwrap();
+        assert!(!report.decision.admitted);
+        assert!(report.reservation.is_none());
+        let line: Value = serde_json::from_str(&report.line).unwrap();
+        assert!(
+            line["refusal"].as_str().unwrap().contains("quota observation failed"),
+            "{}",
+            report.line
+        );
+        request.quota_cmd = Some(r#"printf '{"inodes_available": 1000000}'"#.to_string());
+        let admitted = run_stack_admit(&request).unwrap();
+        assert!(admitted.decision.admitted, "{}", admitted.line);
+    }
+
+    #[test]
+    fn the_lock_serializes_two_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("admission.lock");
+        let request = request_in(dir.path(), "4403", &["4401"]);
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&held).unwrap();
+        let mut locked = AdmitRequest {
+            quota_json: request.quota_json.clone(),
+            quota_cmd: None,
+            lock: Some(lock.clone()),
+            unknown_reserve: 0,
+            drop_stale: false,
+            footprint: request.footprint,
+            job: "4404".into(),
+            reservations: request.reservations.clone(),
+            margin: request.margin,
+            live_jobs: request.live_jobs.clone(),
+            ts: request.ts.clone(),
+        };
+        let reservations = locked.reservations.clone();
+        let worker = std::thread::spawn(move || {
+            locked.lock = Some(lock);
+            run_stack_admit(&locked).unwrap().decision.admitted
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // While the lock is held the worker has not written its reservation.
+        assert!(!reservations.join("4404.json").exists());
+        fs2::FileExt::unlock(&held).unwrap();
+        assert!(worker.join().unwrap());
+        assert!(reservations.join("4404.json").exists());
     }
 
     #[test]

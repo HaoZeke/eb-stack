@@ -121,17 +121,24 @@ and lets ~stack admit~ decide:
 
 #+begin_src bash
 eb-stack stack admit \
-  --quota-json quota.json \
+  --lock reservations/admission.lock \
+  --quota-cmd 'site-quota-json' \
   --footprint "$(jq '.shards[] | select(.name=="shard-01") | .inode_footprint' shards/plan.json)" \
   --job "$SLURM_JOB_ID" \
   --reservations reservations \
-  --live-jobs "$(squeue -h -o %i -u jenkins | paste -sd,)"
+  --unknown-reserve 150000 \
+  --live-jobs "$(squeue --all -h -o %i -u jenkins | paste -sd,)"
 #+end_src
 
-~quota.json~ is ~{"inodes_used": U, "inodes_soft": S, "inodes_hard": H}~
-from the site's quota command. The lane starts when the available inodes
-minus the reservations of the live jobs cover its footprint plus the
-margin; the command then writes ~reservations/<job>.json~ and exits 0.
-Otherwise it exits 78 and the controller waits. A reservation of a job
-no longer in the live list is dropped on the way. ~eb_stack_footprints~
+~site-quota-json~ is the site's quota command wrapped to print
+~{"inodes_used": U, "inodes_soft": S, "inodes_hard": H}~; it runs while
+the lock is held, so the observation and the decision are one step and
+two controllers cannot both admit. ~squeue --all~ lists the hidden
+partitions too. The lane starts when the available inodes minus the
+reservations of the live jobs (and ~--unknown-reserve~ for each live job
+without one) cover its footprint plus the margin; the command then
+writes ~reservations/<job>.json~ and exits 0. Otherwise it exits 78 and
+the controller waits; a failed quota command also exits 78. A
+reservation of a job no longer in the live list is stale: not counted,
+and kept unless ~--drop-stale~. ~eb_stack_footprints~
 and ~eb_stack_admit~ are the same commands over MCP.

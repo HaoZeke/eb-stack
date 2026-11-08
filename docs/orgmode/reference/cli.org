@@ -515,9 +515,11 @@ eb-stack stack footprints \
   --out footprints.json
 
 eb-stack stack admit \
-  --quota-json QUOTA.json|- --footprint 351000 --job 4411 \
-  --reservations RESERVATIONS/ [--margin 100000] \
-  [--live-jobs 4401,4402] [--ts 2026-11-07T00:00:00Z]
+  --quota-json QUOTA.json|- | --quota-cmd 'CMD' \
+  --footprint 351000 --job 4411 \
+  --reservations RESERVATIONS/ [--margin 100000] [--lock LOCKFILE] \
+  [--live-jobs 4401,4402] [--unknown-reserve 150000] [--drop-stale] \
+  [--ts 2026-11-07T00:00:00Z]
 
 eb-stack stack arch \
   --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
@@ -901,18 +903,26 @@ known; ~-~ reads it from stdin, so the controller converts its
 ~mmlsquota~ output and pipes it. ~--footprint~ is the job's
 ~inode_footprint~ from ~plan.json~. ~--reservations~ is a directory of
 ~<job>.json~ files, one per admitted job. ~--live-jobs~ is the jobs still
-running, comma-separated, as the scheduler lists them; eb-stack calls no
-scheduler itself. The job is admitted when the available inodes, minus
-the reservations of the live jobs, cover ~--footprint~ plus ~--margin~
-(100000). A reservation whose job is not in ~--live-jobs~ is stale and
-its file is removed; without ~--live-jobs~ every other reservation
-counts and none is dropped. The job's own earlier reservation is never
-counted, so a job that asks again is judged on the others alone. On
-admit the reservation ~<job>.json~ (~job~, ~footprint~, ~margin~, ~ts~)
-is written; ~--ts~ fixes its time. ~--job~ is a file name: letters,
-digits, ~.~, ~_~, and ~-~. The command prints one JSON line (~job~,
-~admitted~, ~available~, ~used~, ~soft~, ~hard~, ~reserved~,
-~footprint~, ~margin~, ~headroom~, ~live_jobs~, ~counted~, ~dropped~,
+running, comma-separated, as the scheduler lists them (~squeue --all~,
+so hidden partitions count); eb-stack calls no scheduler itself. The
+job is admitted when the available inodes, minus the reservations of the
+live jobs, cover ~--footprint~ plus ~--margin~ (100000). A live job with
+no reservation is an unknown writer and counts ~--unknown-reserve~
+inodes (0). A reservation whose job is not in ~--live-jobs~ is stale:
+not counted, and its file kept unless ~--drop-stale~; without
+~--live-jobs~ every other reservation counts and none is stale. The
+job's own earlier reservation is never counted, so a job that asks again
+is judged on the others alone. ~--lock~ names a file held exclusively
+(flock) from the quota observation to the reservation write, so two
+controllers of one quota cannot both admit; ~--quota-cmd~ runs the
+quota command inside that window and reads its output as the quota, and
+a command that fails refuses the job (~refusal~ says why) rather than
+admitting it. On admit the reservation ~<job>.json~ (~job~,
+~footprint~, ~margin~, ~ts~) is written; ~--ts~ fixes its time. ~--job~
+is a file name: letters, digits, ~.~, ~_~, and ~-~. The command prints
+one JSON line (~job~, ~admitted~, ~available~, ~used~, ~soft~, ~hard~,
+~reserved~, ~footprint~, ~margin~, ~headroom~, ~live_jobs~, ~counted~,
+~stale~, ~stale_dropped~, ~unknown~, ~unknown_reserved~, ~refusal~,
 ~reservation~, ~ts~) and exits 0 when admitted, 78 when refused. A
 reservation file that is not JSON, has no ~job~ or ~footprint~, or
 names another job than its file name exits 1, because a reservation
