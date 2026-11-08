@@ -516,6 +516,10 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         warnings.push(format!("build-system hint {hint} → easyblock Crate"));
         return "Crate".into();
     }
+    if let Some(hint) = hint(&["luarocks"]) {
+        warnings.push(format!("build-system hint {hint} → easyblock LuaRocks"));
+        return "LuaRocks".into();
+    }
     if let Some(hint) = hint(&["python-bundle"]) {
         warnings.push(format!("build-system hint {hint} → easyblock PythonBundle"));
         return "PythonBundle".into();

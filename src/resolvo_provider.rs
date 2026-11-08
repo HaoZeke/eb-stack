@@ -96,9 +96,11 @@ fn candidate_satisfies_dependency(
             candidate.version, candidate.toolchain.name, candidate.toolchain.version
         )
     };
+    let exact = crate::version::requirement_is_exact(&dependency.version_req);
     if !matches_req(&candidate.version, &dependency.version_req)
-        && !matches_req(&with_suffix, &dependency.version_req)
-        && !matches_req(&with_toolchain, &dependency.version_req)
+        && !(exact
+            && (matches_req(&with_suffix, &dependency.version_req)
+                || matches_req(&with_toolchain, &dependency.version_req)))
     {
         return false;
     }
@@ -544,7 +546,13 @@ impl EbProvider {
             return self.keys_at_level(dep, &toolchain_label(toolchain));
         }
         if crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
-            return self.keys_at_level(dep, "system");
+            let keys = self.keys_at_level(dep, "system");
+            // A SYSTEM recipe reaches only SYSTEM with a bare tuple, unless
+            // the tuple spells the module: `('OpenMPI', '5.0.3-GCC-13.3.0')`
+            // names one build as exactly as a toolchain element does.
+            if !keys.is_empty() || !version_req_spells_module(&dep.version_req) {
+                return keys;
+            }
         }
         let mut levels = self.admissible_levels(recipe);
         levels.reverse();
@@ -752,7 +760,9 @@ impl EbProvider {
                 };
                 let allowed: Vec<u32> = ranked
                     .iter()
-                    .filter(|(_, idx)| matches_req(&candidates[*idx].version, &pin.version_req))
+                    .filter(|(_, idx)| {
+                        candidate_matches_depreq(&candidates[*idx], &pin.version_req)
+                    })
                     .map(|(r, _)| *r)
                     .collect();
                 if allowed.is_empty() {
@@ -821,71 +831,93 @@ impl EbProvider {
         let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
         if let Some(stack) = stack_policy {
             for pin in &stack.pins {
-                let matching_result = matching_ranks(
-                    &candidates,
-                    &ranks,
-                    &pin.name,
-                    &pin.version_requirement,
-                    pin.toolchain.as_ref(),
-                    pin.versionsuffix.as_deref(),
-                );
-                match pin.mode {
-                    StackPinMode::Preferred => {
-                        if let Ok(matching) = matching_result {
+                // Ranks are per key: a pin on a package carried at several
+                // levels constrains each of its keys separately, and a key
+                // with no matching rank is unselectable rather than free.
+                let keys = keys_for_name(&ranks, &pin.name);
+                if keys.is_empty() {
+                    return Err(format!(
+                        "stack policy references unknown package {}",
+                        pin.name
+                    ));
+                }
+                let mut matched_anywhere = false;
+                for key in keys {
+                    let matching = matching_ranks_for_key(
+                        &candidates,
+                        &ranks,
+                        &key,
+                        &pin.version_requirement,
+                        pin.toolchain.as_ref(),
+                        pin.versionsuffix.as_deref(),
+                    );
+                    match pin.mode {
+                        StackPinMode::Preferred => {
                             if let Some(selected_rank) = matching.last().copied() {
-                                favored_ranks.insert(pin.name.clone(), selected_rank);
+                                favored_ranks.insert(key, selected_rank);
+                                matched_anywhere = true;
+                            }
+                        }
+                        StackPinMode::Locked => {
+                            let allowed = if let Some(existing) = pin_ranks.get(&key) {
+                                matching
+                                    .into_iter()
+                                    .filter(|rank| existing.contains(rank))
+                                    .collect::<Vec<_>>()
+                            } else {
+                                matching
+                            };
+                            pin_ranks.insert(key.clone(), allowed.clone());
+                            if !allowed.is_empty() {
+                                matched_anywhere = true;
+                            }
+                            if allowed.len() == 1 {
+                                locked_ranks.insert(key, allowed[0]);
                             }
                         }
                     }
-                    StackPinMode::Locked => {
-                        let matching = matching_result?;
-                        if matching.is_empty() {
-                            return Err(format!(
-                                "stack pin {} {} matches no candidates",
-                                pin.name, pin.version_requirement
-                            ));
-                        }
-                        let allowed = if let Some(existing) = pin_ranks.get(&pin.name) {
-                            matching
-                                .into_iter()
-                                .filter(|rank| existing.contains(rank))
-                                .collect::<Vec<_>>()
-                        } else {
-                            matching
-                        };
-                        if allowed.is_empty() {
-                            return Err(format!(
-                                "locked stack pin {} {} conflicts with package policy pins",
-                                pin.name, pin.version_requirement
-                            ));
-                        }
-                        pin_ranks.insert(pin.name.clone(), allowed.clone());
-                        if allowed.len() == 1 {
-                            locked_ranks.insert(pin.name.clone(), allowed[0]);
-                        }
-                    }
+                }
+                if pin.mode == StackPinMode::Locked && !matched_anywhere {
+                    return Err(format!(
+                        "stack pin {} {} matches no candidates",
+                        pin.name, pin.version_requirement
+                    ));
                 }
             }
 
             for exclusion in &stack.exclusions {
-                let matching = matching_ranks(
-                    &candidates,
-                    &ranks,
-                    &exclusion.name,
-                    &exclusion.version_requirement,
-                    None,
-                    None,
-                )?;
-                if matching.is_empty() {
+                let keys = keys_for_name(&ranks, &exclusion.name);
+                if keys.is_empty() {
+                    return Err(format!(
+                        "stack policy references unknown package {}",
+                        exclusion.name
+                    ));
+                }
+                let reason = exclusion_reason(exclusion);
+                let mut matched_anywhere = false;
+                for key in keys {
+                    let matching = matching_ranks_for_key(
+                        &candidates,
+                        &ranks,
+                        &key,
+                        &exclusion.version_requirement,
+                        None,
+                        None,
+                    );
+                    if matching.is_empty() {
+                        continue;
+                    }
+                    matched_anywhere = true;
+                    let package_exclusions = excluded_ranks.entry(key).or_default();
+                    for rank in matching {
+                        package_exclusions.insert(rank, reason.clone());
+                    }
+                }
+                if !matched_anywhere {
                     return Err(format!(
                         "candidate exclusion {} {} matches no candidates",
                         exclusion.name, exclusion.version_requirement
                     ));
-                }
-                let reason = exclusion_reason(exclusion);
-                let package_exclusions = excluded_ranks.entry(exclusion.name.clone()).or_default();
-                for rank in matching {
-                    package_exclusions.insert(rank, reason.clone());
                 }
             }
         }
@@ -903,35 +935,47 @@ impl EbProvider {
         if policy.prefer_installed {
             if let Some(base) = baseline {
                 for installed in &base.packages {
-                    let name = &installed.name;
-                    if favored_ranks.contains_key(name)
-                        || locked_ranks.contains_key(name)
-                        || pin_ranks.contains_key(name)
-                        || min_rank_exclusive.contains_key(name)
-                    {
-                        continue;
-                    }
-                    let Some(ranked) = ranks.get(name) else {
-                        continue;
-                    };
-                    // Same version is not the same build: a variant differing
-                    // only in versionsuffix is a different module, and
-                    // preferring it would keep nothing that is installed.
-                    let installed_rank = ranked.iter().find_map(|(rank, idx)| {
-                        let candidate = &candidates[*idx];
-                        (candidate.version == installed.version
-                            && candidate.versionsuffix == installed.versionsuffix
-                            && candidate.toolchain == installed.toolchain)
-                            .then_some(*rank)
-                    });
-                    if let Some(rank) = installed_rank {
-                        if excluded_ranks
-                            .get(name)
-                            .is_some_and(|excluded| excluded.contains_key(&rank))
+                    for key in keys_for_name(&ranks, &installed.name) {
+                        if favored_ranks.contains_key(&key)
+                            || locked_ranks.contains_key(&key)
+                            || min_rank_exclusive.contains_key(&key)
                         {
                             continue;
                         }
-                        favored_ranks.insert(name.clone(), rank);
+                        let Some(ranked) = ranks.get(&key) else {
+                            continue;
+                        };
+                        // Same version is not the same build: a variant differing
+                        // only in versionsuffix is a different module, and
+                        // preferring it would keep nothing that is installed.
+                        let installed_rank = ranked.iter().find_map(|(rank, idx)| {
+                            let candidate = &candidates[*idx];
+                            (candidate.version == installed.version
+                                && candidate.versionsuffix.as_deref().unwrap_or("")
+                                    == installed.versionsuffix.as_deref().unwrap_or("")
+                                && crate::hierarchy::toolchains_match(
+                                    &candidate.toolchain,
+                                    &installed.toolchain,
+                                ))
+                            .then_some(*rank)
+                        });
+                        if let Some(rank) = installed_rank {
+                            if excluded_ranks
+                                .get(&key)
+                                .is_some_and(|excluded| excluded.contains_key(&rank))
+                            {
+                                continue;
+                            }
+                            // A pinned key keeps its allow-set; the installed
+                            // build is preferred only inside it.
+                            if pin_ranks
+                                .get(&key)
+                                .is_some_and(|allowed| !allowed.contains(&rank))
+                            {
+                                continue;
+                            }
+                            favored_ranks.insert(key, rank);
+                        }
                     }
                 }
             }
@@ -982,6 +1026,7 @@ impl EbProvider {
         let Some(ranked) = self.ranks.get(pkg) else {
             return Ranges::empty();
         };
+        let exact = crate::version::requirement_is_exact(version_req);
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
@@ -1003,9 +1048,13 @@ impl EbProvider {
                     c.toolchain.name, c.toolchain.version
                 )
             };
+            // A module or suffixed spelling answers only an exact pin: as a
+            // version it reads as a pre-release, and a range such as `<5`
+            // would admit `5.0.0-GCCcore-13.3.0`.
             if !matches_req(&stem, version_req)
-                && !matches_req(&with_suffix, version_req)
-                && !matches_req(&with_toolchain, version_req)
+                && !(exact
+                    && (matches_req(&with_suffix, version_req)
+                        || matches_req(&with_toolchain, version_req)))
             {
                 continue;
             }
@@ -1399,31 +1448,51 @@ fn validate_stack_policy(policy: &Policy, stack: &StackPolicy) -> Result<(), Str
     Ok(())
 }
 
-fn matching_ranks(
+/// Whether a candidate satisfies a DepReq-spelled version requirement.
+///
+/// A pin and a dependency use the same three forms: the version, the version
+/// plus versionsuffix, and the EasyBuild module identity. Comparing only
+/// `candidate.version` rejects `==25.3-CUDA-12.8.0` for an NVHPC whose version
+/// field is `25.3`.
+fn candidate_matches_depreq(candidate: &Candidate, version_req: &str) -> bool {
+    if matches_req(&candidate.version, version_req) {
+        return true;
+    }
+    // Suffix and module spellings answer only an exact pin; see
+    // `requirement_is_exact`.
+    if !crate::version::requirement_is_exact(version_req) {
+        return false;
+    }
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    if !suffix.is_empty() && matches_req(&format!("{}{suffix}", candidate.version), version_req) {
+        return true;
+    }
+    if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+        return false;
+    }
+    let module = format!(
+        "{}-{}-{}",
+        candidate.version, candidate.toolchain.name, candidate.toolchain.version
+    );
+    matches_req(&module, version_req) || matches_req(&format!("{module}{suffix}"), version_req)
+}
+
+fn matching_ranks_for_key(
     candidates: &[Candidate],
     ranks: &HashMap<String, Vec<(u32, usize)>>,
-    name: &str,
+    key: &str,
     version_requirement: &str,
     toolchain: Option<&crate::domain::Toolchain>,
     versionsuffix: Option<&str>,
-) -> Result<Vec<u32>, String> {
-    // Policy says a name; the pool holds keys, qualified by toolchain for any
-    // name carried at several levels. A pin on such a package means every
-    // build of it, so all of its keys are searched.
-    let keys = keys_for_name(ranks, name);
-    if keys.is_empty() {
-        return Err(format!("stack policy references unknown package {name}"));
-    }
-    let ranked: Vec<(u32, usize)> = keys
-        .iter()
-        .filter_map(|key| ranks.get(key))
-        .flat_map(|ranked| ranked.iter().copied())
-        .collect();
-    Ok(ranked
+) -> Vec<u32> {
+    let Some(ranked) = ranks.get(key) else {
+        return Vec::new();
+    };
+    ranked
         .iter()
         .filter(|(_, index)| {
             let candidate = &candidates[*index];
-            matches_req(&candidate.version, version_requirement)
+            candidate_matches_depreq(candidate, version_requirement)
                 && toolchain
                     .map(|toolchain| {
                         crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
@@ -1436,7 +1505,15 @@ fn matching_ranks(
                     .unwrap_or(true)
         })
         .map(|(rank, _)| *rank)
-        .collect())
+        .collect()
+}
+
+/// Whether an exact requirement carries a toolchain inside the version, as
+/// `==5.0.3-GCC-13.3.0` does: a module identity rather than a version.
+fn version_req_spells_module(version_req: &str) -> bool {
+    version_req
+        .strip_prefix("==")
+        .is_some_and(|pinned| pinned.matches('-').count() >= 2)
 }
 
 fn exclusion_reason(exclusion: &CandidateExclusion) -> String {

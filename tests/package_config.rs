@@ -1,7 +1,7 @@
 use eb_stack::package::{
     materialize_profile, package_plan_to_cyclonedx, ConditionExpr, ConditionPredicate,
-    DependencyRole, EasyconfigValue, PatchArtifact, ProfileEnvironment, StackPolicy,
-    STACK_POLICY_SCHEMA_VERSION,
+    DependencyIntent, DependencyRole, EasyconfigValue, PatchArtifact, ProfileEnvironment,
+    StackPolicy, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{
@@ -1005,4 +1005,308 @@ fn seissol_layer_records_the_archive_digest_and_eigen_build_role() {
         .find(|requirement| requirement.name == "Eigen")
         .expect("Eigen");
     assert_eq!(eigen.roles, vec![DependencyRole::Build]);
+}
+
+#[test]
+fn exclude_from_solve_matches_post_alias_provider() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies]
+exclude_from_solve = ["PyTorch"]
+
+[dependencies.aliases]
+libtorch = "PyTorch"
+"#,
+    )
+    .expect("alias plus exclude");
+    let mut plan = qmcpack_plan();
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:libtorch".into(),
+        name: "libtorch".into(),
+        eb_name: None,
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let dependency = &plan.dependencies[0];
+    assert_eq!(dependency.eb_name.as_deref(), Some("PyTorch"));
+    assert!(
+        dependency.solver_excluded,
+        "exclude_from_solve = [PyTorch] must match the post-alias provider"
+    );
+}
+
+#[test]
+fn provider_alias_rejects_unknown_table_keys() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+py-numpy = { provider = "SciPy-bundle", constraints = "drop" }
+"#,
+    )
+    .expect_err("unknown alias key");
+    assert!(
+        error.to_string().contains("constraints") || error.to_string().contains("unknown"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_virtual_capability_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.virtuals]
+hdf5 = ""
+"#,
+    )
+    .expect_err("empty virtual");
+    assert!(
+        error.to_string().contains("hdf5") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_virtual_name_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.virtuals]
+"" = "mpi"
+"#,
+    )
+    .expect_err("empty virtual name");
+    assert!(
+        error.to_string().contains("virtual name") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_alias_name_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+"" = "HDF5"
+"#,
+    )
+    .expect_err("empty alias name");
+    assert!(
+        error.to_string().contains("alias name") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_alias_provider_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+hdf5 = ""
+"#,
+    )
+    .expect_err("empty alias");
+    assert!(
+        error.to_string().contains("hdf5") && error.to_string().contains("empty"),
+        "{error}"
+    );
+    let table = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+hdf5 = { provider = "" }
+"#,
+    )
+    .expect_err("empty table provider");
+    assert!(
+        table.to_string().contains("hdf5") && table.to_string().contains("empty"),
+        "{table}"
+    );
+}
+
+#[test]
+fn requirement_keeps_an_existing_provider_alias() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[dependencies.requirements]]
+name = "hdf5"
+roles = ["run"]
+"#,
+    )
+    .expect("requirement");
+    let mut plan = qmcpack_plan();
+    plan.dependencies.push(DependencyIntent {
+        id: "seed-hdf5".into(),
+        name: "hdf5".into(),
+        eb_name: Some("HDF5".into()),
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let hdf5 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.id == "seed-hdf5")
+        .expect("seeded hdf5");
+    assert_eq!(
+        hdf5.eb_name.as_deref(),
+        Some("HDF5"),
+        "requirement must not undo the alias"
+    );
+}
+
+#[test]
+fn requirement_updates_every_same_identity_always_edge() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+py-numpy = { provider = "SciPy-bundle", constraint = "drop" }
+py-scipy = { provider = "SciPy-bundle", constraint = "drop" }
+
+[[dependencies.requirements]]
+name = "SciPy-bundle"
+constraint = "==1.2.3"
+roles = ["run"]
+"#,
+    )
+    .expect("aliases plus pin");
+    let mut plan = qmcpack_plan();
+    plan.dependencies = vec![
+        DependencyIntent {
+            id: "numpy".into(),
+            name: "py-numpy".into(),
+            eb_name: None,
+            constraint: Some("1.26".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+        DependencyIntent {
+            id: "scipy".into(),
+            name: "py-scipy".into(),
+            eb_name: None,
+            constraint: Some("1.11".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+    ];
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let pinned: Vec<_> = plan
+        .dependencies
+        .iter()
+        .filter(|dependency| {
+            dependency.eb_name.as_deref() == Some("SciPy-bundle")
+                && dependency.constraint.as_deref() == Some("==1.2.3")
+        })
+        .collect();
+    assert_eq!(
+        pinned.len(),
+        2,
+        "both aliased Always rows must carry the pin: {:?}",
+        plan.dependencies
+    );
+}
+
+#[test]
+fn inherits_applies_after_the_parent_patch_in_the_same_layer() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[profiles]]
+name = "complex"
+inherits = "default"
+versionsuffix = ["-complex"]
+
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-DQMC_COMPLEX=OFF"]
+"#,
+    )
+    .expect("child listed first");
+    let mut plan = qmcpack_plan();
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let complex = plan
+        .profiles
+        .iter()
+        .find(|profile| profile.name == "complex")
+        .expect("complex");
+    assert_eq!(
+        complex.config_options,
+        vec!["-DQMC_COMPLEX=OFF".to_string()],
+        "child must inherit the same-layer parent update"
+    );
+}
+
+#[test]
+fn source_checksums_do_not_invent_sources_on_an_empty_plan() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources.clear();
+    let error = apply_package_layers(&mut plan, &[config]).expect_err("empty plan");
+    assert!(
+        error.to_string().contains("source_checksums has 1")
+            && error.to_string().contains("plan has 0"),
+        "{error}"
+    );
+    assert!(plan.sources.is_empty(), "{:?}", plan.sources);
+}
+
+#[test]
+fn patch_layer_sha256_must_be_sixty_four_hex() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+[[build.patches]]
+filename = "portability.patch"
+sha256 = "abcd"
+"#,
+    )
+    .expect_err("short patch digest");
+    assert!(
+        error.to_string().contains("patch checksum") && error.to_string().contains("abcd"),
+        "{error}"
+    );
 }

@@ -38,6 +38,7 @@ fn request(source: PathBuf, robot: &Path, version: &str) -> BumpPackageRequest {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     }
 }
 

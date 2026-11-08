@@ -641,7 +641,11 @@ version from being interpreted as the provider's version:
 
 The original foreign spelling and constraint remain in dependency provenance.
 Aliases only control robot matching and solving; they do not teach the parser
-about a package.
+about a package. The table form rejects a key it does not know, so a typo
+such as `constraints` fails the layer instead of keeping the pin. An empty
+alias name or provider, and an empty virtual name or capability, fail the
+layer the same way. `exclude_from_solve` matches the provider an alias maps
+to as well as the foreign name.
 
 Easyblock-specific parameters are typed TOML data. They are emitted as normal
 Python values, but configuration cannot inject Python expressions:
@@ -659,12 +663,19 @@ cuda_compute_capabilities = ["80", "90"]
 ```
 
 Build-level values apply to every product profile. A profile value with the
-same key replaces the build-level value for that emitted recipe.
+same key replaces the build-level value for that emitted recipe. A profile
+may `inherit` a parent listed later in the same layer: parents are applied
+first, so the child sees the parent's values from that layer. A
+`[[build.patches]]` entry with a `sha256` must spell 64 hexadecimal
+characters; the digest is compared to the file without regard to case.
 
 Use a requirement when EasyBuild product policy needs a dependency that the
 foreign recipe does not declare. If a matching foreign edge exists, the
-requirement makes that edge unconditional and merges its roles. Otherwise it
-creates a canonical dependency before the SBOM and Resolvo lock are produced:
+requirement makes that edge unconditional and merges its roles; every edge
+that maps to the name is updated, so two components aliased onto one
+bundle both carry the pin, and an existing alias is kept. A virtual edge is
+not a match. Otherwise it creates a canonical dependency before the SBOM and
+Resolvo lock are produced:
 
 ```toml
 [[dependencies.requirements]]
@@ -913,6 +924,15 @@ target generation, optional `version` is the emitted package version used for
 provider matching, and at most one `source_checksums` entry has annual-bump
 semantics. Foreign-only fields (`format`, `package_config`, non-default
 `profile`, multiple checksums) are typed catalog errors.
+
+Lookup compares `name` and `version` trimmed. For an exact version a
+versioned entry wins over an unversioned sibling, and two versioned matches
+are ambiguous. An overlay that replaces `source` starts the entry over: an
+inherited `format` goes back to auto-detection and inherited checksums are
+dropped unless the overlay restates them. Switching an entry to
+`easybuild-bump` drops inherited foreign checksums; restating
+`easybuild-bump` keeps them. A blank `source` is a missing-source error, and
+every `source_checksums` entry must be a SHA-256 hex digest.
 
 Companions are written under `packages/<name>-<version>-<toolchain>/`, share one
 `easyconfigs/` overlay with the root, appear in topological `build-order.json`,
@@ -2292,9 +2312,29 @@ eb-stack package bump \
 ```
 
 The emitter updates the package version, target toolchain, selected dependency
-versions, conventional filename, and source checksum entry. Patches remain
-explicit review work. Omitting the new checksum clears the old digest to an
-empty string and records a residual. The bump never invents a digest.
+versions, conventional filename, and source checksum entry. A ~[package]
+version~ in a package-config layer moves the version the same way, and
+`--version` wins when both are given. The emitted recipe is the plan's
+default profile, so a layer that makes `gpu` the default emits that
+profile. A dependency stated in both `dependencies` and
+`builddependencies` is rewritten when either line disagrees with the lock.
+A dependency that spells the module, `('OpenMPI', '5.0.3-GCC-13.3.0')`, is
+an exact pin on that build, from a SYSTEM recipe too; only an exact pin
+reads the module or suffix spelling, a range such as `<5` compares versions.
+Patches remain explicit review work. Omitting the new checksum clears the
+old digest to an empty string and records a residual. The bump never
+invents a digest.
+
+When the tree already has a recipe for the new version under another
+toolchain, its `patches` and `checksums` blocks are adopted and the plan's
+patch set is rebuilt from them; the first source digest stays what the bump
+wrote, the `--source-checksum` value or the cleared slot. A vanished
+dependency is removed wherever its tuple sits on the line. With
+`local_host_arch`, `local_order` and `local_equations` in
+`[build.easyconfig_parameters]` and the matching `-DHOST_ARCH`, `-DORDER`
+and `-DEQUATIONS` flags in `config_options`, the bump derives
+`local_binary` and parameterises `configopts` and the sanity paths on those
+locals, the SeisSol shape.
 
 To fill the digest without a separate EasyBuild run, pass `--fetch-checksums`.
 The bump resolves `sources` and `source_urls` at the new version, downloads
@@ -6519,6 +6559,19 @@ eb-stack package inspect \
 This writes `package.plan.json` and `package.sbom.cdx.json`. It does not solve
 profiles or emit recipes, so it establishes no claim-ladder rung.
 
+Format notes. A rockspec's ~`> 1.8` is `>=1.8,<1.9` and ~`= X` is `!=X`;
+`build_dependencies` are build edges; a `git+` `source.url` is a git remote
+with its `tag` and emits a `git_config` source; `source.hash` counts only as
+a 64-hex SHA-256; `external_dependencies` become residuals; the plan's
+easyblock is `LuaRocks`. A META6 `ver<0.10+>` is `>=0.10`, and the `ver`,
+`auth`, `api` and `from` adverbs are not part of the module name. A CRAN
+package's sanity dir is `lib/R/library/<name>`. A Spack `depends_on` with
+`type=("build", "link")` is a runtime edge. A PyPI or PEP 518 requirement
+gated by an environment marker is an opaque condition: it is kept out of
+the solve and reported as a `pypi-marker` residual. A build backend or
+overlay build tool is named only when the plan's own toolchain hierarchy
+provides it, as a recipe or as a bundle extension.
+
 ## `package plan`
 
 ```bash
@@ -6615,6 +6668,7 @@ eb-stack package bump \
   [--hierarchy-fixture HIERARCHY.json] \
   [--stack-policy STACK.toml] \
   [--package-config PACKAGE.toml]... \
+  [--foreign RECIPE]... \
   [--strict-patches] \
   [--emit-easyblock] \
   [--fetch-checksums [--latest-secondary] [--drop-patch NAME=REASON]...] \
@@ -6630,7 +6684,11 @@ Without `--stack-policy`, the solver uses an unconstrained policy for the
 requested toolchain. A changed package version without `--source-checksum`
 clears the old digest and produces a visible residual, because source bytes
 cannot be inferred safely. `--package-config` is repeatable and applies after
-the source recipe is parsed, as it does for `package plan`. `--strict-patches`
+the source recipe is parsed, as it does for `package plan`. `--foreign` names
+a Spack `package.py` or a conda-forge recipe whose dependencies the bump
+inspects for names the source `.eb` never declared; it is repeatable, and each
+hit is mapped to an EasyBuild package through the package-config aliases.
+`--strict-patches`
 fails the bump when a patch's fate across a version change cannot be decided
 from the tree, or, with `--fetch-checksums`, from the new source; without it
 the patch is carried and a `patch-decision` residual records the review flag.
@@ -8753,7 +8811,8 @@ planning. `eb_package_plan` also takes `package_index`, a CRAN
 `PACKAGES` file or a `name==version` list, the same input as
 `--package-index`. `eb_package_bump` optionals include `version`,
 `source_checksum`, `dependencies` (object map), `hierarchy_fixture`,
-`stack_policy`, `package_configs`, `emit_easyblock`, `fetch_checksums`,
+`stack_policy`, `package_configs`, `foreign` (array of recipe paths, as
+`--foreign`), `emit_easyblock`, `fetch_checksums`,
 `strict_patches`, `latest_secondary`, `drop_patch` (object map from
 patch name to reason), and `no_companions`.
 `strict_patches` fails the bump when a patch's fate cannot be decided,
@@ -9088,11 +9147,15 @@ pre-build inventory of requested components and dependency intent. It is not a
 scan of installed files and does not establish the `builds` or
 `binary-verified` claim.
 
-The root component carries the primary source SHA-256 when available. Its
-external references retain VCS tag/commit identity and one distribution URL
-plus SHA-256 per source artifact, including derived GitHub tag archives. These
-values come from the canonical plan after any explicit positional checksum
-overrides.
+The root component carries the first source digest that is a SHA-256; a
+value that is not 64 hexadecimal characters is no hash. Its external
+references retain VCS tag/commit identity and one distribution URL plus
+SHA-256 per source artifact, including derived GitHub tag archives. The
+archive is derived only from a github.com remote, in any spelling (scp,
+ssh, a port, `ssh.github.com`); a gist or another host gets no invented
+archive. Overlay extensions appear as library components with their
+digest. These values come from the canonical plan after any explicit
+positional checksum overrides.
 
 Consumers should preserve the lifecycle and `eb_stack:*` properties when
 copying the document into a wider stack report. Build evidence belongs in the

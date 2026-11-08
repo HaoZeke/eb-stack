@@ -43,6 +43,7 @@ fn bump(
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump")
 }

@@ -135,15 +135,20 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                 marker,
                 original,
             } => {
-                if let Some(marker) = marker {
+                let condition = if let Some(marker) = marker {
                     residuals.push(ForeignResidual {
                         category: "pypi-marker".into(),
                         severity: ResidualSeverity::Judgment,
-                        summary: format!("kept {name} with environment marker {marker}"),
+                        summary: format!(
+                            "{name} is gated by environment marker {marker} and does not constrain every profile"
+                        ),
                         evidence: Some(original.clone()),
                         provenance: None,
                     });
-                }
+                    ConditionExpr::Opaque { source: marker }
+                } else {
+                    ConditionExpr::Always
+                };
                 // The EasyBuild Python module installs setuptools, pip and
                 // wheel itself, so a project that requires one already has it.
                 // Emitting a dependency instead sends the solver looking for
@@ -166,7 +171,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     pin,
                     role: "run".into(),
                     original_spec: Some(original),
-                    condition: ConditionExpr::Always,
+                    condition,
                     provenance: Vec::new(),
                 });
             }
@@ -210,18 +215,32 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                 Pep508::Requirement {
                     name,
                     pin,
+                    marker,
                     original,
-                    ..
                 } => {
                     if crate::provides::ignored_build_requirement(&name) {
                         continue;
                     }
+                    let condition = if let Some(marker) = marker {
+                        residuals.push(ForeignResidual {
+                            category: "pypi-marker".into(),
+                            severity: ResidualSeverity::Judgment,
+                            summary: format!(
+                                "{name} is gated by environment marker {marker} and does not constrain every profile"
+                            ),
+                            evidence: Some(original.clone()),
+                            provenance: None,
+                        });
+                        ConditionExpr::Opaque { source: marker }
+                    } else {
+                        ConditionExpr::Always
+                    };
                     dependencies.push(ForeignDep {
                         name,
                         pin,
                         role: "build".into(),
                         original_spec: Some(original),
-                        condition: ConditionExpr::Always,
+                        condition,
                         provenance: Vec::new(),
                     });
                 }
@@ -272,7 +291,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
-enum Pep508 {
+pub(crate) enum Pep508 {
     SkipExtra {
         spec: String,
     },
@@ -308,7 +327,7 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
     hints
 }
 
-fn parse_pep508(spec: &str) -> Pep508 {
+pub(crate) fn parse_pep508(spec: &str) -> Pep508 {
     let original = spec.trim().to_string();
     if original.is_empty() {
         return Pep508::Invalid {

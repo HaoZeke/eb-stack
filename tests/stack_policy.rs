@@ -241,3 +241,189 @@ fn public_eon_stack_policy_pins_only_the_patch_generation() {
     assert_eq!(pin_toolchain.name, "GCCcore");
     assert_eq!(pin_toolchain.version, "15.2.0");
 }
+
+// Ported from develop: tests main lacked by name.
+
+#[test]
+fn gcccore_stack_pin_reports_the_gcccore_perl_not_system() {
+    let foss = toolchain();
+    let gcccore = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let system = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let perl = |version: &str, toolchain: &Toolchain| Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "Perl".into(),
+        version: version.into(),
+        toolchain: toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("Perl-{version}-{}.eb", toolchain.identity_label()),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let result = solve_with_stack_policy(
+        &[
+            perl("5.38", &system),
+            perl("5.38", &gcccore),
+            Candidate {
+                versionprefix: None,
+                easyblock: None,
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain: foss.clone(),
+                versionsuffix: None,
+                easyconfig_path: "App-1.0-foss-2026.1.eb".into(),
+                dependencies: vec![
+                    DepReq {
+                        name: "Perl".into(),
+                        version_req: "==5.38".into(),
+                        versionsuffix: None,
+                        toolchain: Some(system.clone()),
+                    },
+                    DepReq {
+                        name: "Perl".into(),
+                        version_req: "==5.38".into(),
+                        versionsuffix: None,
+                        toolchain: Some(gcccore.clone()),
+                    },
+                ],
+                builddependencies: Vec::new(),
+                exts_list: Vec::new(),
+                moduleclass: None,
+            },
+        ],
+        &policy(),
+        None,
+        &StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "eessi-test".into(),
+            toolchain: foss,
+            pins: vec![StackPin {
+                name: "Perl".into(),
+                version_requirement: "==5.38".into(),
+                toolchain: Some(gcccore.clone()),
+                versionsuffix: None,
+                mode: StackPinMode::Preferred,
+                source: Some("eessi-test.cdx.json".into()),
+            }],
+            exclusions: Vec::new(),
+        },
+    )
+    .expect("GCCcore-scoped Perl pin");
+    let perls: Vec<&Candidate> = result
+        .selected
+        .iter()
+        .filter(|candidate| candidate.name == "Perl")
+        .collect();
+    assert!(
+        perls.iter().any(|candidate| candidate.version == "5.38"
+            && candidate.toolchain.name.eq_ignore_ascii_case("system")),
+        "selected must keep Perl 5.38@system: {:#?}",
+        result.selected
+    );
+    assert!(
+        perls.iter().any(|candidate| {
+            candidate.version == "5.38" && candidate.toolchain.name == "GCCcore"
+        }),
+        "selected must keep Perl 5.38@GCCcore: {:#?}",
+        result.selected
+    );
+    let outcome = result
+        .pin_outcomes
+        .iter()
+        .find(|outcome| outcome.name == "Perl")
+        .expect("pin outcome");
+    let selected_toolchain = outcome
+        .selected_toolchain
+        .as_ref()
+        .expect("selected toolchain");
+    assert_eq!(selected_toolchain.name, "GCCcore");
+    assert!(!outcome.fallback);
+}
+
+#[test]
+fn locked_stack_pin_constrains_every_interned_key() {
+    let foss = toolchain();
+    let gcccore = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let system = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let perl = |version: &str, toolchain: &Toolchain| Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "Perl".into(),
+        version: version.into(),
+        toolchain: toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("Perl-{version}-{}.eb", toolchain.identity_label()),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let result = solve_with_stack_policy(
+        &[
+            perl("5.38.0", &system),
+            perl("5.42.0", &system),
+            perl("5.38.0", &gcccore),
+            perl("5.42.0", &gcccore),
+            Candidate {
+                versionprefix: None,
+                easyblock: None,
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain: foss.clone(),
+                versionsuffix: None,
+                easyconfig_path: "App-1.0-foss-2026.1.eb".into(),
+                dependencies: vec![dep("Perl", "")],
+                builddependencies: Vec::new(),
+                exts_list: Vec::new(),
+                moduleclass: None,
+            },
+        ],
+        &policy(),
+        None,
+        &StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "eessi-test".into(),
+            toolchain: foss,
+            pins: vec![StackPin {
+                name: "Perl".into(),
+                version_requirement: "==5.38.0".into(),
+                toolchain: None,
+                versionsuffix: None,
+                mode: StackPinMode::Locked,
+                source: Some("eessi-test.cdx.json".into()),
+            }],
+            exclusions: Vec::new(),
+        },
+    )
+    .expect("locked Perl 5.38.0");
+    let perls: Vec<&Candidate> = result
+        .selected
+        .iter()
+        .filter(|candidate| candidate.name == "Perl")
+        .collect();
+    assert!(
+        !perls.is_empty(),
+        "Perl must be selected: {:#?}",
+        result.selected
+    );
+    for selected in perls {
+        assert_eq!(
+            selected.version, "5.38.0",
+            "every interned Perl key must honor the lock: {selected:?}"
+        );
+    }
+}
