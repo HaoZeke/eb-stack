@@ -1155,7 +1155,7 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
         .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
     let actual = sha256_hex(&bytes);
     let expected = patch.sha256.as_deref().unwrap_or_default();
-    if actual != expected {
+    if !actual.eq_ignore_ascii_case(expected) {
         return Err(PackageWorkflowError::PatchChecksumMismatch {
             filename: patch.filename.clone(),
             expected: expected.to_string(),
@@ -2023,13 +2023,9 @@ fn package_plan_from_easyconfig(
 /// version constraint states what the package actually needs; when the plan
 /// carries one, that constraint is the one to keep.
 fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
-    // SYSTEM has one generation however its version is spelled: a recipe
-    // reads as `system/system` and `--toolchain system` as `system/`.
-    let system = |t: &Toolchain| t.name.eq_ignore_ascii_case("system");
-    if system(source) && system(target) {
-        return false;
-    }
-    !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
+    // SYSTEM has one generation however it is spelled: `dummy` or `system`,
+    // with an empty or a `system` version, is one module.
+    !crate::hierarchy::toolchains_match(source, target)
 }
 
 fn dependency_from_easyconfig(
@@ -2136,7 +2132,7 @@ pub fn write_package_bundle_into(
         for recipe in &bundle.easyconfigs {
             validate_path_segment(&recipe.filename, "easyconfig filename")?;
             let path = recipe_directory.join(&recipe.filename);
-            claim_overlay_path(recipe_bundle_root, &path, &recipe.text, claimed_paths)?;
+            claim_overlay_path(recipe_bundle_root, &path, recipe.text.as_bytes(), claimed_paths)?;
             std::fs::write(&path, &recipe.text)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             easyconfigs.push(path);
@@ -2154,10 +2150,11 @@ pub fn write_package_bundle_into(
             validate_path_segment(&patch.filename, "patch filename")?;
             let source = validate_patch_source(patch)?;
             let path = recipe_directory.join(&patch.filename);
-            let content = std::fs::read_to_string(&source)
+            // A patch is bytes: a binary hunk is not UTF-8 and still copies.
+            let content = std::fs::read(&source)
                 .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
             claim_overlay_path(recipe_bundle_root, &path, &content, claimed_paths)?;
-            std::fs::copy(&source, &path)
+            std::fs::write(&path, &content)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             patches.push(path);
         }
@@ -2174,8 +2171,9 @@ pub fn write_package_bundle_into(
             // Two packages may ship the same module; only different bytes at
             // one path are a collision.
             let key = relative_posix(path.strip_prefix(recipe_bundle_root).unwrap_or(&path));
+            let digest = sha256_hex(content.as_bytes());
             match claimed_paths.get(&key) {
-                Some(previous) if *previous == content => {}
+                Some(previous) if *previous == digest => {}
                 Some(_) => {
                     return Err(PackageWorkflowError::OverlayCollision {
                         path: key,
@@ -2183,7 +2181,7 @@ pub fn write_package_bundle_into(
                     })
                 }
                 None => {
-                    claimed_paths.insert(key, content);
+                    claimed_paths.insert(key, digest);
                     // A module rendered into the bundle already sits at its
                     // destination, and copying a file onto itself empties it.
                     let in_place = matches!(
@@ -2340,10 +2338,11 @@ pub fn validate_path_segment(segment: &str, kind: &str) -> Result<(), PackageWor
     Ok(())
 }
 
+/// Claim a bundle path for `content`; the claim table holds its SHA-256.
 fn claim_overlay_path(
     recipe_bundle_root: &Path,
     absolute: &Path,
-    content: &str,
+    content: &[u8],
     claimed_paths: &mut BTreeMap<String, String>,
 ) -> Result<(), PackageWorkflowError> {
     let relative = absolute.strip_prefix(recipe_bundle_root).map_err(|_| {
@@ -2353,8 +2352,9 @@ fn claim_overlay_path(
         }
     })?;
     let key = relative_posix(relative);
+    let digest = sha256_hex(content);
     if let Some(previous) = claimed_paths.get(&key) {
-        if previous != content {
+        if previous != &digest {
             return Err(PackageWorkflowError::OverlayCollision {
                 path: key,
                 reason: "destination already claimed with different content".into(),
@@ -2365,7 +2365,7 @@ fn claim_overlay_path(
             reason: "destination already claimed".into(),
         });
     }
-    claimed_paths.insert(key, content.to_string());
+    claimed_paths.insert(key, digest);
     Ok(())
 }
 
