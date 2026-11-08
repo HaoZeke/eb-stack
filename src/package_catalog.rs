@@ -287,13 +287,37 @@ impl PackageSourceCatalog {
             .filter(|provider| package_identity(&provider.name) == identity)
             .filter(|provider| match version {
                 Some(requested) => match provider.version.as_deref() {
-                    Some(provided) => provided == requested,
-                    // Unversioned providers may fill an exact version request when unique.
+                    Some(provided) => provided.trim() == requested.trim(),
                     None => true,
                 },
                 None => true,
             })
             .collect();
+
+        if let Some(requested) = version {
+            let requested = requested.trim();
+            let exact: Vec<&PackageSourceProvider> = matches
+                .iter()
+                .copied()
+                .filter(|provider| {
+                    provider
+                        .version
+                        .as_deref()
+                        .is_some_and(|provided| provided.trim() == requested)
+                })
+                .collect();
+            match exact.as_slice() {
+                [provider] => return Ok(*provider),
+                [] => {}
+                many => {
+                    return Err(PackageCatalogError::AmbiguousProvider {
+                        name: name.to_string(),
+                        version: version_suffix(version),
+                        count: many.len(),
+                    });
+                }
+            }
+        }
 
         match matches.as_slice() {
             [provider] => Ok(*provider),
@@ -356,10 +380,14 @@ pub fn resolve_package_catalog_layers(
             let entry = merged.get_mut(&key).expect("entry inserted");
             entry.name = patch.name.clone();
             if let Some(provider) = patch.provider {
+                let switching_to_bump = provider == CatalogProviderKind::EasyBuildBump
+                    && entry.provider != Some(CatalogProviderKind::EasyBuildBump);
                 entry.provider = Some(provider);
                 if provider == CatalogProviderKind::EasyBuildBump {
                     // Drop inherited foreign-authoring fields unless this patch
-                    // re-states them (which validation then rejects).
+                    // re-states them (which validation then rejects). A
+                    // restated easybuild-bump keeps a legal inherited digest;
+                    // only a kind switch drops checksums the overlay omitted.
                     if patch.format.is_none() {
                         entry.format = None;
                     }
@@ -369,13 +397,34 @@ pub fn resolve_package_catalog_layers(
                     if patch.profile.is_none() {
                         entry.profile = None;
                     }
+                    if switching_to_bump && patch.source_checksums.is_empty() {
+                        entry.source_checksums.clear();
+                    }
                 }
             }
-            if patch.version.is_some() {
-                entry.version = patch.version.clone();
+            if let Some(version) = &patch.version {
+                let version = version.trim();
+                entry.version = if version.is_empty() {
+                    None
+                } else {
+                    Some(version.to_string())
+                };
             }
             if let Some(source) = &patch.source {
+                if source.trim().is_empty() {
+                    return Err(PackageCatalogError::MissingSource {
+                        name: patch.name.clone(),
+                    });
+                }
                 entry.source = Some(resolve_path(layer.base_directory.as_deref(), source));
+                if patch.source_checksums.is_empty() {
+                    entry.source_checksums.clear();
+                }
+                // A new recipe does not inherit the previous format; omit
+                // `format` to auto-detect (recipe.yaml is not Spack).
+                if patch.format.is_none() {
+                    entry.format = None;
+                }
             }
             if patch.format.is_some() {
                 entry.format = patch.format;
@@ -397,8 +446,12 @@ pub fn resolve_package_catalog_layers(
                 entry.toolchain = Some(toolchain.clone());
             }
             if let Some(stack_policy) = &patch.stack_policy {
-                entry.stack_policy =
-                    Some(resolve_path(layer.base_directory.as_deref(), stack_policy));
+                if stack_policy.trim().is_empty() {
+                    entry.stack_policy = None;
+                } else {
+                    entry.stack_policy =
+                        Some(resolve_path(layer.base_directory.as_deref(), stack_policy));
+                }
             }
         }
     }
@@ -463,7 +516,7 @@ impl MergedEntry {
         }
 
         Ok(PackageSourceProvider {
-            name: self.name,
+            name: self.name.trim().to_string(),
             provider,
             version: self.version.filter(|value| !value.trim().is_empty()),
             source,
@@ -471,7 +524,10 @@ impl MergedEntry {
             package_config: self.package_config,
             source_checksums: self.source_checksums,
             profile,
-            toolchain,
+            toolchain: Toolchain {
+                name: toolchain.name.trim().to_string(),
+                version: toolchain.version.trim().to_string(),
+            },
             stack_policy: self.stack_policy,
         })
     }
