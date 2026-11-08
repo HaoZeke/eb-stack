@@ -1,0 +1,124 @@
+easyblock = 'CargoMesonNinja'
+
+name = 'linkcell'
+version = '0.3.11'
+
+homepage = 'https://github.com/d-SEAMS/linkcell'
+description = """linkcell builds cell lists and neighbour lists for periodic and open
+ boxes in Rust, with a C/C++ interface (liblinkcell, linkcell.h, linkcell.hpp, linkcell.pc).
+ eOn uses it for neighbour searches."""
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+github_account = 'd-SEAMS'
+source_urls = [GITHUB_SOURCE]
+sources = [{
+    'download_filename': 'v%(version)s.tar.gz',
+    'filename': SOURCE_TAR_GZ,
+}]
+crates = [
+    ('autocfg', '1.5.1'),
+    ('cc', '1.4.3'),
+    ('crossbeam-deque', '0.8.7'),
+    ('crossbeam-epoch', '0.9.20'),
+    ('crossbeam-utils', '0.8.22'),
+    ('dlpk', '0.4.1'),
+    ('either', '1.17.0'),
+    ('find-msvc-tools', '0.1.11'),
+    ('heck', '0.5.0'),
+    ('libc', '0.2.189'),
+    ('matrixmultiply', '0.3.11'),
+    ('minimage', '0.1.4'),
+    ('ndarray', '0.17.2'),
+    ('num-complex', '0.4.6'),
+    ('num-integer', '0.1.47'),
+    ('num-traits', '0.2.19'),
+    ('once_cell', '1.21.4'),
+    ('portable-atomic', '1.15.0'),
+    ('portable-atomic-util', '0.2.7'),
+    ('proc-macro2', '1.0.107'),
+    ('pyo3', '0.29.2'),
+    ('pyo3-build-config', '0.29.2'),
+    ('pyo3-ffi', '0.29.2'),
+    ('pyo3-macros', '0.29.2'),
+    ('pyo3-macros-backend', '0.29.2'),
+    ('quote', '1.0.47'),
+    ('rawpointer', '0.2.1'),
+    ('rayon', '1.12.0'),
+    ('rayon-core', '1.13.0'),
+    ('shlex', '2.0.1'),
+    ('syn', '2.0.119'),
+    ('target-lexicon', '0.13.5'),
+    ('unicode-ident', '1.0.24'),
+]
+checksums = [
+    {'linkcell-0.3.11.tar.gz': '5472191d49952cb5021ed6d9d66c048d831bdf79e238502ecc441e27ec2be7a1'},
+    {'autocfg-1.5.1.tar.gz': 'f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53'},
+    {'cc-1.4.3.tar.gz': '509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d'},
+    {'crossbeam-deque-0.8.7.tar.gz': '5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb'},
+    {'crossbeam-epoch-0.9.20.tar.gz': '2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f'},
+    {'crossbeam-utils-0.8.22.tar.gz': '61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17'},
+    {'dlpk-0.4.1.tar.gz': '503a32bf50768101d25609707da323aa3a1c78328adf500989bb7d75a4f6acb0'},
+    {'either-1.17.0.tar.gz': '9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d'},
+    {'find-msvc-tools-0.1.11.tar.gz': 'd45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890'},
+    {'heck-0.5.0.tar.gz': '2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea'},
+    {'libc-0.2.189.tar.gz': '3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2'},
+    {'matrixmultiply-0.3.11.tar.gz': '3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7'},
+    {'minimage-0.1.4.tar.gz': '6e0c930112bcf7c3606a5e4dd67c90522432cb536a250d879967d094f1803abe'},
+    {'ndarray-0.17.2.tar.gz': '520080814a7a6b4a6e9070823bb24b4531daac8c4627e08ba5de8c5ef2f2752d'},
+    {'num-complex-0.4.6.tar.gz': '73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495'},
+    {'num-integer-0.1.47.tar.gz': '7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b'},
+    {'num-traits-0.2.19.tar.gz': '071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841'},
+    {'once_cell-1.21.4.tar.gz': '9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50'},
+    {'portable-atomic-1.15.0.tar.gz': '05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85'},
+    {'portable-atomic-util-0.2.7.tar.gz': 'c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618'},
+    {'proc-macro2-1.0.107.tar.gz': '985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9'},
+    {'pyo3-0.29.2.tar.gz': '4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b'},
+    {'pyo3-build-config-0.29.2.tar.gz': 'f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9'},
+    {'pyo3-ffi-0.29.2.tar.gz': 'e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327'},
+    {'pyo3-macros-0.29.2.tar.gz': '73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c'},
+    {'pyo3-macros-backend-0.29.2.tar.gz': '571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952'},
+    {'quote-1.0.47.tar.gz': '1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001'},
+    {'rawpointer-0.2.1.tar.gz': '60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3'},
+    {'rayon-1.12.0.tar.gz': 'fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d'},
+    {'rayon-core-1.13.0.tar.gz': '22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91'},
+    {'shlex-2.0.1.tar.gz': 'f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba'},
+    {'syn-2.0.119.tar.gz': '872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297'},
+    {'target-lexicon-0.13.5.tar.gz': 'adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca'},
+    {'unicode-ident-1.0.24.tar.gz': 'e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75'},
+]
+
+builddependencies = [
+    ('binutils', '2.45'),
+    ('Rust', '1.94.1'),
+    ('Meson', '1.10.2'),
+    ('Ninja', '1.13.2'),
+    ('pkgconf', '2.5.1'),
+    ('Python', '3.14.2'),
+]
+
+# The Meson build drives cargo with the crate's default features (capi, parallel) on
+# the vendored crates above and installs the shared and static library, both headers
+# and linkcell.pc. with_gpulite keeps its auto default; gpulite is not a dependency,
+# so linkcell-gpu is not built.
+configopts = '-Dwith_tests=true -Dwith_examples=true'
+
+runtest = 'meson'
+testopts = 'test -C %(builddir)s/easybuild_obj --print-errorlogs'
+
+sanity_check_paths = {
+    'files': [
+        'include/linkcell.h',
+        'include/linkcell.hpp',
+        'lib/liblinkcell.a',
+        'lib/liblinkcell.%s' % SHLIB_EXT,
+        'lib/pkgconfig/linkcell.pc',
+    ],
+    'dirs': [],
+}
+
+sanity_check_commands = [
+    'pkg-config --exact-version=%(version)s linkcell',
+]
+
+moduleclass = 'lib'

@@ -107,6 +107,9 @@ pub struct ResolvedEasyconfig {
     /// Number of entries in `sources` (0 when the field is absent).
     #[serde(default)]
     pub sources_count: usize,
+    /// Number of entries in `data_sources` (0 when absent).
+    #[serde(default)]
+    pub data_sources_count: usize,
     /// Expanded `source_urls` entries, used to classify which artifact the
     /// recipe actually downloads.
     #[serde(default)]
@@ -118,19 +121,31 @@ pub struct ResolvedEasyconfig {
     /// recipe-level list for that entry, as it does in EasyBuild.
     #[serde(default)]
     pub source_files: Vec<SourceFile>,
+    /// Filenames Cargo easyblocks append onto `sources` from each `crates`
+    /// tuple (`name-version.tar.gz`, or `name-version-revprefix.tar.xz` for
+    /// git crates). Empty when `crates` is absent.
+    #[serde(default)]
+    pub crate_source_names: Vec<String>,
+    /// Filenames from `data_sources` (string or dict `filename`/`name`).
+    #[serde(default)]
+    pub data_source_names: Vec<String>,
     /// Patch file names from `patches` (tuple/dict entries reduced to the name).
     #[serde(default)]
     pub patch_names: Vec<String>,
     /// Per-`checksums`-LIST-ENTRY dict keys (empty inner vec for plain-string
     /// entries). Parallel to the checksums list entries, not the flattened
-    /// values, so a multi-arch dict entry stays one entry.
+    /// values, so a multi-arch dict entry stays one entry. Empty when
+    /// `checksums` is a top-level filename dict rather than a list.
     #[serde(default)]
     pub checksum_entry_keys: Vec<Vec<String>>,
-    /// Checksums the recipe states by filename, for the entries written as
-    /// `{'name': 'sha…'}`. Position says nothing once one entry carries
-    /// several hashes.
+    /// Checksums the recipe states by filename, for list entries written as
+    /// `{'name': 'sha…'}` and for a top-level checksums dict.
     #[serde(default)]
     pub checksums_by_filename: BTreeMap<String, String>,
+    /// `checksums` is a single filename→digest dict (EasyBuild looks up by
+    /// name and ignores list index).
+    #[serde(default)]
+    pub checksums_top_level_dict: bool,
     /// The recipe sets `components`: it bundles other packages, whatever its
     /// easyblock is called.
     #[serde(default)]
@@ -2923,10 +2938,14 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
     let homepage = opt_str_field(&parser.env, "homepage", &templates);
     let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
     let sources_count = env_list_len(&parser.env, "sources", &templates);
+    let data_source_names = data_source_names_field(&parser.env, &templates);
+    let data_sources_count = data_source_names.len();
     let source_urls = env_string_list(&parser.env, "source_urls", &templates);
     let source_files = source_files_field(&parser.env, &templates);
+    let crate_source_names = crate_source_names_field(&parser.env, &templates);
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
+    let checksums_top_level_dict = checksums_is_top_level_dict(&parser.env, &templates);
     let checksums_by_filename = checksums_by_filename_field(&parser.env, &templates);
     let has_components = parser.env.contains_key("components")
         || parser
@@ -2969,11 +2988,15 @@ fn resolve_easyconfig_str_inner(src: &str, arch: &str) -> Result<InnerResolved, 
         homepage,
         checksums,
         sources_count,
+        data_sources_count,
         source_urls,
         source_files,
+        crate_source_names,
+        data_source_names,
         patch_names,
         checksum_entry_keys,
         checksums_by_filename,
+        checksums_top_level_dict,
         has_components,
         component_checksums_complete,
     };
@@ -3499,36 +3522,256 @@ fn checksum_entry_keys_field(
         .collect()
 }
 
-/// Structural findings for the `checksums` list (EasyBuild convention:
-/// positional, all `sources` entries first, then `patches`). Catches the
-/// class of failure where a patch checksum is inserted in a source slot,
-/// which otherwise only surfaces as an eb "Missing checksum for X" abort
-/// after a build cycle has already been spent.
+/// Filenames Cargo appends from `crates` (`Cargo.crate_src_filename`).
+fn crate_source_names_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<String> {
+    let Some(v) = env.get("crates") else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let xs = match item {
+                Value::Tuple(xs) | Value::List(xs) => xs.as_slice(),
+                _ => return None,
+            };
+            let name = xs.first()?.as_str()?;
+            let version = xs.get(1)?.as_str()?;
+            // (name, version) → crates.io tarball; (name, version, repo, rev) →
+            // git archive with short rev, matching Cargo.crate_src_filename.
+            if xs.len() >= 4 {
+                let rev = xs.get(3)?.as_str()?;
+                let short: String = rev.chars().take(8).collect();
+                Some(format!("{name}-{version}-{short}.tar.xz"))
+            } else {
+                Some(format!("{name}-{version}.tar.gz"))
+            }
+        })
+        .collect()
+}
+
+/// Filenames from `data_sources` (plain string or dict with filename/name).
+fn data_source_names_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<String> {
+    let Some(v) = env.get("data_sources") else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Str(s) => Some(s.clone()),
+            Value::Tuple(xs) | Value::List(xs) => {
+                xs.first().and_then(|x| x.as_str()).map(str::to_string)
+            }
+            Value::Dict(kvs) => kvs
+                .iter()
+                .find(|(k, _)| k == "filename" || k == "name")
+                .and_then(|(_, val)| val.as_str())
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+fn checksums_is_top_level_dict(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> bool {
+    let Some(v) = env.get("checksums") else {
+        return false;
+    };
+    matches!(apply_templates_value(v, templates), Value::Dict(_))
+}
+
+/// Slots before patches after Cargo expands crates into `sources`, then
+/// `check_checksums_for` chains `itertools.chain(sources, data_sources)`.
+/// Order: declared sources, crate tarballs, data_sources.
+fn checksum_source_slot_count(recipe: &ResolvedEasyconfig) -> usize {
+    recipe.sources_count + recipe.crate_source_names.len() + recipe.data_sources_count
+}
+
+/// Basename at expanded source-slot index `i` for `verify_checksum` lookup.
+fn expected_name_at_source_slot(recipe: &ResolvedEasyconfig, i: usize) -> Option<String> {
+    let n_src = recipe.sources_count;
+    let n_crate = recipe.crate_source_names.len();
+    if i < n_src {
+        return recipe.source_files.get(i).map(|s| s.filename.clone());
+    }
+    if i < n_src + n_crate {
+        return recipe.crate_source_names.get(i - n_src).cloned();
+    }
+    let data_i = i - n_src - n_crate;
+    recipe.data_source_names.get(data_i).cloned()
+}
+
+fn expected_artifact_names(recipe: &ResolvedEasyconfig) -> Vec<String> {
+    let mut names: Vec<String> = recipe
+        .source_files
+        .iter()
+        .map(|s| s.filename.clone())
+        .collect();
+    names.extend(recipe.crate_source_names.iter().cloned());
+    names.extend(recipe.data_source_names.iter().cloned());
+    names.extend(recipe.patch_names.iter().cloned());
+    names
+}
+
+/// Structural findings for the `checksums` list or top-level dict.
+///
+/// Real EasyBuild (`get_checksum_for` + `verify_checksum` + Cargo lifecycle):
+/// - Cargo.`__init__` appends each `crates` tarball onto `cfg['sources']`.
+/// - `check_checksums_for` then builds filenames via
+///   `chain(sources, data_sources)` then patches, so the list order is
+///   declared sources, crate tarballs, data_sources, patches.
+/// - A **list** of checksums is positional by index. A list entry may be a
+///   plain MD5/SHA256 string, a `(type, value)` tuple, alternatives, or a
+///   **dict** looked up by artifact basename at that index; one dict may map
+///   several names for the *same* slot (multi-arch), not several sources.
+/// - A top-level checksums **dict** is name-keyed and ignores index.
 pub fn checksum_structure_findings(recipe: &ResolvedEasyconfig) -> Vec<String> {
     let mut out = Vec::new();
     let entries = recipe.checksum_entry_keys.len();
     if entries == 0 {
+        if recipe.checksums_top_level_dict && !recipe.checksums_by_filename.is_empty() {
+            let keys_have_templates = recipe
+                .checksums_by_filename
+                .keys()
+                .any(|k| k.contains("%("));
+            for name in expected_artifact_names(recipe) {
+                if name.contains("%(") || keys_have_templates {
+                    continue;
+                }
+                if !recipe.checksums_by_filename.contains_key(&name) {
+                    out.push(format!(
+                        "checksums dict has no digest for '{name}' \
+                         (EasyBuild get_checksum_for looks up the artifact name in a \
+                         top-level checksums mapping)"
+                    ));
+                }
+            }
+        }
         return out;
     }
-    let expected = recipe.sources_count + recipe.patch_names.len();
-    if recipe.sources_count > 0 && entries != expected {
+    let source_slots = checksum_source_slot_count(recipe);
+    let patch_slots = recipe.patch_names.len();
+    let expected = source_slots + patch_slots;
+    if source_slots > 0 && entries != expected {
+        let mut parts = vec![format!("sources ({})", recipe.sources_count)];
+        if !recipe.crate_source_names.is_empty() {
+            parts.push(format!("crates ({})", recipe.crate_source_names.len()));
+        }
+        if recipe.data_sources_count > 0 {
+            parts.push(format!("data_sources ({})", recipe.data_sources_count));
+        }
+        parts.push(format!("patches ({patch_slots})"));
         out.push(format!(
-            "checksums has {entries} entries but sources ({}) + patches ({}) = {expected} \
+            "checksums has {entries} entries but {} = {expected} \
              (EasyBuild matches checksums positionally: sources first, then patches)",
-            recipe.sources_count,
-            recipe.patch_names.len(),
+            parts.join(" + "),
         ));
     }
+    // Keyed entries still occupy a positional slot. Mirror verify_checksum:
+    // the dict at index i must contain the artifact basename for that slot.
+    // Once a patch key appears in a source slot, later shifted mismatches are
+    // the same defect cascading through indices — report the displacement and
+    // stop (preserves the classic single finding for that class).
+    let mut patch_displaced_into_sources = false;
     for (i, keys) in recipe.checksum_entry_keys.iter().enumerate() {
-        if i >= recipe.sources_count {
+        if i >= source_slots {
             break;
         }
+        if keys.is_empty() {
+            continue;
+        }
+        let mut patch_keys_here = false;
         for k in keys {
             if recipe.patch_names.iter().any(|p| p == k) {
+                patch_keys_here = true;
+                patch_displaced_into_sources = true;
                 out.push(format!(
                     "checksum entry {i} is keyed by patch '{k}' but sits in a source slot \
-                     (positions 0..{} are sources; move patch checksums after all source entries)",
-                    recipe.sources_count,
+                     (positions 0..{source_slots} are sources; move patch checksums after all source entries)"
+                ));
+            }
+        }
+        if patch_displaced_into_sources {
+            continue;
+        }
+        if patch_keys_here {
+            continue;
+        }
+        // Dict keys may still carry EasyConfig templates (`%(version)s`,
+        // `%(arch)s`). EasyBuild expands those before verify_checksum; our
+        // source_files may already be expanded. Skip exact basename match
+        // when keys are templated (same class as multi-arch one-slot dicts).
+        if keys.iter().any(|k| k.contains("%(")) {
+            continue;
+        }
+        if let Some(expected_name) = expected_name_at_source_slot(recipe, i) {
+            if !expected_name.contains("%(") && !keys.iter().any(|k| k == &expected_name) {
+                out.push(format!(
+                    "checksum entry {i} keys {keys:?} do not include expected source \
+                     '{expected_name}' (EasyBuild verify_checksum looks up the artifact \
+                     basename in the dict at this index)"
+                ));
+            }
+        }
+    }
+    // Patch slots after a clean source span: keyed entry must name the patch.
+    if !patch_displaced_into_sources {
+        for (patch_i, patch_name) in recipe.patch_names.iter().enumerate() {
+            let i = source_slots + patch_i;
+            let Some(keys) = recipe.checksum_entry_keys.get(i) else {
+                continue;
+            };
+            if keys.is_empty() {
+                continue;
+            }
+            if !keys.iter().any(|k| k == patch_name) {
+                out.push(format!(
+                    "checksum entry {i} keys {keys:?} do not include expected patch \
+                     '{patch_name}' (EasyBuild looks up the patch basename in the dict \
+                     at this index after slicing past expanded sources)"
+                ));
+            }
+        }
+    }
+    // Fully keyed lists (every entry is a filename dict): every concrete
+    // expected artifact name must appear as a key somewhere. Mixed lists (some
+    // plain positional digests) rely on the count + per-slot checks; demanding
+    // keys for positional digests would false-flag them.
+    let fully_keyed = recipe
+        .checksum_entry_keys
+        .iter()
+        .all(|keys| !keys.is_empty());
+    if fully_keyed && !recipe.checksums_by_filename.is_empty() {
+        let keys_have_templates = recipe
+            .checksums_by_filename
+            .keys()
+            .any(|k| k.contains("%("));
+        for name in expected_artifact_names(recipe) {
+            if name.contains("%(") {
+                continue;
+            }
+            if keys_have_templates {
+                continue;
+            }
+            if !recipe.checksums_by_filename.contains_key(&name) {
+                out.push(format!(
+                    "checksums list is keyed by filename but has no digest for '{name}' \
+                     (EasyBuild looks up the artifact name inside the checksum entry for that slot)"
                 ));
             }
         }
@@ -3583,18 +3826,26 @@ fn checksums_by_filename_field(
         return out;
     };
     let v = apply_templates_value(v, templates);
-    let Ok(items) = value_list_as_slice(Some(&v)) else {
-        return out;
-    };
-    for item in items {
-        let Value::Dict(entries) = item else {
-            continue;
-        };
+    let insert_dict = |out: &mut BTreeMap<String, String>, entries: &[(String, Value)]| {
         for (filename, value) in entries {
             // A tuple of hashes means any of them is acceptable; the first
             // answers the question "does this artifact have a checksum".
             if let Some(checksum) = checksum_strings_from_value(value).first() {
                 out.insert(filename.clone(), checksum.clone());
+            }
+        }
+    };
+    match &v {
+        Value::Dict(entries) => insert_dict(&mut out, entries),
+        _ => {
+            let Ok(items) = value_list_as_slice(Some(&v)) else {
+                return out;
+            };
+            for item in items {
+                let Value::Dict(entries) = item else {
+                    continue;
+                };
+                insert_dict(&mut out, entries);
             }
         }
     }
@@ -5298,11 +5549,15 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             homepage: None,
             checksums: vec![],
             sources_count: 0,
+            data_sources_count: 0,
             source_urls: Vec::new(),
             source_files: Vec::new(),
+            crate_source_names: vec![],
+            data_source_names: vec![],
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
+            checksums_top_level_dict: false,
             has_components: false,
             component_checksums_complete: false,
         };
@@ -5842,6 +6097,404 @@ builddependencies = [
     }
 
     #[test]
+    fn checksum_lint_accepts_cargo_crates_as_expanded_sources() {
+        // CargoMesonNinja / Cargo: crates become sources before checksums are
+        // matched. A fully keyed sources+crates+patches list must not be
+        // rejected as "sources + patches" alone.
+        let src = r#"
+easyblock = 'CargoMesonNinja'
+name = 'toy'
+version = '1.0'
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189'), ('cfg-if', '1.0.4')]
+patches = ['toy-1.0_fix.patch']
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+    {'cfg-if-1.0.4.tar.gz': 'cc'},
+    {'toy-1.0_fix.patch': 'dd'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse cargo toy");
+        assert_eq!(r.sources_count, 1);
+        assert_eq!(
+            r.crate_source_names,
+            vec!["libc-0.2.189.tar.gz", "cfg-if-1.0.4.tar.gz"]
+        );
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+    }
+
+    #[test]
+    fn checksum_lint_flags_missing_crate_digest() {
+        let src = r#"
+easyblock = 'Cargo'
+name = 'toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189'), ('cfg-if', '1.0.4')]
+patches = ['toy-1.0_fix.patch']
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+    {'toy-1.0_fix.patch': 'dd'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse short cargo");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("positionally") && f.contains("crates")),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn checksum_lint_flags_patch_in_slot_before_crates() {
+        let src = r#"
+easyblock = 'CargoMesonNinja'
+name = 'toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['toy-1.0_fix.patch']
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'toy-1.0_fix.patch': 'dd'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse swapped cargo");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings.iter().any(|f| f.contains("source slot")),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn checksum_lint_accepts_positional_and_mixed_with_crates() {
+        let positional = r#"
+name = 'toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['toy-1.0_fix.patch']
+checksums = ['aa', 'bb', 'cc']
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(positional).expect("positional");
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+        let mixed = r#"
+name = 'toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['toy-1.0_fix.patch']
+checksums = ['aa', {'libc-0.2.189.tar.gz': 'bb'}, 'cc']
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(mixed).expect("mixed");
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+    }
+
+    #[test]
+    fn checksum_lint_accepts_real_linkcell_and_rgmin_cargo_recipes() {
+        // Public CargoMesonNinja recipes with EasyBuild order
+        // (sources, crates, patches). The pre-fix checker rejected them on
+        // sources+patches count alone even when crate digests were present.
+        let linkcell =
+            include_str!("../fixtures/checksum_structure/linkcell-0.3.11-GCCcore-15.2.0.eb");
+        let rgmin = include_str!(
+            "../fixtures/checksum_structure/rgmin-0.5.2-GCCcore-15.2.0-git18959f8a.eb"
+        );
+        for (label, text) in [("linkcell", linkcell), ("rgmin", rgmin)] {
+            let r = resolve_easyconfig_str(text).unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert!(
+                r.crate_source_names.len() > 1,
+                "{label} should declare crates"
+            );
+            let findings = checksum_structure_findings(&r);
+            assert!(
+                findings.is_empty(),
+                "{label} findings={findings:?} crates={} checksums={}",
+                r.crate_source_names.len(),
+                r.checksum_entry_keys.len()
+            );
+        }
+    }
+
+    #[test]
+    fn checksum_lint_flags_patch_before_crates_like_real_eb() {
+        // Published tip order put the patch digest before crate digests.
+        // Real EasyBuild get_checksum_for still assigns by list index after
+        // Cargo expands crates, so the patch dict is given to the first crate
+        // and verify_checksum raises Missing checksum for <crate>.
+        let tip = include_str!(
+            "../fixtures/checksum_structure/rgmin-0.5.2-GCCcore-15.2.0-git18959f8a-patch-before-crates.eb"
+        );
+        let r = resolve_easyconfig_str(tip).expect("parse tip order");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            !findings.iter().any(|f| f.contains("positionally")),
+            "count must match once crates are included: {findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.contains("source slot")),
+            "patch-before-crates must still be flagged: {findings:?}"
+        );
+        // Real framework lookup fails for every subsequent crate index too;
+        // the checker reports the patch displacement once (same root cause).
+    }
+
+    #[test]
+    fn checksum_lint_counts_data_sources_with_sources() {
+        let src = r#"
+name = 'App'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['app-1.0.tar.gz']
+data_sources = ['app-data.bin']
+patches = ['App-1.0_fix.patch']
+checksums = ['aa', 'bb']
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse data_sources");
+        assert_eq!(r.sources_count, 1);
+        assert_eq!(r.data_sources_count, 1);
+        assert_eq!(r.data_source_names, vec!["app-data.bin"]);
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings.iter().any(|f| {
+                f.contains("positionally") && f.contains("data_sources (1)") && f.contains("= 3")
+            }),
+            "got {findings:?}"
+        );
+        let ok = r#"
+name = 'App'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['app-1.0.tar.gz']
+data_sources = ['app-data.bin']
+patches = ['App-1.0_fix.patch']
+checksums = ['aa', 'bb', 'cc']
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(ok).expect("parse ok data_sources");
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+    }
+
+    #[test]
+    fn checksum_lint_accepts_md5_and_sha256_keyed_forms_and_one_slot_multikey() {
+        // MD5 (32) and SHA256 (64) are both valid string forms in verify_checksum.
+        // A multi-key dict is still ONE list entry for ONE source index.
+        let src = r#"
+name = 'Sdk'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['sdk_%(arch)s.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['Sdk-1.0_fix.patch']
+checksums = [
+    {'sdk_aarch64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+     'sdk_x86_64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'},
+    {'libc-0.2.189.tar.gz': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'},
+    {'Sdk-1.0_fix.patch': 'dddddddddddddddddddddddddddddddd'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse md5/sha forms");
+        assert_eq!(r.checksum_entry_keys.len(), 3);
+        assert_eq!(r.checksum_entry_keys[0].len(), 2, "multi-key is one slot");
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+    }
+
+    #[test]
+    fn checksum_lint_accepts_templated_checksum_keys_for_expanded_source() {
+        // Quarto-style: checksum dict keys keep %(version)s / arch variants in
+        // one slot while sources expand. Do not false-flag that as a missing
+        // basename; EasyBuild resolves templates on keys before verify.
+        let src = r#"
+name = 'quarto'
+version = '1.8.27'
+toolchain = SYSTEM
+sources = ['quarto-%(version)s-linux-amd64.tar.gz']
+checksums = [{
+    'quarto-%(version)s-linux-amd64.tar.gz': 'aa',
+    'quarto-%(version)s-linux-arm64.tar.gz': 'bb',
+}]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse templated keys");
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?} source_files={:?} keys={:?}",
+            checksum_structure_findings(&r),
+            r.source_files,
+            r.checksum_entry_keys
+        );
+    }
+
+    #[test]
+    fn checksum_lint_flags_swapped_keyed_crate_slots() {
+        let src = r#"
+easyblock = 'CargoMesonNinja'
+name = 'toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+crates = [('libc', '0.2.189'), ('cfg-if', '1.0.4')]
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'cfg-if-1.0.4.tar.gz': 'cc'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("parse swapped crates");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings.iter().any(|f| {
+                f.contains("do not include expected source") && f.contains("libc-0.2.189.tar.gz")
+            }),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn checksum_lint_combined_order_is_sources_crates_data_then_patches() {
+        // Real Cargo.__init__ appends crates onto sources; check_checksums_for
+        // then chains sources+data_sources. Correct list order is
+        // sources, crates, data_sources, patches — not sources, data, crates.
+        let correct = r#"
+easyblock = 'Cargo'
+name = 'Toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+data_sources = ['toy-data.bin']
+crates = [('libc', '0.2.189'), ('cfg-if', '1.0.4')]
+patches = ['Toy-1.0_fix.patch']
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+    {'cfg-if-1.0.4.tar.gz': 'cc'},
+    {'toy-data.bin': 'dd'},
+    {'Toy-1.0_fix.patch': 'ee'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(correct).expect("parse combined correct");
+        assert_eq!(r.data_source_names, vec!["toy-data.bin"]);
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+        let wrong_data_before_crates = r#"
+easyblock = 'Cargo'
+name = 'Toy'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['toy-1.0.tar.gz']
+data_sources = ['toy-data.bin']
+crates = [('libc', '0.2.189'), ('cfg-if', '1.0.4')]
+patches = ['Toy-1.0_fix.patch']
+checksums = [
+    {'toy-1.0.tar.gz': 'aa'},
+    {'toy-data.bin': 'dd'},
+    {'libc-0.2.189.tar.gz': 'bb'},
+    {'cfg-if-1.0.4.tar.gz': 'cc'},
+    {'Toy-1.0_fix.patch': 'ee'},
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(wrong_data_before_crates).expect("parse combined wrong");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings.iter().any(|f| {
+                f.contains("do not include expected source") && f.contains("libc-0.2.189.tar.gz")
+            }),
+            "data-before-crates must fail per-slot lookup: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn checksum_lint_top_level_dict_is_filename_keyed() {
+        let ok = r#"
+name = 'App'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['app-1.0.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['App-1.0_fix.patch']
+checksums = {
+    'app-1.0.tar.gz': 'aa',
+    'libc-0.2.189.tar.gz': 'bb',
+    'App-1.0_fix.patch': 'cc',
+}
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(ok).expect("parse top-level dict");
+        assert!(r.checksums_top_level_dict);
+        assert!(r.checksum_entry_keys.is_empty());
+        assert!(
+            checksum_structure_findings(&r).is_empty(),
+            "got {:?}",
+            checksum_structure_findings(&r)
+        );
+        let missing = r#"
+name = 'App'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['app-1.0.tar.gz']
+crates = [('libc', '0.2.189')]
+patches = ['App-1.0_fix.patch']
+checksums = {
+    'app-1.0.tar.gz': 'aa',
+    'App-1.0_fix.patch': 'cc',
+}
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(missing).expect("parse incomplete top-level dict");
+        let findings = checksum_structure_findings(&r);
+        assert!(
+            findings
+                .iter()
+                .any(|f| { f.contains("top-level") && f.contains("libc-0.2.189.tar.gz") }),
+            "got {findings:?}"
+        );
+    }
+
+    #[test]
     fn missing_dep_reason_names_nearest_generations() {
         let recipe = resolve_easyconfig_str(
             "name = 'App'\nversion = '1.0'\n\
@@ -6015,11 +6668,15 @@ builddependencies = [
             homepage: None,
             checksums: vec![],
             sources_count: 0,
+            data_sources_count: 0,
             source_urls: Vec::new(),
             source_files: Vec::new(),
+            crate_source_names: vec![],
+            data_source_names: vec![],
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
+            checksums_top_level_dict: false,
             has_components: false,
             component_checksums_complete: false,
         }

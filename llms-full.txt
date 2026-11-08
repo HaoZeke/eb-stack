@@ -7429,9 +7429,13 @@ prints `packages=<n> ledger=<a> table=<b> class=<c> records=<r>`, where
 `records` counts the ledger records that carried `build.inodes_peak`.
 
 `stack admit` is the controller's gate before it starts one build job.
-`--quota-json` is a JSON object: `inodes_available`, or `inodes_soft`
-and `inodes_used` (available is their difference, since the soft limit
-is the one GPFS enforces after its grace period), and `inodes_hard` when
+`--quota-json` is a JSON object: `inodes_available`, or `inodes_used`
+with the limits. Which limit governs follows GPFS: `inodes_soft` below the
+soft limit (`inodes_grace` absent or `none`); `inodes_hard` while the grace
+period runs (`inodes_grace` a remaining time such as `6 days`), since writes
+are allowed up to the hard limit then; the soft limit again once the grace
+has `expired`, when nothing is available. The decision reports `grace` and
+`soft_exceeded`. `inodes_hard` is carried through when
 known; `-` reads it from stdin, so the controller converts its
 `mmlsquota` output and pipes it. `--footprint` is the job's
 `inode_footprint` from `plan.json`. `--reservations` is a directory of

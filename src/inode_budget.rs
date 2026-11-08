@@ -582,11 +582,18 @@ pub struct Quota {
     pub soft: Option<u64>,
     /// `inodes_hard`, when given.
     pub hard: Option<u64>,
+    /// `inodes_grace`, when given: GPFS's grace column, `none` below the soft
+    /// limit, a remaining time while the grace period runs, `expired` after.
+    pub grace: Option<String>,
 }
 
-/// Read a quota document: `inodes_available`, or `inodes_soft` minus
-/// `inodes_used` (the soft limit is the one GPFS enforces after its grace
-/// period). `inodes_hard` is carried through.
+/// Read a quota document: `inodes_available`, or the limit that governs
+/// minus `inodes_used`. Which limit governs follows GPFS: below the soft
+/// limit (`inodes_grace` absent or `none`) the soft limit is the one to stay
+/// under; above it with the grace period running (`inodes_grace` such as
+/// `6 days`) writes are allowed up to the hard limit, so `inodes_hard` governs;
+/// once the grace has `expired` the soft limit is enforced and nothing is
+/// available. `inodes_hard` and `inodes_grace` are carried through.
 pub fn parse_quota(value: &Value) -> Result<Quota> {
     let Value::Object(top) = value else {
         bail!("quota is not a JSON object");
@@ -603,9 +610,18 @@ pub fn parse_quota(value: &Value) -> Result<Quota> {
     let used = field("inodes_used")?;
     let soft = field("inodes_soft")?;
     let hard = field("inodes_hard")?;
-    let available = match (field("inodes_available")?, soft, used) {
-        (Some(available), _, _) => available,
-        (None, Some(soft), Some(used)) => soft.saturating_sub(used),
+    let grace = match top.get("inodes_grace") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.trim().to_string()),
+        Some(_) => bail!("quota inodes_grace is not a string"),
+    };
+    let grace_running = grace
+        .as_deref()
+        .is_some_and(|g| !g.is_empty() && g != "none" && g != "expired");
+    let available = match (field("inodes_available")?, soft, hard, used) {
+        (Some(available), _, _, _) => available,
+        (None, _, Some(hard), Some(used)) if grace_running => hard.saturating_sub(used),
+        (None, Some(soft), _, Some(used)) => soft.saturating_sub(used),
         _ => bail!("quota needs inodes_available, or inodes_soft and inodes_used"),
     };
     Ok(Quota {
@@ -613,6 +629,7 @@ pub fn parse_quota(value: &Value) -> Result<Quota> {
         used,
         soft,
         hard,
+        grace,
     })
 }
 
@@ -979,6 +996,7 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
                 available: 0,
                 used: None,
                 soft: None,
+                grace: None,
                 hard: None,
             },
             Some(format!("quota observation failed: {error:#}")),
@@ -1045,6 +1063,8 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         "used": quota.used,
         "soft": quota.soft,
         "hard": quota.hard,
+        "grace": quota.grace,
+        "soft_exceeded": matches!((quota.used, quota.soft), (Some(u), Some(s)) if u > s),
         "reserved": decision.reserved,
         "footprint": decision.footprint,
         "margin": decision.margin,
@@ -1322,6 +1342,36 @@ mod tests {
         assert_eq!(direct.available, 12);
         let over = parse_quota(&json!({"inodes_used": 5, "inodes_soft": 3})).unwrap();
         assert_eq!(over.available, 0);
+        // above the soft limit with the grace period running, the hard limit
+        // governs; once it has expired, the soft limit is enforced again
+        let in_grace = parse_quota(&json!({
+            "inodes_used": 3_312_214,
+            "inodes_soft": 3_000_000,
+            "inodes_hard": 4_000_000,
+            "inodes_grace": "6 days",
+        }))
+        .unwrap();
+        assert_eq!(in_grace.available, 687_786);
+        assert_eq!(in_grace.grace.as_deref(), Some("6 days"));
+        let expired = parse_quota(&json!({
+            "inodes_used": 3_312_214,
+            "inodes_soft": 3_000_000,
+            "inodes_hard": 4_000_000,
+            "inodes_grace": "expired",
+        }))
+        .unwrap();
+        assert_eq!(expired.available, 0);
+        let below = parse_quota(&json!({
+            "inodes_used": 2_700_000,
+            "inodes_soft": 3_000_000,
+            "inodes_hard": 4_000_000,
+            "inodes_grace": "none",
+        }))
+        .unwrap();
+        assert_eq!(below.available, 300_000);
+        assert!(
+            parse_quota(&json!({"inodes_used": 5, "inodes_soft": 3, "inodes_grace": 7})).is_err()
+        );
         assert!(parse_quota(&json!({"inodes_used": 5})).is_err());
         assert!(parse_quota(&json!({"inodes_available": -1})).is_err());
     }

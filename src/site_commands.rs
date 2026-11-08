@@ -3984,6 +3984,21 @@ pub fn run_stack_shard_with_sources(
         "warnings": warnings,
     });
     if args.lift_cpu_prerequisites {
+        // The CPU list builds the lifted prerequisites and the CPU-only roots
+        // one after another, so its footprint follows the shard model: the
+        // largest module footprint plus the line overhead per line.
+        let cpu_modules: Vec<String> = planned
+            .cpu_prerequisites
+            .iter()
+            .cloned()
+            .chain(cpu_root_lines.iter().map(|&i| closures[i].root.clone()))
+            .collect();
+        let cpu_footprint = crate::inode_budget::shard_footprint(
+            &cpu_modules,
+            planned.cpu_prerequisites.len() + cpu_root_lines.len(),
+            &budget.footprints,
+            budget.line_overhead,
+        );
         document["cpu_prerequisites"] = json!({
             "file": if planned.cpu_prerequisites.is_empty() && cpu_root_lines.is_empty() {
                 serde_json::Value::Null
@@ -3991,6 +4006,8 @@ pub fn run_stack_shard_with_sources(
                 json!("cpu-prerequisites.list")
             },
             "weight": planned.cpu_prerequisites_weight,
+            "inode_footprint": cpu_footprint.inodes,
+            "inode_peak_module": cpu_footprint.peak_module,
             "modules": module_meta(&planned.cpu_prerequisites),
             "roots": cpu_root_json,
         });
