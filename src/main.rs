@@ -1564,8 +1564,9 @@ enum StackCommand {
     ///
     /// The peak of `build.inodes_peak` over the records of each `--ledger`,
     /// then each `--table` line (the larger when both name a package), then
-    /// the built-in class table (CP2K 350000; LAMMPS, PyTorch, SeisSol,
-    /// NVHPC, intel 150000), over a default of 60000. `stack shard
+    /// the bundled class table (data/inode-footprint-classes.toml: codes
+    /// with a large regression-test tree, GPU codes and vendor toolchains),
+    /// over a default of 60000. `stack shard
     /// --inode-footprints` and `stack admit --footprint` read the result.
     #[command(
         after_long_help = "Examples:\n  eb-stack stack footprints --ledger ledger/2025.jsonl --table site-footprints.tsv --out footprints.json"
