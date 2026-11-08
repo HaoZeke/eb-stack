@@ -158,11 +158,21 @@ pub fn package_of_module(module: &str) -> &str {
 pub enum Source {
     /// The peak `build.inodes_peak` over ledger records, with the module
     /// that reached it and the records counted.
-    Ledger { module: String, records: usize },
+    Ledger {
+        /// The module whose record reached the peak.
+        module: String,
+        /// How many ledger records carried a peak for the package.
+        records: usize,
+    },
     /// A static table line.
     Table,
     /// Both; the larger won.
-    LedgerAndTable { module: String, records: usize },
+    LedgerAndTable {
+        /// The module whose record reached the ledger peak.
+        module: String,
+        /// How many ledger records carried a peak for the package.
+        records: usize,
+    },
     /// A [`CLASSES`] entry.
     Class,
 }
