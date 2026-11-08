@@ -107,7 +107,7 @@ impl Footprints {
     /// The footprint of a module `Name/VersionFull`, or of an easyconfig
     /// filename `Name-version-toolchain.eb` when the line was planned
     /// opaque. A filename matches the longest table name it starts with,
-    /// followed by `-`, so `SciPy-bundle-2026.03.eb` is `SciPy-bundle`.
+    /// followed by `-`, so `jupyter-server-2.20.0-GCCcore-15.2.0.eb` is `jupyter-server`.
     #[must_use]
     pub fn of_module(&self, module: &str) -> u64 {
         if let Some((name, _)) = module.split_once('/') {
