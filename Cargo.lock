@@ -457,6 +457,7 @@ dependencies = [
  "regex",
  "resolvo",
  "rfc9162",
+ "rfc9162-log",
  "rfc9162-tiles",
  "rustpython-ast",
  "rustpython-parser",
@@ -1493,15 +1494,24 @@ dependencies = [
 [[package]]
 name = "rfc9162"
 version = "0.6.1"
-source = "git+https://github.com/leidarljos/rfc9162?rev=efe31c32a8a7026c4c6d975cac9f35ed2bee2e53#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
+source = "git+https://github.com/leidarljos/rfc9162?rev=80318ddbb8a4f57688a596604c7af41dcd2e032e#80318ddbb8a4f57688a596604c7af41dcd2e032e"
 dependencies = [
  "sha2 0.10.9",
 ]
 
 [[package]]
+name = "rfc9162-log"
+version = "0.6.1"
+source = "git+https://github.com/leidarljos/rfc9162?rev=80318ddbb8a4f57688a596604c7af41dcd2e032e#80318ddbb8a4f57688a596604c7af41dcd2e032e"
+dependencies = [
+ "rfc9162",
+ "rfc9162-tiles",
+]
+
+[[package]]
 name = "rfc9162-tiles"
 version = "0.6.1"
-source = "git+https://github.com/leidarljos/rfc9162?rev=efe31c32a8a7026c4c6d975cac9f35ed2bee2e53#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
+source = "git+https://github.com/leidarljos/rfc9162?rev=80318ddbb8a4f57688a596604c7af41dcd2e032e#80318ddbb8a4f57688a596604c7af41dcd2e032e"
 dependencies = [
  "ed25519-dalek",
  "rfc9162",
