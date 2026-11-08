@@ -3957,6 +3957,8 @@ impl ParseTreeResult {
 /// Unparseable files are **skipped** (not fatal): they appear in
 /// [`ParseTreeResult::skipped`] so callers can report coverage without
 /// aborting a real multi-thousand-file tree on the first bad recipe.
+///
+/// Each real directory is read once, however many symlinks lead to it.
 pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError> {
     parse_easyconfig_tree_for_arch(root, host_arch())
 }
@@ -3967,6 +3969,8 @@ pub fn parse_easyconfig_tree_for_arch(
     arch: &str,
 ) -> Result<ParseTreeResult, ParseError> {
     let mut out = ParseTreeResult::default();
+    let mut visits = crate::easyconfig_tree::DirVisits::default();
+    visits.first(root);
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let rd =
@@ -3975,7 +3979,9 @@ pub fn parse_easyconfig_tree_for_arch(
             let ent = ent.map_err(|e| ParseError::Io(dir.display().to_string(), e))?;
             let p = ent.path();
             if p.is_dir() {
-                stack.push(p);
+                if visits.first(&p) {
+                    stack.push(p);
+                }
             } else if p.extension().and_then(|s| s.to_str()) == Some("eb") {
                 match parse_easyconfig_file_for_arch(&p, arch) {
                     Ok(c) => out.candidates.push(c),

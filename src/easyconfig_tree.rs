@@ -8,10 +8,29 @@
 
 use anyhow::{bail, Context, Result};
 use std::cell::OnceCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// The directories a walk over a tree on disk has entered, by canonical path.
+///
+/// A symlink may point back at an ancestor or alias a directory already
+/// read; following each one would read the same files again, without end for
+/// a cycle and exponentially for nested aliases. A walk enters each real
+/// directory once.
+#[derive(Default)]
+pub(crate) struct DirVisits {
+    seen: HashSet<PathBuf>,
+}
+
+impl DirVisits {
+    /// Whether `dir` has not been entered yet; records it. A directory that
+    /// cannot be resolved is not entered.
+    pub(crate) fn first(&mut self, dir: &Path) -> bool {
+        std::fs::canonicalize(dir).is_ok_and(|real| self.seen.insert(real))
+    }
+}
 
 /// Where a [`Tree`] reads from.
 pub(crate) enum TreeKind {
@@ -180,7 +199,10 @@ impl Tree {
                 .collect(),
             TreeKind::Dir(root) => {
                 let mut out = Vec::new();
-                let mut stack = vec![(root.join(&prefix), prefix.clone())];
+                let mut visits = DirVisits::default();
+                let start = root.join(&prefix);
+                visits.first(&start);
+                let mut stack = vec![(start, prefix.clone())];
                 while let Some((path, rel)) = stack.pop() {
                     let Ok(read) = std::fs::read_dir(&path) else {
                         continue;
@@ -192,6 +214,9 @@ impl Tree {
                             continue;
                         };
                         if kind.is_dir() || (kind.is_symlink() && child.path().is_dir()) {
+                            if !visits.first(&child.path()) {
+                                continue;
+                            }
                             stack.push((child.path(), format!("{child_rel}/")));
                         } else {
                             out.push(child_rel);
@@ -249,6 +274,8 @@ impl Tree {
         match &self.kind {
             TreeKind::Git { files, .. } => files.keys().cloned().for_each(&mut add),
             TreeKind::Dir(root) => {
+                let mut visits = DirVisits::default();
+                visits.first(root);
                 let mut stack = vec![(root.clone(), String::new())];
                 while let Some((dir, prefix)) = stack.pop() {
                     let Ok(read) = std::fs::read_dir(&dir) else {
@@ -263,7 +290,9 @@ impl Tree {
                         }
                         let rel = join(&prefix, &name);
                         if child.path().is_dir() {
-                            stack.push((child.path(), rel));
+                            if visits.first(&child.path()) {
+                                stack.push((child.path(), rel));
+                            }
                         } else {
                             add(rel);
                         }

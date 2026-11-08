@@ -2291,11 +2291,26 @@ impl StackShardRun {
 
 /// Modules under an Lmod `modules/all` tree, as `Name/Version` (the version
 /// may hold further `/` levels). Hidden files, `default`, and `.modulerc`
-/// files are skipped; a symlink is followed.
+/// files are skipped; a symlink is followed, except back into a directory
+/// the walk is already inside, which would never end.
 fn modules_under(root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    #[cfg(unix)]
+    type DirKey = (u64, u64);
+    #[cfg(not(unix))]
+    type DirKey = PathBuf;
+    #[cfg(unix)]
+    fn dir_key(_path: &Path, meta: &std::fs::Metadata) -> Option<DirKey> {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    fn dir_key(path: &Path, _meta: &std::fs::Metadata) -> Option<DirKey> {
+        std::fs::canonicalize(path).ok()
+    }
     fn walk(
         dir: &Path,
         prefix: &str,
+        ancestors: &mut Vec<DirKey>,
         out: &mut std::collections::BTreeSet<String>,
     ) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
@@ -2314,7 +2329,16 @@ fn modules_under(root: &Path) -> Result<std::collections::BTreeSet<String>> {
                 continue;
             };
             if meta.is_dir() {
-                walk(&path, &rel, out)?;
+                let Some(key) = dir_key(&path, &meta) else {
+                    continue;
+                };
+                if ancestors.contains(&key) {
+                    continue;
+                }
+                ancestors.push(key);
+                let walked = walk(&path, &rel, ancestors, out);
+                ancestors.pop();
+                walked?;
             } else if !prefix.is_empty() {
                 out.insert(rel.strip_suffix(".lua").unwrap_or(&rel).to_string());
             }
@@ -2322,7 +2346,12 @@ fn modules_under(root: &Path) -> Result<std::collections::BTreeSet<String>> {
         Ok(())
     }
     let mut out = std::collections::BTreeSet::new();
-    walk(root, "", &mut out).map_err(|error| {
+    let mut ancestors: Vec<DirKey> = std::fs::metadata(root)
+        .ok()
+        .and_then(|meta| dir_key(root, &meta))
+        .into_iter()
+        .collect();
+    walk(root, "", &mut ancestors, &mut out).map_err(|error| {
         usage(format!(
             "--installed-modules-dir {}: {error}",
             root.display()

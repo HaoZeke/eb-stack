@@ -206,6 +206,7 @@ jobs:
             --test robot_lookup_versionprefix_field \
             --test stack_shard_robot_layout \
             --test stack_shard_robot_versionprefix_field \
+            --test planner_traversal \
             --test hierarchy_universe \
             --test jenkins_build_list \
             --test lint_fixtures \
