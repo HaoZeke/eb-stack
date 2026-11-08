@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## 0.5.2 - 2026-11-08
+
+### Changed
+
+- The same code as 0.5.1. The v0.5.1 tag sits on a commit whose
+  `Cargo.lock` and recorded version strings still said 0.5.0, so its
+  release does not build with `--locked`; 0.5.2 is the release of that
+  fix with every lockstep file at one version.
+
 ## 0.5.1 - 2026-11-08
 
 ### Fixed
