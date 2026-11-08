@@ -1538,7 +1538,7 @@ fn module_version_pin_is_not_a_hole_and_locks() {
         &plan,
         "default",
         &ProfileEnvironment::default(),
-        &[openmpi.clone()],
+        std::slice::from_ref(&openmpi),
         &stack,
     )
     .expect("hole check");
@@ -1645,21 +1645,18 @@ fn stack_pin_closure_without_target_python_is_a_hole_or_solve_error() {
         &candidates,
         &stack,
     );
-    match solved {
-        Ok(lock) => {
-            let python = lock
-                .dependencies
-                .iter()
-                .find(|dependency| dependency.name == "Python");
-            assert!(
-                python.is_none_or(|dependency| {
-                    dependency.version != "3.12.3" || dependency.toolchain != gcccore_2024a
-                }),
-                "unscoped pin-closure Python must not satisfy foss-2026.1: {lock:?}"
-            );
-            panic!("expected a Python hole or solve error, got lock {lock:?}");
-        }
-        Err(_) => {}
+    if let Ok(lock) = solved {
+        let python = lock
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name == "Python");
+        assert!(
+            python.is_none_or(|dependency| {
+                dependency.version != "3.12.3" || dependency.toolchain != gcccore_2024a
+            }),
+            "unscoped pin-closure Python must not satisfy foss-2026.1: {lock:?}"
+        );
+        panic!("expected a Python hole or solve error, got lock {lock:?}");
     }
 }
 

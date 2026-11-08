@@ -360,8 +360,7 @@ fn non_utf8_local_patch_is_copied_into_the_bundle() {
     let source = recipe_dir.join("meta.yaml");
     std::fs::write(
         &source,
-        format!(
-            r#"package:
+        r#"package:
   name: patch-fixture
   version: "1.0"
 source:
@@ -369,8 +368,7 @@ source:
   sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   patches:
     - patches/fix.patch
-"#
-        ),
+"#,
     )
     .expect("write recipe");
     let robot = temp.path().join("robot");
