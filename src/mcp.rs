@@ -3778,15 +3778,19 @@ fn ledger_head_tool(arguments: &Value) -> Result<Value, String> {
         origin: optional_string(arguments, "origin"),
     })
     .map_err(workflow_error)?;
+    let mut text = format!(
+        "signed head size {} root {} at {} to {}",
+        report.head.size,
+        report.head.root,
+        report.head.ts,
+        out.display()
+    );
+    if let Some(checkpoint) = &report.checkpoint {
+        text.push('\n');
+        text.push_str(&checkpoint.summary());
+    }
     Ok(json!({
-        "text": format!(
-            "signed head size {} root {} at {} to {}\n{}",
-            report.head.size,
-            report.head.root,
-            report.head.ts,
-            out.display(),
-            report.checkpoint.summary()
-        ),
+        "text": text,
         "head": report.head,
         "tiles": report.tiles,
         "checkpoint": report.checkpoint,

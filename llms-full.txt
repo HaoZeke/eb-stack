@@ -8429,7 +8429,9 @@ with `--key` and `--head-out`, writes the signed head after the append. It
 prints `appended record N id ID; head size S root ROOT`, then the tile
 log line below. `head` signs the
 log's current head into `--out`, at `--ts` or now, and the tile log's
-checkpoint.
+checkpoint. On an empty log with no `--origin` it signs the size-0 head
+alone and prints one line: there is no record to derive a checkpoint
+origin from, and `verify` of that head audits no tile log.
 
 **Locking and crashes.** Writers take an exclusive POSIX record lock on
 `LOG.posix-lock` beside the log; `head` takes a shared lock on the same

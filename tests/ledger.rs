@@ -582,3 +582,50 @@ fn mcp_ledger_tools_append_show_and_verify() {
     );
     assert_eq!(past["isError"], true, "{past}");
 }
+
+#[test]
+fn an_empty_log_signs_a_head_without_a_checkpoint() {
+    let fixture = fixture();
+    std::fs::write(&fixture.log, "").expect("empty log");
+    let head = fixture.work.join("head-0.json");
+    let signed = ok(&eb(&[
+        "ledger",
+        "head",
+        "--log",
+        s(&fixture.log),
+        "--key",
+        s(&fixture.key),
+        "--out",
+        s(&head),
+        "--ts",
+        "2026-11-03T12:00:00Z",
+    ]));
+    let empty_root = rfc9162::hex(&rfc9162::root(&[]));
+    assert_eq!(
+        signed,
+        format!(
+            "signed head size 0 root {empty_root} at 2026-11-03T12:00:00Z to {}\n",
+            head.display()
+        ),
+        "a size-0 head has no checkpoint line"
+    );
+    let tiles = PathBuf::from(format!("{}.tiles", fixture.log.display()));
+    assert!(!tiles.join("checkpoint").exists(), "no checkpoint is written");
+    let extends = ok(&verify_range(&fixture, &head, &head));
+    assert_eq!(
+        extends,
+        format!("the head of size 0 root {empty_root} extends the head of size 0 root {empty_root}\n"),
+        "a size-0 head verifies without a tile-log line"
+    );
+    let later = fixture.work.join("head-1.json");
+    append(&fixture, &record("zlib/1.3.1-GCCcore-15.2.0", "rg"), &later);
+    let grown = ok(&verify_range(&fixture, &head, &later));
+    assert!(
+        grown.starts_with("the head of size 1 root "),
+        "the first record's head extends the empty one: {grown}"
+    );
+    assert!(
+        grown.contains("tile log size 1 root "),
+        "the tile log is audited once a record derives the origin: {grown}"
+    );
+}

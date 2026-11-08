@@ -1396,8 +1396,10 @@ pub struct HeadReport {
     pub head: SignedHead,
     /// The tile log after its sync.
     pub tiles: crate::ledger_tiles::SyncReport,
-    /// The tile log's checkpoint.
-    pub checkpoint: crate::ledger_tiles::CheckpointReport,
+    /// The tile log's checkpoint. `None` for an empty log signed without
+    /// `--origin`: a size-0 head has no record to derive an origin from and
+    /// nothing to checkpoint.
+    pub checkpoint: Option<crate::ledger_tiles::CheckpointReport>,
 }
 
 /// Sign the log's current head, and the tile log's checkpoint with the
@@ -1442,9 +1444,16 @@ pub fn sign_head(request: &HeadRequest) -> Result<HeadReport> {
     let entries = parse_log(&text).with_context(|| format!("ledger {}", request.log.display()))?;
     let head = SignedHead::sign(&entries, &key.key, &ts);
     head.write(&request.out)?;
-    let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
     let dir = crate::ledger_tiles::tiles_dir(&request.log, request.tiles.as_deref());
-    let (tiles, checkpoint) = crate::ledger_tiles::checkpoint(&entries, &dir, &key.key, &origin)?;
+    let (tiles, checkpoint) = if entries.is_empty() && request.origin.is_none() {
+        (crate::ledger_tiles::sync(&entries, &dir)?, None)
+    } else {
+        let origin =
+            crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
+        let (tiles, checkpoint) =
+            crate::ledger_tiles::checkpoint(&entries, &dir, &key.key, &origin)?;
+        (tiles, Some(checkpoint))
+    };
     drop(lock);
     Ok(HeadReport {
         head,
@@ -1584,6 +1593,13 @@ pub fn verify(request: &VerifyRequest) -> Result<VerifyReport> {
             (to.size, to.root)
         }
     };
+    if entries.is_empty() && request.origin.is_none() {
+        // A size-0 head over an empty log was signed without a checkpoint,
+        // and there is no record to derive an origin from: nothing to audit.
+        report.tiles_size = 0;
+        report.tiles_root = root;
+        return Ok(report);
+    }
     let origin = crate::ledger_tiles::origin(entries.first(), request.origin.as_deref())?;
     let dir = crate::ledger_tiles::tiles_dir(&request.log, request.tiles.as_deref());
     let (tiles_size, tiles_root) =

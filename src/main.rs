@@ -2330,7 +2330,9 @@ fn run_ledger(command: LedgerCommand) -> Result<()> {
                 report.head.ts,
                 out.display()
             );
-            println!("{}", report.checkpoint.summary());
+            if let Some(checkpoint) = &report.checkpoint {
+                println!("{}", checkpoint.summary());
+            }
             if let Some(warning) = report.tiles.warning() {
                 eprintln!("{warning}");
             }

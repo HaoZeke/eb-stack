@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Fixed
+
+- `ledger head` on an empty log signs the size-0 head without a
+  checkpoint when no `--origin` is given, and `ledger verify` of such a
+  head skips the tile-log audit. The checkpoint origin derives from the
+  first record's stack and year, so an empty log has none to derive;
+  the first head after a record checkpoints as before. A site can
+  anchor a fresh ledger on day zero without naming an origin that the
+  first record may contradict.
+
 ## 0.5.0 - 2026-11-08
 
 ### Changed
