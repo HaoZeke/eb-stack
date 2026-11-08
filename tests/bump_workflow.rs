@@ -36,6 +36,7 @@ fn easybuild_bump_produces_sbom_resolvo_lock_and_recipe() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     assert_eq!(bundle.plan.origin, PackageOrigin::EasyBuild);
@@ -80,6 +81,7 @@ fn bump_sbom_names_the_versions_the_lock_selected() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     let components = bundle.sbom["components"].as_array().expect("components");
@@ -160,6 +162,7 @@ fn easybuild_bump_does_not_select_newer_system_candidate_for_implicit_dependency
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -227,6 +230,7 @@ fn easybuild_bump_retargets_explicit_dependency_toolchain_family() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -302,6 +306,7 @@ fn easybuild_bump_makes_cross_generation_stack_selection_explicit() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     assert!(
@@ -364,6 +369,7 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("bump with sibling evidence");
 
@@ -459,6 +465,7 @@ fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
         },
         strict_patches: true,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     };
     let error = plan_package_bump(&request).expect_err("undecided patch must fail strict mode");
     assert!(
@@ -520,6 +527,7 @@ fn easybuild_bump_onto_an_older_generation_drops_the_source_generation_pins() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("retarget onto the older generation");
     let dependency = bundle.locks[0]
@@ -584,6 +592,7 @@ fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("same generation bump");
     let dependency = bundle.locks[0]
@@ -640,6 +649,7 @@ fn version_bump_drops_a_direct_dep_with_no_candidate() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("version bump with a vanished dep");
     let text = &bundle.easyconfigs[0].text;
@@ -715,6 +725,7 @@ fn package_config_exclude_drops_dep_on_toolchain_only_bump() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump with excluded dep");
     let text = &bundle.easyconfigs[0].text;
@@ -783,6 +794,7 @@ fn package_config_upserts_modulename_and_commit_on_version_bump() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("version bump with package extras");
     let text = &bundle.easyconfigs[0].text;
@@ -842,6 +854,7 @@ fn toolchain_only_bump_copies_a_sibling_patch_file() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump");
     let out = temp.path().join("out");
@@ -911,6 +924,7 @@ fn package_config_merge_keeps_the_source_patch_file() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump with merged patch");
     let out = temp.path().join("out");
@@ -974,6 +988,7 @@ fn dep_override_moves_a_same_generation_dependency() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("a --dep override within one generation solves");
     let locked = bundle.locks[0]
@@ -1038,6 +1053,7 @@ fn dep_override_moves_a_dependency_pinned_to_system() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("a --dep override on a SYSTEM dependency solves");
     let recipe = resolve_easyconfig_str(&bundle.easyconfigs[0].text).expect("parse bumped recipe");
@@ -1120,6 +1136,7 @@ fn a_system_dependency_named_by_the_versionsuffix_moves_with_the_generation() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("the retarget solves");
     let recipe = resolve_easyconfig_str(&bundle.easyconfigs[0].text).expect("parse bumped recipe");
@@ -1172,6 +1189,7 @@ fn a_patch_an_extension_names_travels_with_the_bundle() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("the bump solves");
     let out = temp.path().join("out");
@@ -1226,6 +1244,7 @@ fn version_bump_pins_mpi_test_ranks_on_a_cuda_usempi_policy_package() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("cuda usempi version bump");
     let text = &bundle.easyconfigs[0].text;
@@ -1287,6 +1306,7 @@ fn version_bump_does_not_invent_mpi_test_ranks_off_policy() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("off-policy cuda bump");
     let text = &bundle.easyconfigs[0].text;
@@ -1339,6 +1359,7 @@ fn synthetic_bump(
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("bump")
 }

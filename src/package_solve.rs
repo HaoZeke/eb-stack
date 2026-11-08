@@ -40,8 +40,20 @@ pub struct UnsatisfiedDirectDependency {
     pub name: String,
     /// Version requirement it must satisfy.
     pub version_req: String,
+    /// Versionsuffix the dependency names, when it names one.
+    pub versionsuffix: Option<String>,
     /// True for a build-time-only dependency.
     pub build: bool,
+}
+
+impl UnsatisfiedDirectDependency {
+    /// True when `versionsuffix` is compatible with this hole: `None` on the
+    /// hole means any suffix, `Some("")` only the unsuffixed module.
+    pub fn matches_versionsuffix(&self, versionsuffix: Option<&str>) -> bool {
+        self.versionsuffix
+            .as_deref()
+            .is_none_or(|wanted| wanted == versionsuffix.unwrap_or(""))
+    }
 }
 
 /// List direct dependencies that have no compatible candidate after hierarchy
@@ -104,13 +116,20 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
                 .roles
                 .iter()
                 .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
-        if !seen.insert(name.clone()) {
+        let version_req = normalize_requirement(dependency.constraint.as_deref());
+        if !seen.insert(format!(
+            "{name}|{version_req}|{}",
+            dependency.versionsuffix.as_deref().unwrap_or("")
+        )) {
             continue;
         }
-        let version_req = normalize_requirement(dependency.constraint.as_deref());
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
                 && matches_req(&candidate.version, &version_req)
+                && dependency
+                    .versionsuffix
+                    .as_deref()
+                    .is_none_or(|wanted| wanted == candidate.versionsuffix.as_deref().unwrap_or(""))
                 && dependency
                     .toolchain
                     .as_ref()
@@ -126,6 +145,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
             holes.push(UnsatisfiedDirectDependency {
                 name,
                 version_req,
+                versionsuffix: dependency.versionsuffix.clone(),
                 build: build_only,
             });
         }

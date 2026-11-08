@@ -64,6 +64,7 @@ fn qmcpack_plan() -> PackagePlan {
             virtual_capability: None,
             solver_excluded: false,
             provenance: vec![provenance(181, "depends_on(\"hdf5+mpi\", when=\"+phdf5\")")],
+            versionsuffix: None,
         }],
         rules: Vec::new(),
         build: BuildSpec {
@@ -239,6 +240,7 @@ fn package_plan_sbom_keeps_build_only_dependencies_off_depends_on() {
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
     plan.dependencies.push(DependencyIntent {
         id: "dep:pytest".into(),
@@ -251,6 +253,7 @@ fn package_plan_sbom_keeps_build_only_dependencies_off_depends_on() {
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
     let sbom = package_plan_to_cyclonedx(&plan).expect("canonical SBOM");
     let root_edge = sbom["dependencies"]

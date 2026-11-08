@@ -500,29 +500,7 @@ pub fn apply_package_layers(
                 }
             }
         }
-        if let Some(dependencies) = &layer.dependencies {
-            for dependency in &mut plan.dependencies {
-                if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
-                    dependency.eb_name = Some(alias.provider().to_string());
-                    if alias.drops_constraint() {
-                        dependency.constraint = None;
-                    }
-                }
-                if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
-                    dependency.virtual_capability = Some(capability.clone());
-                }
-                if dependencies
-                    .exclude_from_solve
-                    .iter()
-                    .any(|name| package_identity(name) == package_identity(&dependency.name))
-                {
-                    dependency.solver_excluded = true;
-                }
-            }
-            for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
-                ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
-            }
-        }
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
         apply_layer_source_checksums(plan, &layer.source_checksums)?;
         for patch in &layer.profiles {
             let existing_index = plan
@@ -678,6 +656,7 @@ fn ensure_dependency_requirement(
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
@@ -719,6 +698,50 @@ fn requirement_condition(features: &BTreeMap<String, bool>) -> ConditionExpr {
                 })
                 .collect(),
         )
+    }
+}
+
+/// Apply alias, virtual, exclude, and requirement policy from `layers`.
+///
+/// [`apply_package_layers`] runs this per layer. A bump merge that adds
+/// foreign inspect intents calls it again so those rows see the same policy.
+pub(crate) fn apply_package_dependency_policy(
+    plan: &mut PackagePlan,
+    layers: &[PackageConfigLayer],
+) {
+    for (layer_index, layer) in layers.iter().enumerate() {
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
+    }
+}
+
+fn apply_one_layer_dependency_policy(
+    plan: &mut PackagePlan,
+    layer: &PackageConfigLayer,
+    layer_index: usize,
+) {
+    let Some(dependencies) = &layer.dependencies else {
+        return;
+    };
+    for dependency in &mut plan.dependencies {
+        if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
+            dependency.eb_name = Some(alias.provider().to_string());
+            if alias.drops_constraint() {
+                dependency.constraint = None;
+            }
+        }
+        if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
+            dependency.virtual_capability = Some(capability.clone());
+        }
+        if dependencies
+            .exclude_from_solve
+            .iter()
+            .any(|name| package_identity(name) == package_identity(&dependency.name))
+        {
+            dependency.solver_excluded = true;
+        }
+    }
+    for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
+        ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
     }
 }
 

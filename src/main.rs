@@ -831,6 +831,10 @@ struct PackageBumpArgs {
     /// Package-config TOML applied after the source recipe is parsed. Repeatable.
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
+    /// Spack `package.py` or conda-forge recipe, inspected for deps the
+    /// source `.eb` never declared. Repeatable.
+    #[arg(long = "foreign")]
+    foreign_sources: Vec<PathBuf>,
     /// Render an easyblock skeleton for the package into the bundle, as
     /// `package plan --emit-easyblock` does.
     #[arg(long = "emit-easyblock")]
@@ -2745,6 +2749,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         stack_policy,
         strict_patches: args.strict_patches,
         package_layers: load_package_layers(&args.package_configs)?,
+        foreign_sources: args.foreign_sources,
     };
     let decisions = eb_stack::source_fetch::BumpDecisions {
         drop_patches: parse_patch_drops(&args.drop_patches)?,

@@ -1335,6 +1335,7 @@ source:
             name: "MidLib".into(),
             version_req: ">=3.0".into(),
             build: false,
+            versionsuffix: None,
         };
         let target = Toolchain {
             name: "foss".into(),
@@ -1370,6 +1371,7 @@ source:
             name: "CoreLib".into(),
             version_req: ">=1.0".into(),
             build: false,
+            versionsuffix: None,
         };
         let target = Toolchain {
             name: "foss".into(),
@@ -1426,6 +1428,7 @@ source:
             name: "UniqueLib".into(),
             version_req: ">=0.4".into(),
             build: false,
+            versionsuffix: None,
         };
         let target = Toolchain {
             name: "foss".into(),
@@ -1472,6 +1475,7 @@ class Dupe(Package):
             name: "dupe".into(),
             version_req: ">=1.0".into(),
             build: false,
+            versionsuffix: None,
         };
         let target = Toolchain {
             name: "foss".into(),

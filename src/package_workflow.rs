@@ -82,6 +82,10 @@ pub struct BumpPackageRequest {
     /// parsed, so a version bump can drop vanished deps or add CMake extras
     /// the old file never declared.
     pub package_layers: Vec<PackageConfigLayer>,
+    /// Spack `package.py` or conda-forge recipe files, inspected for
+    /// dependencies the source easyconfig never declared. Empty finds a
+    /// `package.py` beside the robot copy, when there is one.
+    pub foreign_sources: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +506,7 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
@@ -608,6 +613,7 @@ fn add_gcccore_binutils(plan: &mut PackagePlan) {
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
@@ -680,6 +686,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
             virtual_capability: None,
             solver_excluded: false,
             provenance: Vec::new(),
+            versionsuffix: None,
         });
     }
 }
@@ -1191,6 +1198,7 @@ pub fn prepare_package_bump(
             });
         }
     }
+    merge_foreign_inspect_deps(&mut plan, request)?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
@@ -2066,6 +2074,7 @@ fn dependency_from_easyconfig(
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     }
 }
 
@@ -2613,6 +2622,136 @@ pub enum PackageWorkflowError {
         /// Root it had to stay within.
         root: PathBuf,
     },
+}
+
+fn merge_foreign_inspect_deps(
+    plan: &mut PackagePlan,
+    request: &BumpPackageRequest,
+) -> Result<(), PackageWorkflowError> {
+    let mut sources = request.foreign_sources.clone();
+    if sources.is_empty() {
+        if let Some(found) = find_foreign_package_py(&request.easyconfig_roots, &plan.package.name)
+        {
+            sources.push(found);
+        }
+    }
+    for foreign in sources {
+        let (foreign_plan, _) = inspect_new_package(&foreign, None, &request.toolchain, &[])?;
+        for (index, dependency) in foreign_plan.dependencies.into_iter().enumerate() {
+            let Some((name, eb_name)) = easybuild_name_from_foreign(&dependency.name) else {
+                continue;
+            };
+            if plan.dependencies.iter().any(|existing| {
+                let existing_name = existing
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(existing.name.as_str());
+                existing_name.eq_ignore_ascii_case(eb_name.as_deref().unwrap_or(&name))
+                    || existing.name.eq_ignore_ascii_case(&dependency.name)
+                    || existing.name.eq_ignore_ascii_case(&name)
+            }) {
+                continue;
+            }
+            let foreign_name = dependency.name.clone();
+            let residual_name = eb_name.clone().unwrap_or_else(|| name.clone());
+            plan.dependencies.push(DependencyIntent {
+                id: format!("foreign-inspect:{index}:{residual_name}"),
+                name,
+                eb_name,
+                constraint: dependency.constraint,
+                toolchain: None,
+                versionsuffix: None,
+                roles: dependency.roles,
+                condition: dependency.condition,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: dependency.provenance,
+            });
+            plan.residuals.push(Residual {
+                id: format!("foreign-inspect-added-dep:{residual_name}"),
+                stage: ResidualStage::Resolve,
+                category: "foreign-inspect-added-dep".into(),
+                severity: ResidualSeverity::Mechanical,
+                summary: format!(
+                    "{residual_name} came from package inspect of {}",
+                    foreign.display()
+                ),
+                evidence: Some(foreign_name),
+                provenance: None,
+            });
+        }
+    }
+    crate::package_config::apply_package_dependency_policy(plan, &request.package_layers);
+    Ok(())
+}
+
+fn easybuild_name_from_foreign(name: &str) -> Option<(String, Option<String>)> {
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "mpi"
+            | "openmpi"
+            | "mpich"
+            | "gcc"
+            | "llvm"
+            | "cuda"
+            | "hip"
+            | "fftw"
+            | "fftw3"
+            | "blas"
+            | "lapack"
+            | "openblas"
+            | "mkl"
+            | "zlib"
+            | "hwloc"
+    ) {
+        return None;
+    }
+    let stripped = lower.strip_prefix("py-").unwrap_or(lower.as_str());
+    let mapped = match stripped {
+        "python" => Some("Python"),
+        "cmake" => Some("CMake"),
+        "pybind11" => Some("pybind11"),
+        "mpi4py" => Some("mpi4py"),
+        "networkx" => Some("networkx"),
+        _ => None,
+    };
+    match mapped {
+        Some(mapped) => Some((mapped.to_string(), Some(mapped.to_string()))),
+        None => Some((name.to_string(), None)),
+    }
+}
+
+/// `package.py` beside a robot copy. Named slug first, then Spack
+/// `py-{slug}` / `packages/` layout, then the underscore fallback.
+fn find_foreign_package_py(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    let slug = name.to_ascii_lowercase();
+    let rels = [
+        format!("{slug}/package.py"),
+        format!("packages/{slug}/package.py"),
+        format!("packages/py-{slug}/package.py"),
+        format!("py-{slug}/package.py"),
+        format!("spack/packages/{slug}/package.py"),
+        format!("spack/packages/py-{slug}/package.py"),
+        format!("py_{slug}/package.py"),
+        format!("spack/py_{slug}/package.py"),
+        format!("spack/{slug}/package.py"),
+    ];
+    for root in roots {
+        for rel in &rels {
+            let direct = root.join(rel);
+            if direct.is_file() {
+                return Some(direct);
+            }
+            if let Some(parent) = root.parent() {
+                let beside = parent.join(rel);
+                if beside.is_file() {
+                    return Some(beside);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

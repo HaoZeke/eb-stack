@@ -44,6 +44,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             // reach the solver as an always-on dependency.
             solver_excluded: dependency.condition.is_undecidable(),
             provenance: dependency.provenance.clone(),
+            versionsuffix: None,
         })
         .collect();
 

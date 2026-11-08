@@ -98,6 +98,7 @@ fn request(source: PathBuf, robot: PathBuf) -> BumpPackageRequest {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     }
 }
 

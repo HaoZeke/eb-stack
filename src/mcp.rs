@@ -174,6 +174,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("hierarchy_fixture", "string"),
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
+                ("foreign", "array"),
                 ("emit_easyblock", "boolean"),
                 ("fetch_checksums", "boolean"),
                 ("strict_patches", "boolean"),
@@ -1152,6 +1153,7 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         stack_policy,
         strict_patches: optional_bool(arguments, "strict_patches"),
         package_layers: package_layers(arguments)?,
+        foreign_sources: path_array(arguments, "foreign")?,
     };
     let fetch = optional_bool(arguments, "fetch_checksums");
     let out_dir = required_path(arguments, "out_dir")?;
