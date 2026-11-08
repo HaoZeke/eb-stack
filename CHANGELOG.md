@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- The tile log carries a sorted-run index of its records in a second,
+  signed index log at `<log>.tiles.index`: `ledger head` signs it under
+  `<origin>/index` with the same key once a run exists, `ledger find`
+  proves the record in the tile checkpoint and the run manifest in the
+  index checkpoint, `audit` checks the index checkpoint's prefix, and a
+  rebuild moves both logs aside. The data tile log still holds exactly the
+  ledger's lines, so `ledger verify` and the signed heads are unchanged.
+  The index comes from `rfc9162-log` in the rfc9162 workspace.
+
 ## 0.5.3 - 2026-11-08
 
 ### Changed
