@@ -102,7 +102,9 @@ Then:
 git tag -a v0.7.0 -m "eb-stack 0.7.0"
 git push origin v0.7.0
 # .github/workflows/release.yml (cargo-dist) builds the installers
-# and publishes the GitHub Release. It does not publish to crates.io.
+# and publishes the GitHub Release. It does not publish to crates.io:
+cargo publish --locked
+# runs on a host with the crates.io token, from the tagged checkout.
 ```
 
 Verify the binary surface:

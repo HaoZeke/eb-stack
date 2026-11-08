@@ -20,10 +20,24 @@ categories = [
     "parser-implementations",
     "config",
 ]
+# The crate carries the sources and the TOML tables they include; the test
+# corpus, fixtures, manual, skills and delivery bundles stay in the
+# repository.
 exclude = [
+    ".github/",
     ".pixi/",
-    "docs/build*/",
+    "assets/",
+    "deliveries/",
+    "docs/",
+    "examples/",
+    "fixtures/",
+    "llms-full.txt",
+    "llms.txt",
+    "pixi.lock",
+    "scripts/",
+    "skills/",
     "target/",
+    "tests/",
 ]
 
 [[bin]]

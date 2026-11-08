@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Changed
+
+- The crates.io package carries the sources, the TOML tables they include,
+  the README, LICENSE, CHANGELOG and CITATION. The test corpus, fixtures,
+  manual, skills, examples and delivery bundles stay in the repository;
+  the 0.7.0 archive was 1589 files and 13.8 MiB, most of it tests.
+
 ## 0.7.0 - 2026-11-08
 
 The behaviours the `develop` line carried and main lacked, ported one test
