@@ -1323,13 +1323,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut request = request_in(dir.path(), "4403", &["4401", "4402", "4403"]);
         request.unknown_reserve = 150_000;
-        // 1,000,000 - 300,000 (4401) - 150,000 (4402 unknown) - 200,000 - 100,000 >= 0.
+        // 1,000,000 - 300,000 (4401) - 150,000 (4402 unknown) - 200,000 - 100,000 >= 0;
+        // at 450,000 per unknown writer the same sum is 50,000 short.
         let report = run_stack_admit(&request).unwrap();
         assert!(report.decision.admitted, "{}", report.line);
         assert_eq!(report.decision.unknown, vec!["4402".to_string()]);
         assert_eq!(report.decision.unknown_reserved, 150_000);
         assert_eq!(report.decision.reserved, 450_000);
-        request.unknown_reserve = 400_000;
+        request.unknown_reserve = 450_000;
         let refused = run_stack_admit(&request).unwrap();
         assert!(!refused.decision.admitted, "{}", refused.line);
         assert!(refused.reservation.is_none());
