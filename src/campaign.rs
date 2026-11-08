@@ -429,6 +429,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             write_state(&request.state_path, &state)?;
             return Ok(state);
         }
+        supersede_findings(&mut state, "preflight", &recipe_text);
     }
 
     let staged_bundle = match run_target.stage_bundle(&request.bundle) {
@@ -475,6 +476,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             return Ok(state);
         }
     };
+    supersede_findings(&mut state, "stage", "");
 
     let tmpdir_check = run_target.easybuild_tmpdir_preflight_command();
     let tmpdir_output = match tmpdir_check.execute() {
@@ -591,7 +593,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            let evidence = build_failure_evidence(&stdout, &stderr);
+            let evidence = build_failure_evidence(&run_target, &stdout, &stderr);
             let class = classify_build_failure("build", &evidence, "", output.status.code());
             state.findings.push(BuildFinding {
                 id: format!(
@@ -1230,10 +1232,17 @@ fn module_name(
                 "manifest with verification commands has no build.toolchain.version".into(),
             )
         })?;
-    Ok(format!(
-        "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
-        profile.versionsuffix.join("")
-    ))
+    if toolchain_name.eq_ignore_ascii_case("system") {
+        Ok(format!(
+            "{package}/{version}{}",
+            profile.versionsuffix.join("")
+        ))
+    } else {
+        Ok(format!(
+            "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
+            profile.versionsuffix.join("")
+        ))
+    }
 }
 
 fn expand_verification_token(
@@ -1293,12 +1302,37 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
     compact
 }
 
-fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
+fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> String {
     let mut evidence = compact_evidence(stdout, stderr);
     let combined = format!("{stdout}\n{stderr}");
-    for path in easybuild_output_paths(&combined).into_iter().take(4) {
-        let Ok(nested) = std::fs::read_to_string(&path) else {
-            continue;
+    let banner = easybuild_banner_fields(&combined);
+    if !banner.is_empty() {
+        evidence.push('\n');
+        evidence.push_str(&banner);
+    }
+    let mut paths = easybuild_output_paths(&combined);
+    for extra in easybuild_cmd_sh_sibling_outputs(&combined) {
+        if !paths.contains(&extra) {
+            paths.push(extra);
+        }
+    }
+    for path in paths.into_iter().take(4) {
+        let nested = if matches!(target.transport, TargetTransport::Local) {
+            match std::fs::read_to_string(&path) {
+                Ok(nested) => nested,
+                Err(_) => match target.read_file(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
+        } else {
+            match target.read_file(&path) {
+                Ok(nested) => nested,
+                Err(_) => match std::fs::read_to_string(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
         };
         evidence.push_str(&format!(
             "\nEasyBuild command output {}:\n{}",
@@ -1307,6 +1341,66 @@ fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
         ));
     }
     evidence
+}
+
+fn easybuild_banner_fields(output: &str) -> String {
+    let mut fields = Vec::new();
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        let key = if lower.contains("full command") {
+            "full command"
+        } else if lower.contains("working directory") {
+            "working directory"
+        } else if lower.contains("interactive shell script") {
+            "interactive shell script"
+        } else if lower.contains("called from") {
+            "called from"
+        } else {
+            continue;
+        };
+        let Some((_, rest)) = line.split_once("->") else {
+            continue;
+        };
+        let rest = rest
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(rest)
+            .trim();
+        if !rest.is_empty() {
+            fields.push(format!("{key}: {rest}"));
+        }
+    }
+    fields.join("\n")
+}
+
+fn easybuild_cmd_sh_sibling_outputs(output: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if !line
+            .to_ascii_lowercase()
+            .contains("interactive shell script")
+        {
+            continue;
+        }
+        let Some((_, raw_path)) = line.rsplit_once("->") else {
+            continue;
+        };
+        let raw_path = raw_path
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(raw_path)
+            .trim();
+        if raw_path.is_empty() {
+            continue;
+        }
+        let cmd = PathBuf::from(raw_path);
+        if let Some(sibling) = cmd.parent().map(|parent| parent.join("out.txt")) {
+            paths.push(sibling);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Files EasyBuild names as `output (stdout + stderr) -> <path>` for a
