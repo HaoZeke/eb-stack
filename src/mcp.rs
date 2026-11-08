@@ -1153,7 +1153,10 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         stack_policy,
         strict_patches: optional_bool(arguments, "strict_patches"),
         package_layers: package_layers(arguments)?,
-        foreign_sources: path_array(arguments, "foreign")?,
+        foreign_sources: string_array(arguments, "foreign")?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
     };
     let fetch = optional_bool(arguments, "fetch_checksums");
     let out_dir = required_path(arguments, "out_dir")?;
