@@ -1140,14 +1140,14 @@ mod tests {
         let held = [reservation("4401", 351_000), reservation("4402", 151_000)];
         let live = ["4401".to_string(), "4402".to_string()];
         // 1,000,000 - 502,000 - 351,000 - 100,000 = 47,000: admitted.
-        let yes = decide(1_000_000, &held, "4403", Some(&live), 351_000, 100_000);
+        let yes = decide(1_000_000, &held, "4403", Some(&live), 351_000, 100_000, 0);
         assert!(yes.admitted);
         assert_eq!(yes.reserved, 502_000);
         assert_eq!(yes.headroom, 47_000);
         assert_eq!(yes.counted.len(), 2);
-        assert!(yes.dropped.is_empty());
+        assert!(yes.stale.is_empty());
         // 900,000 leaves -53,000: refused.
-        let no = decide(900_000, &held, "4403", Some(&live), 351_000, 100_000);
+        let no = decide(900_000, &held, "4403", Some(&live), 351_000, 100_000, 0);
         assert!(!no.admitted);
         assert_eq!(no.headroom, -53_000);
     }
@@ -1156,26 +1156,26 @@ mod tests {
     fn a_reservation_of_a_job_no_longer_live_is_dropped() {
         let held = [reservation("4401", 351_000), reservation("4402", 151_000)];
         let live = ["4402".to_string()];
-        let decision = decide(600_000, &held, "4403", Some(&live), 151_000, 100_000);
+        let decision = decide(600_000, &held, "4403", Some(&live), 151_000, 100_000, 0);
         assert!(decision.admitted, "{decision:?}");
         assert_eq!(decision.reserved, 151_000);
-        assert_eq!(decision.dropped, vec![reservation("4401", 351_000)]);
+        assert_eq!(decision.stale, vec![reservation("4401", 351_000)]);
         // Without a live list every other reservation counts and none is dropped.
-        let all = decide(600_000, &held, "4403", None, 151_000, 100_000);
+        let all = decide(600_000, &held, "4403", None, 151_000, 100_000, 0);
         assert!(!all.admitted);
         assert_eq!(all.reserved, 502_000);
-        assert!(all.dropped.is_empty());
+        assert!(all.stale.is_empty());
     }
 
     #[test]
     fn a_jobs_own_reservation_is_not_counted_against_it() {
         let held = [reservation("4401", 351_000), reservation("4403", 351_000)];
         let live = ["4401".to_string(), "4403".to_string()];
-        let again = decide(900_000, &held, "4403", Some(&live), 351_000, 100_000);
+        let again = decide(900_000, &held, "4403", Some(&live), 351_000, 100_000, 0);
         assert!(again.admitted, "{again:?}");
         assert_eq!(again.reserved, 351_000);
         assert_eq!(again.counted.len(), 1);
-        assert!(again.dropped.is_empty());
+        assert!(again.stale.is_empty());
     }
 
     #[test]
@@ -1253,7 +1253,10 @@ mod tests {
         assert_eq!(line["admitted"], true);
         assert_eq!(line["stale"], json!(["4399"]));
         assert_eq!(line["headroom"], 198_000);
-        assert!(dir.path().join("admission.lock").exists(), "lock file created");
+        assert!(
+            dir.path().join("admission.lock").exists(),
+            "lock file created"
+        );
 
         // A second job asks with 4401 and 4403 live: 1,000,000 - 702,000 -
         // 351,000 - 100,000 < 0, refused, and no file is written.
@@ -1343,7 +1346,10 @@ mod tests {
         assert!(report.reservation.is_none());
         let line: Value = serde_json::from_str(&report.line).unwrap();
         assert!(
-            line["refusal"].as_str().unwrap().contains("quota observation failed"),
+            line["refusal"]
+                .as_str()
+                .unwrap()
+                .contains("quota observation failed"),
             "{}",
             report.line
         );

@@ -1252,7 +1252,11 @@ struct FootprintsArgs {
 struct AdmitArgs {
     /// The quota as JSON: `inodes_available`, or `inodes_soft` and
     /// `inodes_used` (and `inodes_hard`). `-` reads stdin.
-    #[arg(long, required_unless_present = "quota_cmd", conflicts_with = "quota_cmd")]
+    #[arg(
+        long,
+        required_unless_present = "quota_cmd",
+        conflicts_with = "quota_cmd"
+    )]
     quota_json: Option<PathBuf>,
     /// A shell command that prints the quota JSON, run under `--lock` so the
     /// observation and the decision are one step; a failure refuses the job.
