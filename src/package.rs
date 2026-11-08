@@ -1515,7 +1515,8 @@ fn github_https_repo(git: &str) -> Option<String> {
         &trimmed["git@github.com:".len()..]
     } else if let Some(idx) = lower.find("github.com/") {
         &trimmed[idx + "github.com/".len()..]
-    } else if let Some(idx) = lower.find("github.com:") {
+    } else {
+        let idx = lower.find("github.com:")?;
         let after = &trimmed[idx + "github.com:".len()..];
         match after.find('/') {
             Some(slash)
@@ -1527,8 +1528,6 @@ fn github_https_repo(git: &str) -> Option<String> {
             }
             _ => after,
         }
-    } else {
-        return None;
     };
     let path = path.trim_end_matches('/');
     let path = if path.to_ascii_lowercase().ends_with(".git") {
