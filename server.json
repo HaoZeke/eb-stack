@@ -3,7 +3,7 @@
   "name": "io.github.HaoZeke/eb-stack",
   "title": "eb-stack",
   "description": "Plan EasyBuild recipes, CycloneDX SBOMs, and Resolvo stack locks.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "websiteUrl": "https://eb-stack.rgoswami.me/",
   "repository": {
     "url": "https://github.com/HaoZeke/eb-stack",
@@ -14,7 +14,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "eb_stack",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "transport": {
         "type": "stdio"
       },

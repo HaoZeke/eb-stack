@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.7.1 - 2026-11-08
 
 ### Changed
 
@@ -10,6 +10,13 @@ All notable changes to this project are documented here.
   the README, LICENSE, CHANGELOG and CITATION. The test corpus, fixtures,
   manual, skills, examples and delivery bundles stay in the repository;
   the 0.7.0 archive was 1589 files and 13.8 MiB, most of it tests.
+
+### Docs
+
+- The manual and README describe the 0.7.x GitHub release as carrying
+  every command, and crates.io alone as still 0.3.0; the Org pages that
+  print a version are on the release checklist; CONTRIBUTING names the
+  publish command.
 
 ## 0.7.0 - 2026-11-08
 
