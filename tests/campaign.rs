@@ -1569,6 +1569,7 @@ fn two_identical_signatures_are_stuck() {
         },
         exit_code: Some(1),
         attempt,
+        execution_context: Default::default(),
         signature: Some(signature.clone()),
         status: FindingStatus::Open,
         owner: None,
@@ -1582,6 +1583,7 @@ fn two_identical_signatures_are_stuck() {
         target: "test-builder".into(),
         status: CampaignStatus::Failed,
         attempts: 1,
+        execution_context: Default::default(),
         claims: ClaimLadder {
             resolves: true,
             builds: false,
