@@ -342,10 +342,11 @@ mod tests {
 
     #[test]
     fn explicit_easyblock_paths_preserve_recipe_resolution() {
-        for helpers in ["/helpers/generic.py", "/helpers/first.py,/helpers/second.py"] {
-            let line = format!(
-                "A-1.0.eb --from-commit={SHA} --include-easyblocks={helpers}"
-            );
+        for helpers in [
+            "/helpers/generic.py",
+            "/helpers/first.py,/helpers/second.py",
+        ] {
+            let line = format!("A-1.0.eb --from-commit={SHA} --include-easyblocks={helpers}");
             assert_eq!(unsupported_option(&line), None, "{line}");
             assert_eq!(
                 executable_line(&line, Some("/selected/A-1.0.eb"), "/robot:/selected"),
