@@ -432,7 +432,10 @@ refuses a recipe that is not valid Python. `eb_recipe_lint` reports the
 easyconfigs CI lint (F541, W605, W291), the check-contrib pycodestyle codes,
 the easyconfigs test-suite checks and the review conventions (`EB_*`), plus
 E999 for syntax errors, with a `clean` flag; it does not rely on
-`eb --check-contrib` but merges it when `eb` is installed. `eb_recipe_grep`
+`eb --check-contrib` but merges it when `eb` is installed. `EB_STACK_EB`
+names the `eb` to run, and `EB_STACK_EB=none` skips that check with the
+report saying why, which keeps a lint deterministic on a host whose `eb`
+would judge a recipe the local checks accept. `eb_recipe_grep`
 searches the workspace.
 
 ## Skills
