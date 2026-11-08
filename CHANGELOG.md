@@ -122,6 +122,29 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `stack footprints`, `stack shard --inode-quota`, and `stack admit` plan
+  a build campaign around a scratch inode quota instead of discovering
+  it at admission time. `stack footprints` writes `footprints.json`, the
+  peak build-tree inode count per software name: the peak of the new
+  optional ledger field `build.inodes_peak` over the records of each
+  `--ledger`, then each `--table` line (`Name<TAB>inodes`; the larger
+  when both name a package), then a built-in class table (CP2K 350000;
+  LAMMPS, PyTorch, SeisSol, NVHPC, intel 150000) over a default of 60000.
+  `stack shard` writes each shard's `inode_footprint` (its largest module
+  footprint plus `--inode-line-overhead`, 1000 inodes per line) and
+  `max_concurrent_shards` into `plan.json`; with `--inode-quota N
+  [--inode-footprints footprints.json] [--inode-margin 100000]` the cap is
+  the most shards, largest first, that fit under the quota minus the
+  margin, and a shard that does not fit on its own fails the run. The
+  shard lists do not change. `stack admit --quota-json FILE|- --footprint
+  N --job ID --reservations DIR [--margin N] [--live-jobs ID,ID]` admits a
+  job when the inodes the quota still allows, minus the reservations of
+  the live jobs, cover its footprint plus the margin; on admit it writes
+  `DIR/<job>.json`, drops a reservation whose job is not live, never
+  counts the job's own earlier reservation, prints one JSON line, and
+  exits 0 or 78. The controller lists the live jobs; eb-stack calls no
+  scheduler. `eb_stack_footprints` and `eb_stack_admit` are the same
+  commands over MCP, and `eb_stack_shard` takes the inode arguments.
 - `ledger tiles` and `ledger find`, and a tile log beside every ledger.
   `ledger append` writes each canonical line into a C2SP tlog-tiles log
   at `<log>.tiles` (or `--tiles DIR`) through the `rfc9162-tiles` crate,

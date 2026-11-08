@@ -351,10 +351,12 @@ fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
         "eb_ledger_find",
         "eb_ledger_show",
         "eb_ledger_verify",
+        "eb_stack_footprints",
+        "eb_stack_admit",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 57, "{names:?}");
+    assert_eq!(names.len(), 59, "{names:?}");
 }
 
 fn software_layer_prs() -> Vec<PrInput> {

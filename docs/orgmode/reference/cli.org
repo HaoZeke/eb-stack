@@ -40,7 +40,9 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack order~ | Sequence every pinned build a set of roots needs |
 | ~stack gap~ | Route each site module the stack lacks, name the recipe that closes it, and write one TSV per route |
 | ~stack batch~ | Plan software-layer pull requests whose builds do not overlap |
-| ~stack shard~ | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies |
+| ~stack shard~ | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies, capped by a scratch inode quota |
+| ~stack footprints~ | Write the peak build-tree inode count per software name from ledger records, a static table, and a class table |
+| ~stack admit~ | Admit one build job under the scratch inode quota, counting the reservations of the jobs still running |
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
@@ -510,7 +512,23 @@ eb-stack stack shard \
   [--filter-deps NAME,NAME...] \
   [--lift-cpu-prerequisites] \
   [--generated-at 2026-11-03T00:00:00Z] \
+  [--inode-quota 3000000] [--inode-footprints footprints.json] \
+  [--inode-margin 100000] [--inode-line-overhead 1000] \
   --out-dir SHARDS
+
+eb-stack stack footprints \
+  [--ledger ledger/2025.jsonl]... [--table FOOTPRINTS.tsv]... \
+  [--generated-at 2026-11-07T00:00:00Z] \
+  --out footprints.json
+
+eb-stack stack admit \
+  --quota-json QUOTA.json|- | --quota-cmd 'CMD' \
+  --footprint 351000 --job 4411 \
+  --reservations RESERVATIONS/ [--margin 100000] \
+  [--lock LOCKFILE [--lock-kind flock|posix]] \
+  [--live-jobs 4401,4402 | --live-jobs-cmd 'CMD'] \
+  [--unknown-reserve 150000] [--drop-stale] \
+  [--ts 2026-11-07T00:00:00Z]
 
 eb-stack stack arch \
   --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
@@ -941,6 +959,83 @@ not on the robot path, whose first word is not an ~.eb~ file, or whose
 closure has a requirement nothing satisfies exits 1, names every such line,
 and writes nothing. The command prints ~shards=<k> prelude=<n> lines=<m>~,
 followed by ~opaque=<o>~ when a line is opaque.
+
+*Inode budget.* A native build job keeps its build tree on the scratch
+file system while it runs, and that file system has an inode quota. Each
+shard in ~plan.json~ carries ~inode_footprint~: the largest footprint of
+a module it builds (~inode_peak_module~ names it) plus
+~--inode-line-overhead~ inodes per build-list line (1000: the tarballs,
+the EasyBuild tmpdir, and the logs a line leaves on scratch until the job
+ends). Modules in a shard build one after another, so one build tree is
+on disk at a time. The prelude carries its own ~inode_footprint~. A
+module's footprint is its software name's entry in ~--inode-footprints~
+(a ~footprints.json~ from ~stack footprints~, or a flat
+~{"CP2K": 350000}~ object); an opaque line matches the longest name its
+filename starts with. Without the file, the built-in class table applies:
+CP2K 350000; LAMMPS, PyTorch, SeisSol, NVHPC, intel, intel-compilers
+150000; any other package 60000. ~max_concurrent_shards~ is the shard
+count, or with ~--inode-quota~ the most shards, largest first, whose
+footprints sum to at most the quota minus ~--inode-margin~ (100000). A
+shard that does not fit on its own exits 1 and writes nothing; a margin
+at or above the quota is a usage error. ~inode_budget~ in ~plan.json~
+records the quota, the margin, the budget, the footprints file and its
+SHA-256, the default footprint, and the line overhead. The quota, the
+margin, the overhead, and the footprints digest enter ~inputs.sha256~
+only when given, and the shard lists are the same with or without them.
+With a quota the summary line ends in ~max_concurrent=<c>~.
+
+~stack footprints~ writes ~footprints.json~: ~footprints~, the peak
+build-tree inode count per software name, and ~default~. A package's
+value is the peak of ~build.inodes_peak~ over the records of every
+~--ledger~ (a JSON Lines ledger, read and checked as ~ledger show~ reads
+it), and its line in every ~--table~ (~Name~, a tab or a space, then a
+whole number of inodes; ~#~ comments; a later file wins a name); when
+both name it, the larger. A package neither names takes the class table
+above. ~sources~ says which of ~ledger~, ~table~, ~ledger+table~, or
+~class~ set each value, with the module and the record count for a
+ledger peak. ~--generated-at~ fixes the time in the file. The command
+prints ~packages=<n> ledger=<a> table=<b> class=<c> records=<r>~, where
+~records~ counts the ledger records that carried ~build.inodes_peak~.
+
+~stack admit~ is the controller's gate before it starts one build job.
+~--quota-json~ is a JSON object: ~inodes_available~, or ~inodes_soft~
+and ~inodes_used~ (available is their difference, since the soft limit
+is the one GPFS enforces after its grace period), and ~inodes_hard~ when
+known; ~-~ reads it from stdin, so the controller converts its
+~mmlsquota~ output and pipes it. ~--footprint~ is the job's
+~inode_footprint~ from ~plan.json~. ~--reservations~ is a directory of
+~<job>.json~ files, one per admitted job. ~--live-jobs~ is the jobs still
+running, comma-separated, as the scheduler lists them (~squeue --all~,
+so hidden partitions count); eb-stack calls no scheduler itself. The
+job is admitted when the available inodes, minus the reservations of the
+live jobs, cover ~--footprint~ plus ~--margin~ (100000). A live job with
+no reservation is an unknown writer and counts ~--unknown-reserve~
+inodes (0). A reservation whose job is not in ~--live-jobs~ is stale:
+not counted, and its file kept unless ~--drop-stale~; without
+~--live-jobs~ every other reservation counts and none is stale. The
+job's own earlier reservation is never counted, so a job that asks again
+is judged on the others alone. ~--lock~ names a file held exclusively
+from the quota observation to the reservation write, so two controllers
+of one quota cannot both admit; ~--lock-kind~ is ~flock~ (default) or
+~posix~, an fcntl record lock over the whole file, the lock a controller
+written with Python's ~fcntl.lockf~ holds, and it must match the other
+holders because the two are separate lock namespaces on Linux; ~--quota-cmd~ runs the
+quota command inside that window and reads its output as the quota, and
+~--live-jobs-cmd~ runs the scheduler command there too (running jobs
+only, ids one per line or comma-separated, a ~+step~ suffix dropped);
+either command failing refuses the job (~refusal~ says why) rather than
+admitting it. A ~--live-jobs~ list the shell expanded before the lock
+can miss a job that reserved in between, so it belongs to a controller
+that holds the lock itself. On admit the reservation ~<job>.json~ (~job~,
+~footprint~, ~margin~, ~ts~) is written; ~--ts~ fixes its time. ~--job~
+is a file name: letters, digits, ~.~, ~_~, and ~-~. The command prints
+one JSON line (~job~, ~admitted~, ~available~, ~used~, ~soft~, ~hard~,
+~reserved~, ~footprint~, ~margin~, ~headroom~, ~live_jobs~, ~counted~,
+~stale~, ~stale_dropped~, ~unknown~, ~unknown_reserved~, ~refusal~,
+~reservation~, ~ts~) and exits 0 when admitted, 78 when refused. A
+reservation file that is not JSON, has no ~job~ or ~footprint~, or
+names another job than its file name exits 1, because a reservation
+that cannot be read hides inodes.
 
 ** ~stack arch~
 
@@ -1872,7 +1967,7 @@ order and spacing append the same line.
 | ~action~ | ~install~, ~rebuild-inplace~, ~rebuild-bump~, ~retire~, ~unretire~, ~move~, ~access~, ~remove~, ~finding~, or ~correction~ |
 | ~stage~ | Optional: ~started~, ~finished~, or ~aborted~, for an operation that runs in steps |
 | ~route~ | Optional: ~native~, ~kvm~, or ~qemu~, where the build ran |
-| ~reason~, ~easyconfig~, ~sources~, ~sbom~, ~modulefile~, ~build~ | Optional JSON: free text or an object of references and SHA-256 sums |
+| ~reason~, ~easyconfig~, ~sources~, ~sbom~, ~modulefile~, ~build~ | Optional JSON: free text or an object of references and SHA-256 sums. ~build~ as an object may carry ~job~ (a ~ledger find~ key) and ~inodes_peak~, the most inodes the build tree held on scratch, a whole number, which ~stack footprints~ reads |
 | ~supersedes~, ~superseded_by~, ~moved_from~, ~moved_to~, ~corrects~ | Optional ~id~ of a related record. A ~correction~ needs ~corrects~ |
 | ~index~ | Leaf number. Written by ~append~; a record that carries another value is refused |
 | ~id~ | SHA-256 of the canonical record without ~id~ and ~sig~. Written by ~append~; a record that carries another value is refused |

@@ -1,6 +1,22 @@
-# URLs a generated public file may link to even when the path is an
-# agent instruction file. The manual index (docs/orgmode/index.org,
-# Discovery) links AGENTS.md, and llms.txt repeats that URL.
-allow_urls = [
-  "https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md",
+# The public document manifest for the generated llms files.
+#
+# A link into this repository (github.com/HaoZeke/eb-stack/blob/main/...) in
+# llms.txt or llms-full.txt must name a file listed under `public_repo_paths`
+# or one under a `public_repo_prefixes` directory; any other repository link is
+# refused by scripts/llms_leakguard.py before the files are written, so the
+# public discovery surface is this list and nothing else in the tree. Links to
+# other sites are references the manual cites and are not governed here.
+public_repo_paths = [
+  "README.md",
+  "CONTRIBUTING.md",
+  "CHANGELOG.md",
+  "CITATION.cff",
+  "LICENSE",
+  "llms.txt",
+  "llms-full.txt",
+  "server.json",
+]
+public_repo_prefixes = [
+  "docs/",
+  "skills/",
 ]
