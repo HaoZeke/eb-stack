@@ -13,6 +13,7 @@
 
 use crate::domain::{Candidate, DepReq, ExtEntry};
 use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Marker embedded in `easyconfig_path` for a virtual extension provide.
 pub const EXT_PROVIDE_MARKER: &str = "#ext:";
@@ -343,6 +344,45 @@ pub fn existing_language_provider<'a>(
     candidates.iter().find(|candidate| {
         !candidate.is_extension_provide() && overlay_package_identity(&candidate.name) == identity
     })
+}
+
+/// Overlay-identity map for [`existing_language_provider_in`].
+///
+/// Bundle `exts_list` parents are keyed first so they win over a standalone
+/// first-class recipe, matching [`existing_language_provider`]. First-class
+/// names only fill identities no bundle already provides.
+pub fn language_provider_index(candidates: &[Candidate]) -> HashMap<String, &Candidate> {
+    let mut index = HashMap::new();
+    for candidate in candidates {
+        if candidate.is_extension_provide() {
+            continue;
+        }
+        for ext in &candidate.exts_list {
+            if ext.version.is_empty() {
+                continue;
+            }
+            index
+                .entry(overlay_package_identity(&ext.name))
+                .or_insert(candidate);
+        }
+    }
+    for candidate in candidates {
+        if candidate.is_extension_provide() {
+            continue;
+        }
+        index
+            .entry(overlay_package_identity(&candidate.name))
+            .or_insert(candidate);
+    }
+    index
+}
+
+/// [`existing_language_provider`] against a prebuilt index.
+pub fn existing_language_provider_in<'a>(
+    name: &str,
+    index: &HashMap<String, &'a Candidate>,
+) -> Option<&'a Candidate> {
+    index.get(&overlay_package_identity(name)).copied()
 }
 
 /// Collapse a selected extension provide to its parent bundle candidate.

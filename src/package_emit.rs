@@ -258,6 +258,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -276,6 +278,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -333,6 +337,8 @@ struct BundleFragments<'a> {
     versionsuffix_line: &'a str,
     toolchain_options_line: &'a str,
     easyconfig_parameter_lines: &'a str,
+    patch_line: &'a str,
+    config_line: &'a str,
     build_dependencies: &'a [String],
     runtime_dependencies: &'a [String],
     moduleclass: &'a str,
@@ -351,6 +357,8 @@ fn render_language_bundle(
         versionsuffix_line,
         toolchain_options_line,
         easyconfig_parameter_lines,
+        patch_line,
+        config_line,
         build_dependencies,
         runtime_dependencies,
         moduleclass,
@@ -382,6 +390,9 @@ fn render_language_bundle(
     };
     let exts = render_exts_list(plan, materialized, kind);
     let default_ext_opts = overlay_exts_default_options(plan, kind);
+    // Bundle sources carry checksums inside exts_list. Top-level checksums
+    // must still line up with `patches`, or EasyBuild has nothing to verify.
+    let checksum_line = render_patch_checksums(&materialized.build.patches);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -393,6 +404,9 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {easyconfig_parameter_lines}\
 {default_class}\
 {default_ext_opts}\
+{patch_line}\
+{checksum_line}\
+{config_line}\
 exts_list = {exts}\n\n\
 {build_dependencies}\
 {runtime_dependencies}\
@@ -914,6 +928,24 @@ fn is_tar_archive(filename: &str) -> bool {
     ]
     .iter()
     .any(|suffix| filename.ends_with(suffix))
+}
+
+fn checksum_slot(digest: Option<&str>) -> String {
+    match digest {
+        Some(checksum) => format!("'{}'", escape_single(checksum)),
+        None => "None".into(),
+    }
+}
+
+fn render_patch_checksums(patches: &[crate::package::PatchArtifact]) -> String {
+    if patches.is_empty() {
+        return String::new();
+    }
+    let checksums = patches
+        .iter()
+        .map(|patch| checksum_slot(patch.sha256.as_deref()))
+        .collect::<Vec<_>>();
+    format!("checksums = {}\n", render_multiline_list(&checksums))
 }
 
 fn render_dependency(

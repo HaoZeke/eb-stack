@@ -228,6 +228,7 @@ pub fn prepare_new_package_plan(
         sbom = package_plan_to_cyclonedx(&plan)
             .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     }
+    plan.package_index = request.package_index.clone();
     Ok((plan, sbom))
 }
 
@@ -292,8 +293,13 @@ pub fn complete_package_bundle_with_options(
     if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
         promote_language_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
     }
+    // Availability is generation-scoped: the later solve admits only
+    // hierarchy members, so a CMake that exists only on foss-2023a must
+    // not look available to a foss-2026.1 plan.
+    let available = candidates_available_for_plan(&plan, candidates, hierarchy_fixture);
+    let providers = crate::provides::language_provider_index(&available);
     if plan.origin == PackageOrigin::Pypi {
-        inject_overlay_build_tools(&mut plan, candidates);
+        inject_overlay_build_tools(&mut plan, &providers);
     }
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
@@ -301,7 +307,7 @@ pub fn complete_package_bundle_with_options(
     adopt_moduleclass_from_tree(&mut plan, candidates);
     note_inferred_moduleclass(&mut plan);
     add_gcccore_binutils(&mut plan);
-    add_build_backend_dependency(&mut plan, candidates);
+    add_build_backend_dependency(&mut plan, &providers);
     drop_unavailable_build_requirements(&mut plan, candidates);
     let mut locks = Vec::new();
     for output in &plan.outputs {
@@ -453,7 +459,10 @@ fn drop_unavailable_build_requirements(
 /// names it: archspec declares `poetry.core.masonry.api` and its recipe
 /// carries `('poetry', '2.1.2')` beside binutils. `setuptools` is the
 /// exception, because the Python module already ships it.
-fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+fn add_build_backend_dependency(
+    plan: &mut PackagePlan,
+    providers: &std::collections::HashMap<String, &crate::domain::Candidate>,
+) {
     const BACKEND_MODULES: &[(&str, &str)] = &[
         ("poetry", "poetry"),
         ("hatchling", "hatchling"),
@@ -486,12 +495,10 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
                 .unwrap_or(dependency.name.as_str()),
         ) == crate::provides::overlay_package_identity(module)
     });
-    // Only what the tree can actually provide: naming a module the site does
-    // not carry turns a buildable recipe into an unsatisfiable one.
-    let available = candidates.iter().any(|candidate| {
-        crate::provides::overlay_package_identity(&candidate.name)
-            == crate::provides::overlay_package_identity(module)
-    });
+    // Only what this generation can actually provide: a backend shipped
+    // only as a bundle extension still counts, and a first-class recipe
+    // on another generation does not.
+    let available = crate::provides::existing_language_provider_in(module, providers).is_some();
     if already || !available {
         return;
     }
@@ -642,7 +649,22 @@ fn pin_binutils_to_gcccore(
     }
 }
 
-fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+/// Candidates the plan's generation admits: its toolchain hierarchy only.
+fn candidates_available_for_plan(
+    plan: &PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) -> Vec<crate::domain::Candidate> {
+    match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
+        Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn inject_overlay_build_tools(
+    plan: &mut PackagePlan,
+    providers: &std::collections::HashMap<String, &crate::domain::Candidate>,
+) {
     let meson = plan.build.build_systems.iter().any(|hint| {
         let hint = hint.to_ascii_lowercase();
         hint.contains("meson")
@@ -667,11 +689,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
                     .unwrap_or(dependency.name.as_str()),
             ) == crate::provides::overlay_package_identity(name)
         });
-        let available = crate::provides::existing_language_provider(name, candidates).is_some()
-            || candidates.iter().any(|candidate| {
-                crate::provides::overlay_package_identity(&candidate.name)
-                    == crate::provides::overlay_package_identity(name)
-            });
+        let available = crate::provides::existing_language_provider_in(name, providers).is_some();
         if already || !available {
             continue;
         }
@@ -818,8 +836,7 @@ pub fn plan_new_package_with(
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
-    let (mut plan, sbom) = prepare_new_package_plan(request)?;
-    plan.package_index = request.package_index.clone();
+    let (plan, sbom) = prepare_new_package_plan(request)?;
     let roots = request
         .easyconfig_roots
         .iter()
