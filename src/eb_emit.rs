@@ -364,17 +364,132 @@ fn rewrite_git_identity(src: &str, new_version: &str) -> Result<GitRewrite, Emit
 }
 
 /// Drop dependency tuples whose names are in `names` (case-insensitive).
+///
+/// Tuples may sit mid-line (`dependencies = [('Kept', '1'), ('Gone', '2')]`)
+/// and the recipe spelling need not match the hole's case (`hdf5` vs `HDF5`).
 pub fn remove_named_dependencies(src: &str, names: &[String]) -> Result<String, EmitError> {
     let mut text = src.to_string();
     for name in names {
-        let pattern = format!(
-            r#"(?m)^[ \t]*\(['"]{n}['"]\s*,[^\n]*\n"#,
-            n = regex::escape(name)
-        );
-        let re = regex::Regex::new(&pattern).map_err(|e| EmitError::Rewrite(e.to_string()))?;
-        text = re.replace_all(&text, "").into_owned();
+        let pattern = format!(r#"\(\s*['"]{n}['"]"#, n = regex::escape(name));
+        let re = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(true)
+            .build()
+            .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0usize;
+        for m in re.find_iter(&text) {
+            if position_is_in_comment(&text, m.start()) {
+                continue;
+            }
+            let Some(tuple_end) = balanced_paren_end(&text, m.start()) else {
+                continue;
+            };
+            let (start, end) = expand_tuple_with_comma(&text, m.start(), tuple_end);
+            out.push_str(&text[last..start]);
+            last = end;
+        }
+        out.push_str(&text[last..]);
+        text = out;
     }
     Ok(text)
+}
+
+/// Index just after the `)` that closes the paren at `open`.
+fn balanced_paren_end(src: &str, open: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    if open >= bytes.len() || bytes[open] != b'(' {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_string: Option<u8> = None;
+    let mut i = open;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = in_string {
+            if c == b'\\' {
+                i += 1;
+            } else if c == quote {
+                in_string = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => in_string = Some(c),
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Consume a neighbouring comma so a one-line list stays valid Python.
+fn expand_tuple_with_comma(src: &str, start: usize, end: usize) -> (usize, usize) {
+    let before = src[..start].trim_end_matches([' ', '\t']);
+    if before.ends_with(',') {
+        return (before.len() - 1, end);
+    }
+    let after = src[end..].trim_start_matches([' ', '\t']);
+    if let Some(rest) = after.strip_prefix(',') {
+        return (start, src.len() - rest.len());
+    }
+    (start, end)
+}
+
+/// True when `idx` sits on a `#` comment of its line, outside a quoted string.
+fn position_is_in_comment(src: &str, idx: usize) -> bool {
+    let line_start = src[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let mut quote = None;
+    let mut escaped = false;
+    for byte in src[line_start..idx].bytes() {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'#' {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `src` already declares a live dependency tuple whose name is
+/// `name`. The recipe spelling need not match the robot's case (`hdf5` vs
+/// `HDF5`). A prefix such as `NetCDF` must not match `NetCDF-Fortran`. A
+/// leftover `# ('CMake', '3.26.3')` is a comment, not a declaration.
+fn names_dependency_tuple(src: &str, name: &str) -> bool {
+    for quote in ['\'', '"'] {
+        let opener = format!("({quote}");
+        let mut search_from = 0usize;
+        while let Some(rel) = src[search_from..].find(&opener) {
+            let idx = search_from + rel;
+            let name_start = idx + opener.len();
+            if let Some(name_end_rel) = src[name_start..].find(quote) {
+                let found = &src[name_start..name_start + name_end_rel];
+                if found.eq_ignore_ascii_case(name) && !position_is_in_comment(src, idx) {
+                    let after = &src[name_start + name_end_rel + 1..];
+                    let next = after.chars().find(|c| !c.is_whitespace());
+                    if matches!(next, Some(',') | Some(')')) {
+                        return true;
+                    }
+                }
+            }
+            search_from = idx + 1;
+        }
+    }
+    false
 }
 
 /// Insert a runtime dependency tuple if that name is not already declared.
@@ -799,7 +914,10 @@ fn remove_augmented_assignments(src: &str, key: &str) -> Result<String, EmitErro
     Ok(out)
 }
 
-fn find_assignment_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
+pub(crate) fn find_assignment_span(
+    src: &str,
+    key: &str,
+) -> Result<Option<(usize, usize)>, EmitError> {
     let re = regex::Regex::new(&format!(r"(?m)^[ \t]*{}[ \t]*=[ \t]*", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;
     let Some(header) = re.find(src) else {
