@@ -379,8 +379,11 @@ before the edit, it also reports ~EB_FMT_TEMPLATE_REMOVED~ where a template
 was replaced by a Python expression. ~f'lib/%(name)s.{SHLIB_EXT}'~ is correct
 and not flagged. When ~eb~ is on ~PATH~, the command also runs
 ~eb --check-contrib~ and merges those findings (~origin~ is
-~eb --check-contrib~). A missing ~eb~ is reported in ~check_contrib~ and does
-not by itself fail the command. Error-severity findings do; warnings do not. ~recipe format~ only wraps mechanical E501 lines; the other codes stay in
+~eb --check-contrib~). ~EB_STACK_EB~ names the ~eb~ to run instead, and
+~EB_STACK_EB=none~ skips the check, which keeps a lint deterministic on a
+host whose ~eb~ would judge a recipe the local checks accept; the report
+says the check was skipped and why. A missing ~eb~ is reported in
+~check_contrib~ and does not by itself fail the command. Error-severity findings do; warnings do not. ~recipe format~ only wraps mechanical E501 lines; the other codes stay in
 ~remaining~.
 
 ~recipe check~ refuses a recipe that is not valid Python. It prints the

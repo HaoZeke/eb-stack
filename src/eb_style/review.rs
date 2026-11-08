@@ -551,12 +551,35 @@ fn run_check_contrib(
     )
 }
 
+/// The `eb` that runs `--check-contrib`: the explicit path, else
+/// `EB_STACK_EB` (a path, or `none` to skip the check), else `eb` on PATH.
+/// `none` makes a lint deterministic on a host whose `eb` would judge a
+/// recipe the local checks accept, such as a test fixture with no
+/// homepage; the report says the check was skipped and why.
 fn resolve_eb(explicit: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = explicit {
         if path.is_file() {
             return Ok(path.to_path_buf());
         }
         return Err(format!("eb program {} is not a file", path.display()));
+    }
+    if let Some(value) = std::env::var_os("EB_STACK_EB") {
+        let value = value.to_string_lossy();
+        let value = value.trim();
+        if value.is_empty() || value.eq_ignore_ascii_case("none") {
+            return Err(
+                "EB_STACK_EB=none: eb --check-contrib skipped; local easyconfig style checks still ran"
+                    .into(),
+            );
+        }
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "EB_STACK_EB names {}, which is not a file",
+            path.display()
+        ));
     }
     which("eb").ok_or_else(|| "eb is not on PATH; local easyconfig style checks still ran".into())
 }
