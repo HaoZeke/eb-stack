@@ -663,3 +663,78 @@ fn inspect_library_matches_cli_artifact_identity() {
     assert_eq!(sbom["metadata"]["component"]["name"], "qmcpack");
     assert_eq!(sbom["bomFormat"], "CycloneDX");
 }
+
+// Ported from develop.
+
+#[test]
+fn conda_eq_pin_survives_as_exact_constraint() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::CondaForge,
+        r#"
+package:
+  name: feedstock
+  version: 1.0
+source:
+  url: https://example.invalid/feedstock-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  run:
+    - mlip =3.0
+"#,
+    )
+    .expect("parse conda = pin");
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    let mlip = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "mlip")
+        .expect("mlip");
+    assert_eq!(mlip.constraint.as_deref(), Some("==3.0"));
+    assert!(
+        !plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "unparsed-constraint"),
+        "unparsed-constraint residuals: {:?}",
+        plan.residuals
+    );
+    let constraint = mlip.constraint.as_deref().expect("constraint");
+    assert!(eb_stack::version::matches_req("3.0", constraint));
+    assert!(!eb_stack::version::matches_req("4.0", constraint));
+}
+
+#[test]
+fn digit_wildcards_become_series_ranges() {
+    let conda_source = r#"
+package:
+  name: orbit
+  version: 1.0
+source:
+  url: https://example.invalid/orbit-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  run:
+    - numpy 1.2.*
+"#;
+    let conda = parse_foreign_str(ForeignFormat::CondaForge, conda_source).expect("conda");
+    let conda_plan = package_plan_from_foreign(&conda, &toolchain("2026.1"));
+    let numpy = conda_plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "numpy")
+        .and_then(|dependency| dependency.constraint.as_deref())
+        .expect("numpy");
+    assert!(eb_stack::version::matches_req("1.2.3", numpy), "{numpy}");
+    assert!(!eb_stack::version::matches_req("1.3.0", numpy), "{numpy}");
+
+    let pypi = parse_foreign_str(ForeignFormat::Pypi, "orbit==1.0.0\npkg==1.2.*\n").expect("pypi");
+    let pypi_plan = package_plan_from_foreign(&pypi, &toolchain("2026.1"));
+    let pkg = pypi_plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "pkg")
+        .and_then(|dependency| dependency.constraint.as_deref())
+        .expect("pkg");
+    assert!(eb_stack::version::matches_req("1.2.3", pkg), "{pkg}");
+    assert!(!eb_stack::version::matches_req("1.3.0", pkg), "{pkg}");
+}

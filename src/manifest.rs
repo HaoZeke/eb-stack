@@ -127,7 +127,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 category: "unparsed-constraint".into(),
                 severity: ResidualSeverity::Judgment,
                 summary: format!(
-                    "{} requirement {constraint:?} is not expressible, so it does not constrain                      the solve: {unsupported}",
+                    "{} requirement {constraint:?} is not expressible, so it does not constrain the solve: {unsupported}",
                     dependency.name
                 ),
                 evidence: dependency.original_spec.clone(),
@@ -273,9 +273,24 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
         None
     } else if format == ForeignFormat::Spack {
         canonical_spack_version_constraint(version_field)
+    } else if format == ForeignFormat::CondaForge {
+        Some(rewrite_conda_eq_pin(version_field))
     } else {
         Some(pin.to_string())
     }
+}
+
+/// Conda-build writes `name =3.0`; the shared language only accepts `==`.
+fn rewrite_conda_eq_pin(pin: &str) -> String {
+    pin.split(',')
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .map(|clause| match clause.strip_prefix('=') {
+            Some(rest) if !rest.starts_with('=') => format!("=={rest}"),
+            _ => clause.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn canonical_spack_version_constraint(version: &str) -> Option<String> {

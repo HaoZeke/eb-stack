@@ -3,34 +3,28 @@ name: eb-stack-golden-replay
 description: Regenerate the SeisSol 1.3.2 foss-2025a overlay unattended. Use after the package-bump packset pin, or to check that a tool-repair still emits the overlay.
 ---
 
-# Replay the SeisSol golden
+# Compose the SeisSol overlay
 
 Do not hand-edit a `.eb` file. Fix the emitter or the package TOML instead.
-See `skills/tool-repair/SKILL.md`.
+See `skills/tool-repair/SKILL.md`. Do not write a helper script.
 
-Pin the packset on the laptop. Then run the one-shot script.
+First commands, before any `package bump`:
 
 ```sh
 PACKSET_URL=http://127.0.0.1:8761
 PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack
 packset pin
-skills/golden-replay/replay.sh
+ljos search bump
 ```
 
-`packset pin` must say `set=package-bump`. The next command is `replay.sh`.
-Do not locate the binary. Do not write a plan.
+Then `eb-stack package bump` the parent. This overlay is a generation
+retarget (`generation_retarget=true`). Each `companion=` line is a full
+`eb-stack package …` command: `eval` the text after `companion=`. Then
+`eval` `re_run=`. Stop only when the parent exits 0. Do not write a
+helper script and stop. A `version_only=true` bump is not this overlay;
+see `skills/annual-bump/SKILL.md`.
 
-`replay.sh` calls `run-on-builder.sh` for each bump and plan. Then it
-runs `check-overlay.sh`. Exit 0 is the gate.
-
-```sh
-skills/golden-replay/run-on-builder.sh
-```
-
-That wrapper with no argv runs `replay.sh`. Pass an out-dir only when
-the default `work/seissol-1.3.2` must change.
-
-## What the script emits
+## What compose must emit
 
 Site generation is `foss-2025a`. ASAGI stays at 1.0. easi becomes 1.7.0.
 PSpaMM becomes 0.3.1 on `gfbf-2025a`. SeisSol becomes 1.3.2.
@@ -45,9 +39,7 @@ retarget it to the build host.
 
 The pinned set `package-bump` is the operator contract. Atoms:
 `examples/ljos-packet/package-bump.jsonl`. Instructions card:
-`examples/ljos-packet/package-bump.instructions.md`. The packet includes the
-review-fix lessons (templates versus f-strings, every occurrence, lint before
-done). They are pack atoms. eb-stack does not write ljos user rules.
+`examples/ljos-packet/package-bump.instructions.md`.
 
 ## Claims
 
