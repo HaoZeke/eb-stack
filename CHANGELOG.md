@@ -7,7 +7,7 @@ All notable changes to this project are documented here.
 ### Added
 
 - The tile log carries a sorted-run index of its records in a second,
-  signed index log at `<log>.tiles.index`: `ledger head` signs it under
+  signed index log inside it at `<tiles>/index`: `ledger head` signs it under
   `<origin>/index` with the same key once a run exists, `ledger find`
   proves the record in the tile checkpoint and the run manifest in the
   index checkpoint, `audit` checks the index checkpoint's prefix, and a
