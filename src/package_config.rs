@@ -585,13 +585,27 @@ fn ensure_dependency_requirement(
 ) {
     let condition = requirement_condition(&requirement.features);
     let identity = package_identity(&requirement.name);
-    let existing = plan.dependencies.iter_mut().find(|dependency| {
+    let mut found = false;
+    for dependency in &mut plan.dependencies {
         let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
-        package_identity(effective_name) == identity
-            && (condition == ConditionExpr::Always || dependency.condition == condition)
-    });
-    if let Some(dependency) = existing {
-        dependency.eb_name = Some(requirement.name.clone());
+        if package_identity(effective_name) != identity
+            || !(condition == ConditionExpr::Always || dependency.condition == condition)
+        {
+            continue;
+        }
+        // A virtual fftw row is not EasyBuild FFTW. Matching it would mark
+        // found and leave virtual_capability set, so SAT never sees FFTW.
+        if dependency.virtual_capability.is_some() {
+            continue;
+        }
+        found = true;
+        if dependency
+            .eb_name
+            .as_deref()
+            .is_none_or(|name| name.is_empty())
+        {
+            dependency.eb_name = Some(requirement.name.clone());
+        }
         if let Some(constraint) = &requirement.constraint {
             dependency.constraint = Some(constraint.clone());
         }
@@ -611,8 +625,10 @@ fn ensure_dependency_requirement(
                 }
             }
         }
-        dependency.condition = condition;
+        dependency.condition = condition.clone();
         dependency.solver_excluded = false;
+    }
+    if found {
         return;
     }
 
