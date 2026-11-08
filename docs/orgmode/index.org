@@ -34,7 +34,7 @@ A plan is not a build. ``package plan`` and ``package bump`` can establish only 
 
 Start with the :doc:`tutorial`. With no EasyBuild install, run the inspect snippet under *Inspect from a fresh clone*. Closure, generation, baseline, and reachability are in the :doc:`reference/glossary`.
 
-Build from main for ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``. The published 0.3.0 binary (crates.io and the GitHub release) uses ``--policy`` and does not include those commands.
+The GitHub release (0.7.1) and a build from main carry ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``. The crates.io package is still 0.3.0: it uses ``--policy`` and does not include those commands.
 
 .. important::
 
@@ -273,12 +273,13 @@ rustup default stable
 rustc --version
 #+end_src
 
-  crates.io and the GitHub release are both 0.3.0. That binary solves a
-  stack with ~--policy~, not ~--stack-policy~, and it serves ~mcp~. It
-  does not provide ~stack gap~, ~stack oom~, ~stack from-commit~,
-  ~rebuild-set~, ~pr-overlap~, or ~component-reach~. ~eb-stack --version~
-  prints ~0.3.0~ for that release. A build of this tree prints ~0.4.0~.
-  Build from main for the commands in this manual:
+  The GitHub release is 0.7.1, with installers and archives for Linux
+  (x86-64, aarch64), macOS and Windows, and it carries every command in
+  this manual. crates.io still has 0.3.0: that binary solves a stack with
+  ~--policy~, not ~--stack-policy~, and does not provide ~stack gap~,
+  ~stack oom~, ~stack from-commit~, ~rebuild-set~, ~pr-overlap~, or
+  ~component-reach~. ~eb-stack --version~ prints ~0.3.0~ for it. A build
+  of this tree prints ~0.7.1~. Build from main for the commands in this manual:
 
 #+begin_src bash
 git clone https://github.com/HaoZeke/eb-stack.git
@@ -288,9 +289,9 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 #+end_src
 
   =~/.local/bin= is not on ~PATH~ until you add it. ~eb-stack --version~
-  then prints ~eb-stack 0.4.0~. ~cargo binstall~ is a separate program;
+  then prints ~eb-stack 0.7.1~. ~cargo binstall~ is a separate program;
   a stock ~cargo~ reports ~no such command: binstall~. The shell
-  installer from the GitHub release installs the 0.3.0 binary. The
+  installer from the GitHub release installs the 0.7.1 binary. The
   contributor test suite is ~cargo test --locked~, on the
   [[file:contributing.org][contributing]] page. It is not required before
   the first solve.

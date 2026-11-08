@@ -1,5 +1,8 @@
-use eb_stack::package::{package_plan_to_cyclonedx, PackageRuleKind};
-use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
+use eb_stack::package::{package_plan_to_cyclonedx, PackageRuleKind, ProfileLock};
+use eb_stack::{
+    emit_profile_easyconfigs, package_plan_from_foreign, parse_foreign_path, parse_foreign_str,
+    ForeignFormat, Toolchain,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -149,5 +152,197 @@ fn foreign_dependency_names_are_preserved_until_resolution_policy() {
             .iter()
             .any(|dependency| dependency.name == "sccache"),
         "compiler wrappers and build accelerators are not package edges"
+    );
+}
+
+// Ported from develop: tests main lacked by name.
+
+#[test]
+fn autotools_is_not_reported_as_a_default_easyblock() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        &format!(
+            r#"
+class Pkg(AutotoolsPackage):
+    version("1.0", sha256="{digest}")
+"#
+        ),
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    assert_eq!(plan.build.easyblock.as_deref(), Some("ConfigureMake"));
+    assert!(
+        plan.residuals
+            .iter()
+            .all(|residual| residual.id != "easyblock:default"),
+        "{:?}",
+        plan.residuals
+    );
+}
+
+#[test]
+fn cran_sanity_dirs_are_under_the_r_library() {
+    let recipe = parse_foreign_str(ForeignFormat::Cran, "Package: jsonlite\nVersion: 1.8.8\n")
+        .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let paths = plan.build.easyconfig_parameters.get("sanity_check_paths");
+    let Some(eb_stack::package::EasyconfigValue::Table(table)) = paths else {
+        panic!("sanity_check_paths: {paths:?}");
+    };
+    let Some(eb_stack::package::EasyconfigValue::List(dirs)) = table.get("dirs") else {
+        panic!("dirs: {table:?}");
+    };
+    assert!(
+        dirs.iter().any(|value| matches!(
+            value,
+            eb_stack::package::EasyconfigValue::String(path) if path == "lib/R/library/jsonlite"
+        )),
+        "{dirs:?}"
+    );
+}
+
+#[test]
+fn luarocks_git_scm_url_emits_git_config() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Luarocks,
+        r#"
+package = "lfs"
+version = "1.8.0-1"
+source = {
+  url = "git+https://github.com/lunarmodules/luafilesystem.git",
+  tag = "v1.8.0"
+}
+"#,
+    )
+    .expect("parse");
+    assert_eq!(
+        recipe.sources[0].git.as_deref(),
+        Some("https://github.com/lunarmodules/luafilesystem.git")
+    );
+    assert!(recipe.sources[0].url.is_none());
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let lock = ProfileLock {
+        schema_version: eb_stack::package::PROFILE_LOCK_SCHEMA_VERSION,
+        package: plan.package.name.clone(),
+        version: plan.package.version.clone(),
+        profile: "default".into(),
+        toolchain: toolchain(),
+        versionsuffix: String::new(),
+        dependencies: Vec::new(),
+        pin_outcomes: Vec::new(),
+        exclusions: Vec::new(),
+        solver: "resolvo".into(),
+    };
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+    assert!(
+        emitted[0].text.contains("git_config"),
+        "checkout must emit git_config:\n{}",
+        emitted[0].text
+    );
+    assert!(
+        !emitted[0].text.contains("git+https://"),
+        "must not wget the SCM URL:\n{}",
+        emitted[0].text
+    );
+}
+
+#[test]
+fn luarocks_hint_selects_luarocks_and_skips_default_residual() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Luarocks,
+        r#"
+package = "lfs"
+version = "1.8.0-1"
+source = { url = "https://example.invalid/lfs-1.8.0.tar.gz" }
+"#,
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    assert_eq!(plan.build.easyblock.as_deref(), Some("LuaRocks"));
+    assert!(
+        plan.residuals
+            .iter()
+            .all(|residual| residual.id != "easyblock:default"),
+        "{:?}",
+        plan.residuals
+    );
+}
+
+#[test]
+fn luarocks_pessimistic_pin_is_a_series_range() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Luarocks,
+        r#"
+package = "demo"
+version = "1.0-1"
+source = { url = "https://example.invalid/demo.tgz" }
+dependencies = {
+  "lfs ~> 1.8",
+  "bit32 ~= 1.0"
+}
+"#,
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let lfs = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "lfs")
+        .expect("lfs");
+    assert_eq!(lfs.constraint.as_deref(), Some(">=1.8,<1.9"));
+    let bit32 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "bit32")
+        .expect("bit32");
+    assert_eq!(bit32.constraint.as_deref(), Some("!=1.0"));
+}
+
+#[test]
+fn raku_trailing_plus_is_a_lower_bound() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Raku,
+        r#"{
+          "name": "Demo",
+          "version": "0.1.0",
+          "depends": ["JSON::Fast:ver<0.10+>"]
+        }"#,
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let dep = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "JSON::Fast")
+        .expect("JSON::Fast");
+    assert_eq!(dep.constraint.as_deref(), Some(">=0.10"));
+}
+
+#[test]
+fn spack_build_plus_link_is_a_runtime_edge() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        &format!(
+            r#"
+class Pkg(Package):
+    version("1.0", sha256="{digest}")
+    depends_on("hdf5", type=("build", "link"))
+"#
+        ),
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let hdf5 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "hdf5")
+        .expect("hdf5");
+    assert!(
+        hdf5.roles
+            .iter()
+            .any(|role| matches!(role, eb_stack::package::DependencyRole::Run)),
+        "{hdf5:?}"
     );
 }

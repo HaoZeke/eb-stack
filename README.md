@@ -11,7 +11,7 @@
 
 A plan is not a build. `package plan` and `package bump` can establish only **resolves**. `campaign run` owns **builds** and **binary-verified**.
 
-The published 0.3.0 binary (crates.io and the GitHub release) lacks `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, and `component-reach`. Its `stack solve` flag is `--policy`. Build from main for those commands.
+The GitHub release is 0.7.1 and carries every command here. The crates.io package is still 0.3.0: it lacks `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, and `component-reach`, and its `stack solve` flag is `--policy`. Take the release installer, or build from main.
 
 The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation, baseline, and reachability. The longer path is the [tutorial](docs/orgmode/tutorial.org).
 
@@ -74,18 +74,18 @@ stops while reading the crate index: the Cargo feature `edition2024` is
 not stabilized. `rustup toolchain install stable` and `rustup default
 stable` provide a new enough compiler.
 
-The crates.io package and the GitHub release are both 0.3.0. That
-binary's `stack solve` flag is `--policy`. It does not include `stack
-gap`, `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
-`component-reach`. `eb-stack --version` prints `0.3.0` for that binary.
-A build of this tree prints `0.6.2`. The commands below use
-`--stack-policy` and those reports. Build from main for them.
+The GitHub release is 0.7.1, with installers and archives for Linux
+(x86-64, aarch64), macOS and Windows, and `eb-stack --version` prints
+`0.7.1` for it, as a build of this tree does. The crates.io package is
+still 0.3.0: that binary's `stack solve` flag is `--policy`, and it does
+not include `stack gap`, `stack oom`, `stack from-commit`, `rebuild-set`,
+`pr-overlap`, or `component-reach`. The commands below use
+`--stack-policy` and those reports; the release or a build from main has
+them, `cargo install eb_stack --locked` does not.
 
 `cargo binstall` is not part of a Rust install. `cargo binstall
 eb_stack` fails with `no such command: binstall` until that program is
-installed on its own, and it installs the 0.3.0 release. The shell
-installer and `cargo install eb_stack --locked` install that same
-release.
+installed on its own, and it then installs the crates.io 0.3.0 package.
 
 From this checkout:
 
@@ -97,7 +97,7 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
 Add `~/.local/bin` to `PATH`. `eb-stack --version` then prints
-`eb-stack 0.6.2`. The test suite is `cargo test --locked`, in
+`eb-stack 0.7.1`. The test suite is `cargo test --locked`, in
 [Tests](#tests). It is not required before the first solve.
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.

@@ -92,7 +92,11 @@ version from being interpreted as the provider's version:
 
 The original foreign spelling and constraint remain in dependency provenance.
 Aliases only control robot matching and solving; they do not teach the parser
-about a package.
+about a package. The table form rejects a key it does not know, so a typo
+such as ~constraints~ fails the layer instead of keeping the pin. An empty
+alias name or provider, and an empty virtual name or capability, fail the
+layer the same way. ~exclude_from_solve~ matches the provider an alias maps
+to as well as the foreign name.
 
 Easyblock-specific parameters are typed TOML data. They are emitted as normal
 Python values, but configuration cannot inject Python expressions:
@@ -110,12 +114,19 @@ cuda_compute_capabilities = ["80", "90"]
 #+end_src
 
 Build-level values apply to every product profile. A profile value with the
-same key replaces the build-level value for that emitted recipe.
+same key replaces the build-level value for that emitted recipe. A profile
+may ~inherit~ a parent listed later in the same layer: parents are applied
+first, so the child sees the parent's values from that layer. A
+~[[build.patches]]~ entry with a ~sha256~ must spell 64 hexadecimal
+characters; the digest is compared to the file without regard to case.
 
 Use a requirement when EasyBuild product policy needs a dependency that the
 foreign recipe does not declare. If a matching foreign edge exists, the
-requirement makes that edge unconditional and merges its roles. Otherwise it
-creates a canonical dependency before the SBOM and Resolvo lock are produced:
+requirement makes that edge unconditional and merges its roles; every edge
+that maps to the name is updated, so two components aliased onto one
+bundle both carry the pin, and an existing alias is kept. A virtual edge is
+not a match. Otherwise it creates a canonical dependency before the SBOM and
+Resolvo lock are produced:
 
 #+begin_src toml
 [[dependencies.requirements]]
@@ -364,6 +375,15 @@ target generation, optional ~version~ is the emitted package version used for
 provider matching, and at most one ~source_checksums~ entry has annual-bump
 semantics. Foreign-only fields (~format~, ~package_config~, non-default
 ~profile~, multiple checksums) are typed catalog errors.
+
+Lookup compares ~name~ and ~version~ trimmed. For an exact version a
+versioned entry wins over an unversioned sibling, and two versioned matches
+are ambiguous. An overlay that replaces ~source~ starts the entry over: an
+inherited ~format~ goes back to auto-detection and inherited checksums are
+dropped unless the overlay restates them. Switching an entry to
+~easybuild-bump~ drops inherited foreign checksums; restating
+~easybuild-bump~ keeps them. A blank ~source~ is a missing-source error, and
+every ~source_checksums~ entry must be a SHA-256 hex digest.
 
 Companions are written under ~packages/<name>-<version>-<toolchain>/~, share one
 ~easyconfigs/~ overlay with the root, appear in topological ~build-order.json~,

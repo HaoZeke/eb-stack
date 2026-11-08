@@ -2,6 +2,98 @@
 
 All notable changes to this project are documented here.
 
+## 0.7.1 - 2026-11-08
+
+### Changed
+
+- The crates.io package carries the sources, the TOML tables they include,
+  the README, LICENSE, CHANGELOG and CITATION. The test corpus, fixtures,
+  manual, skills, examples and delivery bundles stay in the repository;
+  the 0.7.0 archive was 1589 files and 13.8 MiB, most of it tests.
+
+### Docs
+
+- The manual and README describe the 0.7.x GitHub release as carrying
+  every command, and crates.io alone as still 0.3.0; the Org pages that
+  print a version are on the release checklist; CONTRIBUTING names the
+  publish command.
+
+## 0.7.0 - 2026-11-08
+
+The behaviours the `develop` line carried and main lacked, ported one test
+at a time (120 tests by name, all green on main now).
+
+### Added
+
+- `package bump --foreign RECIPE` (MCP `foreign`): a Spack `package.py` or
+  conda-forge recipe whose dependencies the bump inspects for names the
+  source `.eb` never declared, mapped through the package-config aliases.
+- Package config: the alias table form rejects unknown keys; empty alias
+  and virtual names or values, and a patch `sha256` that is not a SHA-256,
+  fail the layer; `exclude_from_solve` matches the post-alias provider; a
+  child profile may be listed before its parent in the same layer; a
+  requirement updates every row that maps to its name and keeps an
+  existing alias.
+- Package catalog: an exact version wins over an unversioned sibling,
+  names and versions compare trimmed, a blank `source` is a missing-source
+  error, replacing `source` resets an inherited `format` and drops
+  inherited checksums, switching to `easybuild-bump` drops foreign
+  checksums, and `source_checksums` must be SHA-256 digests.
+- LuaRocks: `~>` is a series range, `~=` a not-equal, `build_dependencies`
+  are build edges, a `git+` source is a git remote with its tag, `hash`
+  counts only as a 64-hex SHA-256, `external_dependencies` are residuals,
+  and the plan's easyblock is `LuaRocks`. Raku: `ver<0.10+>` is `>=0.10`
+  and the `ver`, `auth`, `api` and `from` adverbs are not the name.
+- A git checkout source (a commit, or a remote with no download URL)
+  emits a `git_config` dict.
+- A dependency that spells the module, `('OpenMPI', '5.0.3-GCC-13.3.0')`,
+  is an exact pin on that build, from a SYSTEM recipe too; it is not a hole.
+- Stack pins and exclusions apply to every toolchain-qualified key of a
+  name; a locked pin on `Perl` constrains the GCCcore and SYSTEM builds.
+- The bump emits the plan's default profile; a layer's `[package] version`
+  reaches the recipe while `--version` wins; a dependency stated in both
+  lists is rewritten when either disagrees with the lock; a vanished
+  dependency is removed wherever its tuple sits on the line; a sibling's
+  `patches` and `checksums` are adopted with the emitted source digest
+  kept and the plan's patch set rebuilt; `local_host_arch`, `local_order`
+  and `local_equations` derive `local_binary` and parameterised
+  `configopts`.
+- PyPI and PEP 518 requirements gated by an environment marker are opaque
+  conditions, solver-excluded with a `pypi-marker` residual; build
+  backends and overlay build tools are named only when the plan's own
+  toolchain hierarchy provides them; a language bundle renders its
+  patches, their checksums and configopts; the request's package index
+  reaches the plan in prepare.
+- Closure: holes carry their versionsuffix into discovery, the companion
+  key and the cycle path, so `-MPI` and `-CUDA` builds are two companions;
+  an unversioned catalog wildcard defers to a unique versioned sibling; a
+  PyPI or CRAN root the robot already provides closes without companions.
+- SBOM: only a 64-hex digest is a SHA-256 hash, the root hash is the first
+  source that has one, overlay extensions are library components, and the
+  GitHub archive URL is derived only from a github.com remote in any
+  spelling.
+- CRAN sanity dirs sit under `lib/R/library/<name>`; a Spack
+  `type=("build", "link")` dependency is a runtime edge.
+
+### Changed
+
+- A suffix or module spelling of a candidate answers only an exact
+  requirement. Against a range it compared as a pre-release of its
+  version, and `<5` admitted a `5.0.0-GCCcore-13.3.0` build.
+- A GitHub archive whose repository differs from the package name spells
+  the account and repository in `source_urls`; `GITHUB_SOURCE` would 404.
+- An uppercase declared patch digest verifies, a non-UTF-8 patch copies
+  into the bundle, overlay claims key on the content digest, and a
+  `dummy`-spelled source toolchain bumped onto `system` keeps its exact
+  dependency pins.
+- A runtime extra that collapses onto a bundle a build-only extra already
+  locked keeps the bundle off the build-only list.
+
+### Fixed
+
+- An MCP `eb_package_bump` call without a `foreign` array no longer fails
+  with "argument foreign requires at least one path".
+
 ## 0.6.2 - 2026-11-08
 
 ### Changed

@@ -1,12 +1,14 @@
+use eb_stack::domain::ExtEntry;
 use eb_stack::package::{
-    materialize_profile, ConditionExpr, EasyconfigValue, LockedDependency, OutputRequest,
-    PatchArtifact, ProductProfile, ProfileEnvironment, ProfileLock, StackPin, StackPinMode,
-    StackPolicy, PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
+    materialize_profile, ConditionExpr, DependencyIntent, DependencyRole, EasyconfigValue,
+    LockedDependency, OutputRequest, PatchArtifact, ProductProfile, ProfileEnvironment,
+    ProfileLock, StackPin, StackPinMode, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
     check_recipe_deps, emit_profile_easyconfigs, lint_style, package_plan_from_foreign,
     parse_foreign_path, parse_foreign_str, resolve_easyconfig_str, solve_package_profile,
-    Candidate, DepReq, ForeignFormat, Toolchain,
+    unsatisfied_direct_dependencies, Candidate, DepReq, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -1212,5 +1214,510 @@ fn upstream_compiler_recipes_pin_java_at_system() {
     assert!(
         bare_on_compiler.is_empty(),
         "compiler-toolchain recipes use a bare Java tuple: {bare_on_compiler:?}"
+    );
+}
+
+// Ported from develop: tests main lacked by name.
+
+#[test]
+fn a_later_same_name_pin_is_still_a_hole() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![
+        DependencyIntent {
+            id: "dep:Python-run".into(),
+            name: "Python".into(),
+            eb_name: None,
+            constraint: None,
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+        DependencyIntent {
+            id: "dep:Python-pin".into(),
+            name: "Python".into(),
+            eb_name: None,
+            constraint: Some("==9.9.9".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+    ];
+    let python = Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "Python".into(),
+        version: "3.12.3".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "Python-3.12.3-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[python],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes
+            .iter()
+            .any(|hole| hole.name == "Python" && hole.version_req == "==9.9.9"),
+        "the later exact pin must remain a hole: {holes:?}"
+    );
+}
+
+#[test]
+fn a_system_recipe_does_not_treat_system_modules_as_holes() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &system_toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:M4".into(),
+        name: "M4".into(),
+        eb_name: None,
+        constraint: Some("==1.4.19".into()),
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Build],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let m4 = Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "M4".into(),
+        version: "1.4.19".into(),
+        toolchain: system_toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "M4-1.4.19.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: system_toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[m4],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes.is_empty(),
+        "a SYSTEM recipe must accept SYSTEM modules: {holes:?}"
+    );
+}
+
+/// `aaa` sorts before `zzz`. If both collapse to one bundle and the first
+/// role is build-only, the lock must still be runtime because `zzz` is.
+#[test]
+fn collapsed_extension_provider_stays_runtime_when_any_role_is() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let intent = |name: &str, role: DependencyRole| DependencyIntent {
+        id: format!("dep:{name}"),
+        name: name.into(),
+        eb_name: None,
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![role],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    };
+    plan.dependencies = vec![
+        intent("aaa", DependencyRole::Build),
+        intent("zzz", DependencyRole::Run),
+    ];
+    let bundle = Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "LangBundle".into(),
+        version: "1.0".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "LangBundle-1.0-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: vec![
+            ExtEntry {
+                name: "aaa".into(),
+                version: "1.0".into(),
+            },
+            ExtEntry {
+                name: "zzz".into(),
+                version: "1.0".into(),
+            },
+        ],
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[bundle],
+        &stack,
+    )
+    .expect("collapse extras onto the parent bundle");
+    let provider = lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "LangBundle")
+        .expect("parent bundle locked");
+    assert!(
+        !provider.build,
+        "a runtime extra must keep the bundle off the build-only list: {:?}",
+        lock.dependencies
+    );
+}
+
+#[test]
+fn github_tag_archive_names_repo_when_it_differs_from_the_recipe() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "OpenMPI".into();
+    plan.package.version = "5.0.7".into();
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+    plan.sources = vec![eb_stack::package::SourceArtifact {
+        url: Some("https://github.com/open-mpi/ompi/archive/refs/tags/v5.0.7.tar.gz".into()),
+        git: None,
+        tag: None,
+        commit: None,
+        sha256: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+        filename: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    }];
+    let mut lock = profile_lock("default", "");
+    lock.package = "OpenMPI".into();
+    lock.version = "5.0.7".into();
+    lock.dependencies.clear();
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit OpenMPI github");
+    let text = &emitted[0].text;
+    assert!(text.contains("github_account = 'open-mpi'"), "{text}");
+    assert!(
+        !text.contains("GITHUB_SOURCE"),
+        "GITHUB_SOURCE expands to OpenMPI/archive: {text}"
+    );
+    assert!(
+        text.contains("ompi") && text.contains("https://github.com/open-mpi/ompi/archive"),
+        "source_urls must name repo ompi: {text}"
+    );
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
+}
+
+/// `('OpenMPI', '5.0.3-GCC-13.3.0')` is a module pin. The hole check has to
+/// accept the same spelling Resolvo does, or closure invents a companion for
+/// a candidate the solve then locks.
+#[test]
+fn module_version_pin_is_not_a_hole_and_locks() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &system_toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:OpenMPI".into(),
+        name: "OpenMPI".into(),
+        eb_name: None,
+        constraint: Some("==5.0.3-GCC-13.3.0".into()),
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let openmpi = Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "OpenMPI".into(),
+        version: "5.0.3".into(),
+        toolchain: Toolchain {
+            name: "GCC".into(),
+            version: "13.3.0".into(),
+        },
+        versionsuffix: None,
+        easyconfig_path: "OpenMPI-5.0.3-GCC-13.3.0.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: system_toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        std::slice::from_ref(&openmpi),
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes.is_empty(),
+        "module pin must match the admitted GCC build: {holes:?}"
+    );
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[openmpi],
+        &stack,
+    )
+    .expect("solve module pin");
+    assert!(lock
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "OpenMPI"
+            && dependency.version == "5.0.3"
+            && dependency.toolchain.name == "GCC"));
+}
+
+#[test]
+fn stack_pin_closure_without_target_python_is_a_hole_or_solve_error() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let mut dependency = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "hdf5")
+        .expect("dependency template")
+        .clone();
+    dependency.id = "pytorch".into();
+    dependency.name = "pytorch".into();
+    dependency.eb_name = Some("PyTorch".into());
+    dependency.constraint = Some("2.9.1".into());
+    dependency.condition = ConditionExpr::Always;
+    let mut target_python = dependency.clone();
+    target_python.id = "python".into();
+    target_python.name = "python".into();
+    target_python.eb_name = Some("Python".into());
+    target_python.constraint = Some("3.14.2".into());
+    plan.dependencies = vec![dependency, target_python];
+
+    let foss_2024a = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let gcccore_2024a = Toolchain {
+        name: "GCCcore".into(),
+        version: "13.3.0".into(),
+    };
+    let candidate = |name: &str,
+                     version: &str,
+                     candidate_toolchain: Toolchain,
+                     dependencies: Vec<DepReq>| Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: name.into(),
+        version: version.into(),
+        toolchain: candidate_toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!(
+            "{name}-{version}-{}-{}.eb",
+            candidate_toolchain.name, candidate_toolchain.version
+        ),
+        dependencies,
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let python_312 = DepReq {
+        name: "Python".into(),
+        version_req: "==3.12.3".into(),
+        versionsuffix: None,
+        toolchain: None,
+    };
+    let candidates = vec![
+        candidate("PyTorch", "2.8.0", toolchain(), Vec::new()),
+        candidate("PyTorch", "2.9.1", foss_2024a.clone(), vec![python_312]),
+        candidate("Python", "3.12.3", gcccore_2024a.clone(), Vec::new()),
+    ];
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "site".into(),
+        toolchain: toolchain(),
+        pins: vec![StackPin {
+            name: "PyTorch".into(),
+            version_requirement: "==2.9.1".into(),
+            toolchain: Some(foss_2024a),
+            versionsuffix: Some(String::new()),
+            mode: StackPinMode::Preferred,
+            source: Some("site stack".into()),
+        }],
+        exclusions: Vec::new(),
+    };
+
+    let solved = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &candidates,
+        &stack,
+    );
+    if let Ok(lock) = solved {
+        let python = lock
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name == "Python");
+        assert!(
+            python.is_none_or(|dependency| {
+                dependency.version != "3.12.3" || dependency.toolchain != gcccore_2024a
+            }),
+            "unscoped pin-closure Python must not satisfy foss-2026.1: {lock:?}"
+        );
+        panic!("expected a Python hole or solve error, got lock {lock:?}");
+    }
+}
+
+fn system_toolchain() -> Toolchain {
+    Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    }
+}
+
+#[test]
+fn versionsuffix_pin_is_a_hole_when_only_a_plain_candidate_exists() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:OpenMPI".into(),
+        name: "OpenMPI".into(),
+        eb_name: None,
+        constraint: Some("==5.0.3".into()),
+        toolchain: None,
+        versionsuffix: Some("-CUDA-12.6.0".into()),
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let plain = Candidate {
+        versionprefix: None,
+        easyblock: None,
+        name: "OpenMPI".into(),
+        version: "5.0.3".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "OpenMPI-5.0.3-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[plain],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes
+            .iter()
+            .any(|hole| hole.name == "OpenMPI"
+                && hole.versionsuffix.as_deref() == Some("-CUDA-12.6.0")),
+        "a CUDA suffix must not be satisfied by a plain module: {holes:?}"
     );
 }

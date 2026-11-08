@@ -82,6 +82,10 @@ pub struct BumpPackageRequest {
     /// parsed, so a version bump can drop vanished deps or add CMake extras
     /// the old file never declared.
     pub package_layers: Vec<PackageConfigLayer>,
+    /// Spack `package.py` or conda-forge recipe files, inspected for
+    /// dependencies the source easyconfig never declared. Empty finds a
+    /// `package.py` beside the robot copy, when there is one.
+    pub foreign_sources: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +228,7 @@ pub fn prepare_new_package_plan(
         sbom = package_plan_to_cyclonedx(&plan)
             .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     }
+    plan.package_index = request.package_index.clone();
     Ok((plan, sbom))
 }
 
@@ -288,8 +293,13 @@ pub fn complete_package_bundle_with_options(
     if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
         promote_language_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
     }
+    // Availability is generation-scoped: the later solve admits only
+    // hierarchy members, so a CMake that exists only on foss-2023a must
+    // not look available to a foss-2026.1 plan.
+    let available = candidates_available_for_plan(&plan, candidates, hierarchy_fixture);
+    let providers = crate::provides::language_provider_index(&available);
     if plan.origin == PackageOrigin::Pypi {
-        inject_overlay_build_tools(&mut plan, candidates);
+        inject_overlay_build_tools(&mut plan, &providers);
     }
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
@@ -297,7 +307,7 @@ pub fn complete_package_bundle_with_options(
     adopt_moduleclass_from_tree(&mut plan, candidates);
     note_inferred_moduleclass(&mut plan);
     add_gcccore_binutils(&mut plan);
-    add_build_backend_dependency(&mut plan, candidates);
+    add_build_backend_dependency(&mut plan, &providers);
     drop_unavailable_build_requirements(&mut plan, candidates);
     let mut locks = Vec::new();
     for output in &plan.outputs {
@@ -449,7 +459,10 @@ fn drop_unavailable_build_requirements(
 /// names it: archspec declares `poetry.core.masonry.api` and its recipe
 /// carries `('poetry', '2.1.2')` beside binutils. `setuptools` is the
 /// exception, because the Python module already ships it.
-fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+fn add_build_backend_dependency(
+    plan: &mut PackagePlan,
+    providers: &std::collections::HashMap<String, &crate::domain::Candidate>,
+) {
     const BACKEND_MODULES: &[(&str, &str)] = &[
         ("poetry", "poetry"),
         ("hatchling", "hatchling"),
@@ -482,12 +495,10 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
                 .unwrap_or(dependency.name.as_str()),
         ) == crate::provides::overlay_package_identity(module)
     });
-    // Only what the tree can actually provide: naming a module the site does
-    // not carry turns a buildable recipe into an unsatisfiable one.
-    let available = candidates.iter().any(|candidate| {
-        crate::provides::overlay_package_identity(&candidate.name)
-            == crate::provides::overlay_package_identity(module)
-    });
+    // Only what this generation can actually provide: a backend shipped
+    // only as a bundle extension still counts, and a first-class recipe
+    // on another generation does not.
+    let available = crate::provides::existing_language_provider_in(module, providers).is_some();
     if already || !available {
         return;
     }
@@ -502,6 +513,7 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
@@ -608,6 +620,7 @@ fn add_gcccore_binutils(plan: &mut PackagePlan) {
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
@@ -636,7 +649,22 @@ fn pin_binutils_to_gcccore(
     }
 }
 
-fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+/// Candidates the plan's generation admits: its toolchain hierarchy only.
+fn candidates_available_for_plan(
+    plan: &PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) -> Vec<crate::domain::Candidate> {
+    match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
+        Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn inject_overlay_build_tools(
+    plan: &mut PackagePlan,
+    providers: &std::collections::HashMap<String, &crate::domain::Candidate>,
+) {
     let meson = plan.build.build_systems.iter().any(|hint| {
         let hint = hint.to_ascii_lowercase();
         hint.contains("meson")
@@ -661,11 +689,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
                     .unwrap_or(dependency.name.as_str()),
             ) == crate::provides::overlay_package_identity(name)
         });
-        let available = crate::provides::existing_language_provider(name, candidates).is_some()
-            || candidates.iter().any(|candidate| {
-                crate::provides::overlay_package_identity(&candidate.name)
-                    == crate::provides::overlay_package_identity(name)
-            });
+        let available = crate::provides::existing_language_provider_in(name, providers).is_some();
         if already || !available {
             continue;
         }
@@ -680,6 +704,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
             virtual_capability: None,
             solver_excluded: false,
             provenance: Vec::new(),
+            versionsuffix: None,
         });
     }
 }
@@ -811,8 +836,7 @@ pub fn plan_new_package_with(
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
-    let (mut plan, sbom) = prepare_new_package_plan(request)?;
-    plan.package_index = request.package_index.clone();
+    let (plan, sbom) = prepare_new_package_plan(request)?;
     let roots = request
         .easyconfig_roots
         .iter()
@@ -1148,7 +1172,7 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
         .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
     let actual = sha256_hex(&bytes);
     let expected = patch.sha256.as_deref().unwrap_or_default();
-    if actual != expected {
+    if !actual.eq_ignore_ascii_case(expected) {
         return Err(PackageWorkflowError::PatchChecksumMismatch {
             filename: patch.filename.clone(),
             expected: expected.to_string(),
@@ -1179,6 +1203,14 @@ pub fn prepare_package_bump(
     apply_dependency_overrides(&mut plan, &request.overrides);
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    // Layers write [package] version onto the plan. A CLI --version is the
+    // later word and must win here too, or the plan and the emitted recipe
+    // disagree.
+    if let Some(version) = request.version.as_deref() {
+        if version != plan.package.version {
+            plan.package.version = version.to_string();
+        }
+    }
     // Layers write source_checksums onto every source. A CLI digest is the
     // later word and must win on the first source, which is what emit rewrites.
     if let Some(checksum) = request.source_checksum.as_deref() {
@@ -1191,6 +1223,7 @@ pub fn prepare_package_bump(
             });
         }
     }
+    merge_foreign_inspect_deps(&mut plan, request)?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
@@ -1354,15 +1387,16 @@ pub fn complete_package_bump_with_options(
     raise_missing_easyblock(&mut plan);
     let source_recipe = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
-    let version_changed = request
-        .version
+    let emit_version = bump_emit_version(request, &plan, &source_recipe.version);
+    let version_changed = emit_version
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
+    let profile_name = default_profile_name(&plan).to_string();
     if version_changed {
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
-            "default",
+            &profile_name,
             &Default::default(),
             candidates,
             stack_policy,
@@ -1371,11 +1405,7 @@ pub fn complete_package_bump_with_options(
         .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
         for (index, hole) in holes.into_iter().enumerate() {
             for dependency in &mut plan.dependencies {
-                let identity = dependency
-                    .eb_name
-                    .as_deref()
-                    .unwrap_or(dependency.name.as_str());
-                if identity.eq_ignore_ascii_case(&hole.name) {
+                if hole.matches_intent(dependency) {
                     dependency.solver_excluded = true;
                 }
             }
@@ -1397,7 +1427,7 @@ pub fn complete_package_bump_with_options(
     }
     let lock = solve_package_profile_with_hierarchy(
         &plan,
-        "default",
+        &profile_name,
         &Default::default(),
         candidates,
         stack_policy,
@@ -1410,10 +1440,14 @@ pub fn complete_package_bump_with_options(
     // with it changes nothing. A dependency may name the module rather than
     // the version: `('OpenMPI', '5.0.3-GCC-13.3.0')` says exactly what the
     // solve picked, and rewriting it into a four-element tuple is churn.
-    let stated_versions: HashMap<&str, &str> = source_recipe
+    let stated_run: HashMap<&str, &str> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
+        .collect();
+    let stated_build: HashMap<&str, &str> = source_recipe
+        .builddependencies
+        .iter()
         .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
         .collect();
     let names_the_selected_module = |dependency: &crate::package::LockedDependency| {
@@ -1426,9 +1460,14 @@ pub fn complete_package_bump_with_options(
                 dependency.version, dependency.toolchain.name, dependency.toolchain.version
             )
         };
-        stated_versions
-            .get(dependency.name.as_str())
-            .is_some_and(|stated| *stated == module_version)
+        // One lock row can stand for both lists. Skip the rewrite only when
+        // every stated occurrence already names this module; otherwise a
+        // matching build pin would leave a disagreeing runtime line in place.
+        let run_matches = named_lookup(&stated_run, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
+        let build_matches = named_lookup(&stated_build, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
+        run_matches && build_matches
     };
     let dependency_versions = lock
         .dependencies
@@ -1443,10 +1482,19 @@ pub fn complete_package_bump_with_options(
     // to be when the selection is the toolchain already named: a bump that
     // changes nothing should leave the line alone rather than refuse the
     // recipe.
-    let stated: HashMap<&str, &Toolchain> = source_recipe
+    let stated_run_tc: HashMap<&str, &Toolchain> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .filter_map(|dependency| {
+            dependency
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (dependency.name.as_str(), toolchain))
+        })
+        .collect();
+    let stated_build_tc: HashMap<&str, &Toolchain> = source_recipe
+        .builddependencies
+        .iter()
         .filter_map(|dependency| {
             dependency
                 .toolchain
@@ -1459,7 +1507,12 @@ pub fn complete_package_bump_with_options(
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
-            stated.get(dependency.name.as_str()).is_none_or(|already| {
+            let stated = if dependency.build {
+                named_lookup(&stated_build_tc, &dependency.name)
+            } else {
+                named_lookup(&stated_run_tc, &dependency.name)
+            };
+            stated.is_none_or(|already| {
                 !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
             })
         })
@@ -1498,7 +1551,7 @@ pub fn complete_package_bump_with_options(
         &request.source,
         &EmitParams {
             toolchain: request.toolchain.clone(),
-            version: request.version.clone(),
+            version: emit_version.clone(),
             dep_versions: dependency_versions,
             dep_toolchains: dependency_toolchains,
             dep_versionsuffixes: dependency_versionsuffixes,
@@ -1616,6 +1669,8 @@ pub fn complete_package_bump_with_options(
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
+    result.text = apply_derived_cmake_locals(&result.text, &plan)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let extra: Vec<String> = request
         .package_layers
         .iter()
@@ -1654,40 +1709,50 @@ pub fn complete_package_bump_with_options(
     // recorded decision. Without a sibling, version-pinned patch names are
     // flagged rather than silently carried.
     let mut patch_calls: Vec<crate::patch_evolution::PatchCall> = Vec::new();
-    if let Some(new_version) = request.version.as_deref() {
-        let source_recipe = resolve_easyconfig_file(&request.source)
-            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    if let Some(new_version) = emit_version.as_deref() {
         if new_version != source_recipe.version {
             let sibling = crate::patch_evolution::sibling_paths(
                 &source_recipe.name,
                 new_version,
                 candidates,
                 &request.toolchain,
+                source_recipe.versionsuffix.as_deref(),
             )
             .into_iter()
             .find_map(|path| {
                 resolve_easyconfig_file(Path::new(&path))
                     .ok()
-                    .map(|recipe| crate::patch_evolution::SiblingRecipe {
-                        easyconfig_path: path,
-                        toolchain: recipe.toolchain,
-                        patch_names: recipe.patch_names,
-                    })
+                    .map(|recipe| (path, recipe))
             });
+            let sibling_evidence =
+                sibling
+                    .as_ref()
+                    .map(|(path, recipe)| crate::patch_evolution::SiblingRecipe {
+                        easyconfig_path: path.clone(),
+                        toolchain: recipe.toolchain.clone(),
+                        patch_names: recipe.patch_names.clone(),
+                    });
             let patch_plan = crate::patch_evolution::plan_patch_evolution(
                 new_version,
                 &source_recipe.patch_names,
-                sibling.as_ref(),
+                sibling_evidence.as_ref(),
             );
             if request.strict_patches && !patch_plan.undecided().is_empty() {
                 return Err(PackageWorkflowError::UndecidedPatches(
                     patch_plan.undecided().join(", "),
                 ));
             }
-            if let Some(sibling_path) = &patch_plan.sibling {
+            if let Some((sibling_path, sibling_recipe)) = &sibling {
                 result.text =
                     crate::patch_evolution::adopt_sibling_patch_block(&result.text, sibling_path)
                         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+                plan.build.patches = patches_from_final_names(
+                    &patch_plan.final_patches(),
+                    sibling_recipe,
+                    &request.source,
+                    &plan.build.patches,
+                );
+                refresh_checksum_residuals(&mut plan);
                 // Per-patch evidence supersedes the blanket review warning.
                 result
                     .warnings
@@ -1734,7 +1799,7 @@ pub fn complete_package_bump_with_options(
         sbom,
         locks: vec![lock],
         easyconfigs: vec![EmittedEasyconfig {
-            profile: "default".into(),
+            profile: profile_name,
             filename: result.filename,
             text: result.text,
         }],
@@ -2000,6 +2065,225 @@ fn package_plan_from_easyconfig(
     }
 }
 
+/// Version the bump writes into the recipe.
+///
+/// `request.version` wins when the CLI set one. Otherwise a layer version
+/// that already rewrote the plan reaches emit so plan and recipe agree.
+fn bump_emit_version(
+    request: &BumpPackageRequest,
+    plan: &PackagePlan,
+    source_version: &str,
+) -> Option<String> {
+    if let Some(version) = request.version.clone() {
+        return Some(version);
+    }
+    (plan.package.version != source_version).then(|| plan.package.version.clone())
+}
+
+fn default_profile_name(plan: &PackagePlan) -> &str {
+    plan.profiles
+        .iter()
+        .find(|profile| profile.default)
+        .map(|profile| profile.name.as_str())
+        .or_else(|| plan.outputs.first().map(|output| output.profile.as_str()))
+        .unwrap_or("default")
+}
+
+/// Rebuild `plan.build.patches` from the adopted sibling set.
+///
+/// `complete_package_bump` used to splice only `result.text`. The writer
+/// copies `plan.build.patches`, so without this the overlay still holds the
+/// source-version files.
+fn patches_from_final_names(
+    final_names: &[&str],
+    sibling: &crate::eb_parse::ResolvedEasyconfig,
+    source_path: &Path,
+    previous: &[PatchArtifact],
+) -> Vec<PatchArtifact> {
+    let sibling_dir = Path::new(&sibling.easyconfig_path).parent();
+    let source_dir = source_path.parent();
+    let source_count = if sibling.sources_count > 0 {
+        sibling.sources_count
+    } else {
+        sibling
+            .checksums
+            .len()
+            .saturating_sub(sibling.patch_names.len())
+    };
+    final_names
+        .iter()
+        .enumerate()
+        .map(|(index, filename)| {
+            let resolved_source = sibling_dir
+                .map(|directory| directory.join(filename))
+                .filter(|path| path.is_file())
+                .or_else(|| {
+                    source_dir
+                        .map(|directory| directory.join(filename))
+                        .filter(|path| path.is_file())
+                });
+            let sha256 = sibling
+                .checksums_by_filename
+                .get(*filename)
+                .cloned()
+                .or_else(|| sibling.checksums.get(source_count + index).cloned())
+                .or_else(|| {
+                    previous
+                        .iter()
+                        .find(|patch| patch.filename == *filename)
+                        .and_then(|patch| patch.sha256.clone())
+                })
+                .or_else(|| {
+                    resolved_source
+                        .as_ref()
+                        .and_then(|path| std::fs::read(path).ok().map(|bytes| sha256_hex(&bytes)))
+                });
+            PatchArtifact {
+                filename: (*filename).to_string(),
+                sha256,
+                url: None,
+                source: resolved_source
+                    .as_deref()
+                    .map(|path| path.display().to_string()),
+                condition: ConditionExpr::Always,
+                resolved_source,
+            }
+        })
+        .collect()
+}
+
+fn easyconfig_scalar(value: &crate::package::EasyconfigValue) -> Option<String> {
+    match value {
+        crate::package::EasyconfigValue::String(text) => Some(text.clone()),
+        crate::package::EasyconfigValue::Integer(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn apply_derived_cmake_locals(
+    text: &str,
+    plan: &PackagePlan,
+) -> Result<String, crate::eb_emit::EmitError> {
+    let host = plan
+        .build
+        .easyconfig_parameters
+        .get("local_host_arch")
+        .and_then(easyconfig_scalar);
+    let order = plan
+        .build
+        .easyconfig_parameters
+        .get("local_order")
+        .and_then(easyconfig_scalar);
+    let equations = plan
+        .build
+        .easyconfig_parameters
+        .get("local_equations")
+        .and_then(easyconfig_scalar);
+    let (Some(host), Some(order), Some(equations)) = (host, order, equations) else {
+        return Ok(text.to_string());
+    };
+    let build_type = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| flag.strip_prefix("-DCMAKE_BUILD_TYPE="))
+        .unwrap_or("Release");
+    let precision_letter = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| match flag.strip_prefix("-DPRECISION=") {
+            Some("double") => Some('d'),
+            Some("single") => Some('s'),
+            _ => None,
+        })
+        .unwrap_or('d');
+    let binary_rhs = format!(
+        "'{}_{}_{}%s_%s_%s' % (local_host_arch, local_order, local_equations)",
+        plan.package.name, build_type, precision_letter
+    );
+    let mut text = crate::eb_emit::upsert_raw_assignment(text, "local_binary", &binary_rhs)?;
+    let mut placeholders = Vec::new();
+    let joined = plan
+        .build
+        .config_options
+        .iter()
+        .map(|flag| {
+            if let Some(rest) = flag.strip_prefix("-DORDER=") {
+                if rest == order.as_str() {
+                    placeholders.push("local_order");
+                    return "-DORDER=%s".into();
+                }
+            }
+            if let Some(rest) = flag.strip_prefix("-DHOST_ARCH=") {
+                if rest == host.as_str() {
+                    placeholders.push("local_host_arch");
+                    return "-DHOST_ARCH=%s".into();
+                }
+            }
+            if let Some(rest) = flag.strip_prefix("-DEQUATIONS=") {
+                if rest == equations.as_str() {
+                    placeholders.push("local_equations");
+                    return "-DEQUATIONS=%s".into();
+                }
+            }
+            flag.clone()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.contains("%s") && !placeholders.is_empty() {
+        let rhs = format!("'{joined}' % ({})", placeholders.join(", "));
+        text = crate::eb_emit::upsert_raw_assignment(&text, "configopts", &rhs)?;
+    }
+    let binary_prefix = format!("{}_{}_{}", plan.package.name, build_type, precision_letter);
+    text = replace_quoted_binary_prefix(
+        &text,
+        &format!("bin/{binary_prefix}"),
+        "'bin/%s' % local_binary",
+    );
+    text = replace_quoted_command_prefix(&text, &binary_prefix);
+    Ok(text)
+}
+
+fn replace_quoted_binary_prefix(text: &str, prefix: &str, replacement: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    while let Some(start) = text.find(&needle) {
+        let Some(rel_end) = text[start + 1..].find('\'') else {
+            break;
+        };
+        let end = start + 1 + rel_end + 1;
+        text.replace_range(start..end, replacement);
+    }
+    text
+}
+
+fn replace_quoted_command_prefix(text: &str, prefix: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    if let Some(start) = text.find(&needle) {
+        if let Some(rel_end) = text[start + 1..].find('\'') {
+            let end = start + 1 + rel_end + 1;
+            let inner = &text[start + 1..end - 1];
+            if let Some(after) = inner.strip_prefix(prefix) {
+                let skip = after.find(char::is_whitespace).unwrap_or(after.len());
+                let rest = &after[skip..];
+                let replacement = format!("'%s{rest}' % local_binary");
+                text.replace_range(start..end, &replacement);
+            }
+        }
+    }
+    text
+}
+
+fn named_lookup<T: Copy>(map: &HashMap<&str, T>, name: &str) -> Option<T> {
+    map.get(name).copied().or_else(|| {
+        map.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| *value)
+    })
+}
+
 /// Whether the plan moves the recipe onto a different toolchain generation.
 ///
 /// This decides what a dependency version in the source recipe means. Within
@@ -2015,13 +2299,9 @@ fn package_plan_from_easyconfig(
 /// version constraint states what the package actually needs; when the plan
 /// carries one, that constraint is the one to keep.
 fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
-    // SYSTEM has one generation however its version is spelled: a recipe
-    // reads as `system/system` and `--toolchain system` as `system/`.
-    let system = |t: &Toolchain| t.name.eq_ignore_ascii_case("system");
-    if system(source) && system(target) {
-        return false;
-    }
-    !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
+    // SYSTEM has one generation however it is spelled: `dummy` or `system`,
+    // with an empty or a `system` version, is one module.
+    !crate::hierarchy::toolchains_match(source, target)
 }
 
 fn dependency_from_easyconfig(
@@ -2066,6 +2346,7 @@ fn dependency_from_easyconfig(
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: dependency.versionsuffix.clone(),
     }
 }
 
@@ -2127,7 +2408,12 @@ pub fn write_package_bundle_into(
         for recipe in &bundle.easyconfigs {
             validate_path_segment(&recipe.filename, "easyconfig filename")?;
             let path = recipe_directory.join(&recipe.filename);
-            claim_overlay_path(recipe_bundle_root, &path, &recipe.text, claimed_paths)?;
+            claim_overlay_path(
+                recipe_bundle_root,
+                &path,
+                recipe.text.as_bytes(),
+                claimed_paths,
+            )?;
             std::fs::write(&path, &recipe.text)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             easyconfigs.push(path);
@@ -2145,10 +2431,11 @@ pub fn write_package_bundle_into(
             validate_path_segment(&patch.filename, "patch filename")?;
             let source = validate_patch_source(patch)?;
             let path = recipe_directory.join(&patch.filename);
-            let content = std::fs::read_to_string(&source)
+            // A patch is bytes: a binary hunk is not UTF-8 and still copies.
+            let content = std::fs::read(&source)
                 .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
             claim_overlay_path(recipe_bundle_root, &path, &content, claimed_paths)?;
-            std::fs::copy(&source, &path)
+            std::fs::write(&path, &content)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             patches.push(path);
         }
@@ -2165,8 +2452,9 @@ pub fn write_package_bundle_into(
             // Two packages may ship the same module; only different bytes at
             // one path are a collision.
             let key = relative_posix(path.strip_prefix(recipe_bundle_root).unwrap_or(&path));
+            let digest = sha256_hex(content.as_bytes());
             match claimed_paths.get(&key) {
-                Some(previous) if *previous == content => {}
+                Some(previous) if *previous == digest => {}
                 Some(_) => {
                     return Err(PackageWorkflowError::OverlayCollision {
                         path: key,
@@ -2174,7 +2462,7 @@ pub fn write_package_bundle_into(
                     })
                 }
                 None => {
-                    claimed_paths.insert(key, content);
+                    claimed_paths.insert(key, digest);
                     // A module rendered into the bundle already sits at its
                     // destination, and copying a file onto itself empties it.
                     let in_place = matches!(
@@ -2331,10 +2619,11 @@ pub fn validate_path_segment(segment: &str, kind: &str) -> Result<(), PackageWor
     Ok(())
 }
 
+/// Claim a bundle path for `content`; the claim table holds its SHA-256.
 fn claim_overlay_path(
     recipe_bundle_root: &Path,
     absolute: &Path,
-    content: &str,
+    content: &[u8],
     claimed_paths: &mut BTreeMap<String, String>,
 ) -> Result<(), PackageWorkflowError> {
     let relative = absolute.strip_prefix(recipe_bundle_root).map_err(|_| {
@@ -2344,8 +2633,9 @@ fn claim_overlay_path(
         }
     })?;
     let key = relative_posix(relative);
+    let digest = sha256_hex(content);
     if let Some(previous) = claimed_paths.get(&key) {
-        if previous != content {
+        if previous != &digest {
             return Err(PackageWorkflowError::OverlayCollision {
                 path: key,
                 reason: "destination already claimed with different content".into(),
@@ -2356,7 +2646,7 @@ fn claim_overlay_path(
             reason: "destination already claimed".into(),
         });
     }
-    claimed_paths.insert(key, content.to_string());
+    claimed_paths.insert(key, digest);
     Ok(())
 }
 
@@ -2613,6 +2903,136 @@ pub enum PackageWorkflowError {
         /// Root it had to stay within.
         root: PathBuf,
     },
+}
+
+fn merge_foreign_inspect_deps(
+    plan: &mut PackagePlan,
+    request: &BumpPackageRequest,
+) -> Result<(), PackageWorkflowError> {
+    let mut sources = request.foreign_sources.clone();
+    if sources.is_empty() {
+        if let Some(found) = find_foreign_package_py(&request.easyconfig_roots, &plan.package.name)
+        {
+            sources.push(found);
+        }
+    }
+    for foreign in sources {
+        let (foreign_plan, _) = inspect_new_package(&foreign, None, &request.toolchain, &[])?;
+        for (index, dependency) in foreign_plan.dependencies.into_iter().enumerate() {
+            let Some((name, eb_name)) = easybuild_name_from_foreign(&dependency.name) else {
+                continue;
+            };
+            if plan.dependencies.iter().any(|existing| {
+                let existing_name = existing
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(existing.name.as_str());
+                existing_name.eq_ignore_ascii_case(eb_name.as_deref().unwrap_or(&name))
+                    || existing.name.eq_ignore_ascii_case(&dependency.name)
+                    || existing.name.eq_ignore_ascii_case(&name)
+            }) {
+                continue;
+            }
+            let foreign_name = dependency.name.clone();
+            let residual_name = eb_name.clone().unwrap_or_else(|| name.clone());
+            plan.dependencies.push(DependencyIntent {
+                id: format!("foreign-inspect:{index}:{residual_name}"),
+                name,
+                eb_name,
+                constraint: dependency.constraint,
+                toolchain: None,
+                versionsuffix: None,
+                roles: dependency.roles,
+                condition: dependency.condition,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: dependency.provenance,
+            });
+            plan.residuals.push(Residual {
+                id: format!("foreign-inspect-added-dep:{residual_name}"),
+                stage: ResidualStage::Resolve,
+                category: "foreign-inspect-added-dep".into(),
+                severity: ResidualSeverity::Mechanical,
+                summary: format!(
+                    "{residual_name} came from package inspect of {}",
+                    foreign.display()
+                ),
+                evidence: Some(foreign_name),
+                provenance: None,
+            });
+        }
+    }
+    crate::package_config::apply_package_dependency_policy(plan, &request.package_layers);
+    Ok(())
+}
+
+fn easybuild_name_from_foreign(name: &str) -> Option<(String, Option<String>)> {
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "mpi"
+            | "openmpi"
+            | "mpich"
+            | "gcc"
+            | "llvm"
+            | "cuda"
+            | "hip"
+            | "fftw"
+            | "fftw3"
+            | "blas"
+            | "lapack"
+            | "openblas"
+            | "mkl"
+            | "zlib"
+            | "hwloc"
+    ) {
+        return None;
+    }
+    let stripped = lower.strip_prefix("py-").unwrap_or(lower.as_str());
+    let mapped = match stripped {
+        "python" => Some("Python"),
+        "cmake" => Some("CMake"),
+        "pybind11" => Some("pybind11"),
+        "mpi4py" => Some("mpi4py"),
+        "networkx" => Some("networkx"),
+        _ => None,
+    };
+    match mapped {
+        Some(mapped) => Some((mapped.to_string(), Some(mapped.to_string()))),
+        None => Some((name.to_string(), None)),
+    }
+}
+
+/// `package.py` beside a robot copy. Named slug first, then Spack
+/// `py-{slug}` / `packages/` layout, then the underscore fallback.
+fn find_foreign_package_py(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    let slug = name.to_ascii_lowercase();
+    let rels = [
+        format!("{slug}/package.py"),
+        format!("packages/{slug}/package.py"),
+        format!("packages/py-{slug}/package.py"),
+        format!("py-{slug}/package.py"),
+        format!("spack/packages/{slug}/package.py"),
+        format!("spack/packages/py-{slug}/package.py"),
+        format!("py_{slug}/package.py"),
+        format!("spack/py_{slug}/package.py"),
+        format!("spack/{slug}/package.py"),
+    ];
+    for root in roots {
+        for rel in &rels {
+            let direct = root.join(rel);
+            if direct.is_file() {
+                return Some(direct);
+            }
+            if let Some(parent) = root.parent() {
+                let beside = parent.join(rel);
+                if beside.is_file() {
+                    return Some(beside);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

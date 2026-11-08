@@ -258,6 +258,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -276,6 +278,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -333,6 +337,8 @@ struct BundleFragments<'a> {
     versionsuffix_line: &'a str,
     toolchain_options_line: &'a str,
     easyconfig_parameter_lines: &'a str,
+    patch_line: &'a str,
+    config_line: &'a str,
     build_dependencies: &'a [String],
     runtime_dependencies: &'a [String],
     moduleclass: &'a str,
@@ -351,6 +357,8 @@ fn render_language_bundle(
         versionsuffix_line,
         toolchain_options_line,
         easyconfig_parameter_lines,
+        patch_line,
+        config_line,
         build_dependencies,
         runtime_dependencies,
         moduleclass,
@@ -382,6 +390,9 @@ fn render_language_bundle(
     };
     let exts = render_exts_list(plan, materialized, kind);
     let default_ext_opts = overlay_exts_default_options(plan, kind);
+    // Bundle sources carry checksums inside exts_list. Top-level checksums
+    // must still line up with `patches`, or EasyBuild has nothing to verify.
+    let checksum_line = render_patch_checksums(&materialized.build.patches);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -393,6 +404,9 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {easyconfig_parameter_lines}\
 {default_class}\
 {default_ext_opts}\
+{patch_line}\
+{checksum_line}\
+{config_line}\
 exts_list = {exts}\n\n\
 {build_dependencies}\
 {runtime_dependencies}\
@@ -657,26 +671,40 @@ fn render_sources(
     patches: &[crate::package::PatchArtifact],
     source_root: Option<&str>,
 ) -> SourceBlock {
+    let mut git_entries: Vec<(&crate::package::SourceArtifact, String)> = Vec::new();
     let resolved = source_artifacts
         .iter()
         .filter_map(|source| {
+            // A checkout (commit set, or git with no download URL) is a
+            // git_config dict. A GitHub tag without a commit can stay an archive.
+            if source.git.is_some() && (source.commit.is_some() || source.url.is_none()) {
+                if let Some(entry) = render_git_config(source, package_name, package_version) {
+                    git_entries.push((source, entry));
+                    return None;
+                }
+            }
             let url = source
                 .url
                 .clone()
                 .or_else(|| match (&source.git, &source.tag) {
-                    (Some(git), Some(tag)) if git.contains("github.com") => Some(format!(
-                        "{}/archive/refs/tags/{tag}.tar.gz",
-                        git.trim_end_matches(".git")
-                    )),
-                    (Some(git), _) => Some(git.clone()),
+                    (Some(git), Some(tag))
+                        if git.contains("github.com") && source.commit.is_none() =>
+                    {
+                        Some(format!(
+                            "{}/archive/refs/tags/{tag}.tar.gz",
+                            git.trim_end_matches(".git")
+                        ))
+                    }
                     _ => None,
                 })?;
             Some((source, url))
         })
         .collect::<Vec<_>>();
 
-    let checksums = source_artifacts
+    let checksums = git_entries
         .iter()
+        .map(|(source, _)| *source)
+        .chain(resolved.iter().map(|(source, _)| *source))
         .filter_map(|source| source.sha256.as_ref())
         .chain(patches.iter().filter_map(|patch| patch.sha256.as_ref()))
         .map(|checksum| format!("'{}'", escape_single(checksum)))
@@ -706,15 +734,49 @@ fn render_sources(
         }
     }
 
-    let sources = resolved
-        .iter()
-        .map(|(source, url)| render_source(source, url, source_root))
-        .collect::<Vec<_>>();
+    let mut sources: Vec<String> = git_entries.into_iter().map(|(_, entry)| entry).collect();
+    sources.extend(
+        resolved
+            .iter()
+            .map(|(source, url)| render_source(source, url, source_root)),
+    );
     SourceBlock {
         prelude: String::new(),
         sources: format!("sources = {}", render_multiline_list(&sources)),
         checksums: checksum_lines,
     }
+}
+
+fn render_git_config(
+    source: &crate::package::SourceArtifact,
+    package_name: &str,
+    package_version: &str,
+) -> Option<String> {
+    let git = source.git.as_deref()?;
+    let trimmed = git.trim_end_matches('/').trim_end_matches(".git");
+    let (url, repo_name) = trimmed.rsplit_once('/')?;
+    if repo_name.is_empty() {
+        return None;
+    }
+    let filename = source
+        .filename
+        .clone()
+        .unwrap_or_else(|| format!("{package_name}-{package_version}.tar.gz"));
+    let mut git_fields = vec![
+        format!("        'url': '{}',", escape_single(url)),
+        format!("        'repo_name': '{}',", escape_single(repo_name)),
+    ];
+    if let Some(tag) = source.tag.as_deref() {
+        git_fields.push(format!("        'tag': '{}',", escape_single(tag)));
+    }
+    if let Some(commit) = source.commit.as_deref() {
+        git_fields.push(format!("        'commit': '{}',", escape_single(commit)));
+    }
+    Some(format!(
+        "{{\n    'filename': '{}',\n    'git_config': {{\n{}\n    }},\n}}",
+        escape_single(&filename),
+        git_fields.join("\n")
+    ))
 }
 
 /// Conventional EasyBuild form for a package downloaded from PyPI.
@@ -767,16 +829,29 @@ fn try_render_github_primary(
     } else {
         format!("{tag}.tar.gz")
     };
-    let filename_expr = if uses_source_lower && tag.ends_with(package_version) {
-        "SOURCELOWER_TAR_GZ".to_string()
-    } else if let Some(filename) = source.filename.as_deref() {
-        format!("'{}'", escape_single(filename))
-    } else {
-        format!("'{repo}-{package_version}.tar.gz'")
-    };
+    let filename_expr =
+        if uses_source_lower && (tag == package_version || tag == format!("v{package_version}")) {
+            "SOURCELOWER_TAR_GZ".to_string()
+        } else if let Some(filename) = source.filename.as_deref() {
+            format!("'{}'", escape_single(filename))
+        } else {
+            format!("'{repo}-{package_version}.tar.gz'")
+        };
 
+    // GITHUB_SOURCE expands to github.com/%(github_account)s/%(name)s/archive.
+    // GitHub folds case on that path. A repo whose last component differs
+    // from the package name 404s unless the URL names that component.
+    let source_urls = if repo.eq_ignore_ascii_case(package_name) {
+        "GITHUB_SOURCE".to_string()
+    } else {
+        format!(
+            "'https://github.com/{}/{}/archive'",
+            escape_single(&account),
+            escape_single(&repo)
+        )
+    };
     let prelude = format!(
-        "github_account = '{}'\nsource_urls = [GITHUB_SOURCE]\n",
+        "github_account = '{}'\nsource_urls = [{source_urls}]\n",
         escape_single(&account)
     );
     // Same multi-line dict shape as staged multi-source entries so format_style
@@ -901,6 +976,24 @@ fn is_tar_archive(filename: &str) -> bool {
     ]
     .iter()
     .any(|suffix| filename.ends_with(suffix))
+}
+
+fn checksum_slot(digest: Option<&str>) -> String {
+    match digest {
+        Some(checksum) => format!("'{}'", escape_single(checksum)),
+        None => "None".into(),
+    }
+}
+
+fn render_patch_checksums(patches: &[crate::package::PatchArtifact]) -> String {
+    if patches.is_empty() {
+        return String::new();
+    }
+    let checksums = patches
+        .iter()
+        .map(|patch| checksum_slot(patch.sha256.as_deref()))
+        .collect::<Vec<_>>();
+    format!("checksums = {}\n", render_multiline_list(&checksums))
 }
 
 fn render_dependency(

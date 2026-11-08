@@ -41,7 +41,7 @@ eb-stack --version
 #+end_src
 
 #+begin_src text
-eb-stack 0.6.2
+eb-stack 0.7.1
 #+end_src
 
 The how-tos name the flags for each command:

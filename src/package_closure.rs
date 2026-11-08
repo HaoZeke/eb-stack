@@ -12,7 +12,9 @@
 
 use crate::domain::{Candidate, Toolchain};
 use crate::eb_parse::{resolve_easyconfig_file, resolve_easyconfig_str};
-use crate::hierarchy::{hierarchy_for_with_tree, ToolchainHierarchy};
+use crate::hierarchy::{
+    filter_candidates_in_hierarchy, hierarchy_for_with_tree, ToolchainHierarchy,
+};
 use crate::package::{OutputRequest, PackageOrigin, PackagePlan, ProfileEnvironment, StackPolicy};
 use crate::package_catalog::{
     CatalogProviderKind, PackageCatalogError, PackageSourceCatalog, PackageSourceProvider,
@@ -33,6 +35,7 @@ use crate::package_workflow::{
     write_package_bundle_into, BumpPackageRequest, NewPackageRequest, PackageBundle,
     PackageWorkflowError, WrittenPackageBundle,
 };
+use crate::provides::existing_language_provider;
 use crate::version::matches_req;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -315,11 +318,7 @@ pub fn plan_package_closure_with_sources(
     )?;
     let target_hierarchy = hierarchy_for_with_tree(&request.toolchain, None, &tree.candidates).ok();
 
-    let (mut plan, sbom) = prepare_new_package_plan(request)?;
-    // The index answers "what version is this leftover", so it has to reach the
-    // root plan here too: the closure path builds its own requests and the CLI
-    // goes through this one, not through plan_new_package.
-    plan.package_index = request.package_index.clone();
+    let (plan, sbom) = prepare_new_package_plan(request)?;
     let mut state = ClosureState {
         robot: tree.candidates,
         generated: HashMap::new(),
@@ -654,6 +653,13 @@ impl ClosureState<'_> {
         stack_policy: &StackPolicy,
         path: &[String],
     ) -> Result<PackageBundle, PackageClosureError> {
+        // A language root already on the robot must not hole-fill leftovers
+        // as companions. complete_package_bundle short-circuits to the same
+        // already-provided residual as plan_new_package.
+        if language_root_already_provided(prepared.plan(), &self.universe()) {
+            return self.complete_prepared(prepared, stack_policy);
+        }
+
         // Fill holes for every requested profile before the final multi-profile solve.
         let profiles: Vec<String> = prepared
             .plan()
@@ -664,7 +670,14 @@ impl ClosureState<'_> {
         for profile in &profiles {
             self.fill_holes_for_profile(prepared.plan(), profile, stack_policy, path)?;
         }
+        self.complete_prepared(prepared, stack_policy)
+    }
 
+    fn complete_prepared(
+        &self,
+        prepared: PreparedCompanion,
+        stack_policy: &StackPolicy,
+    ) -> Result<PackageBundle, PackageClosureError> {
         let candidates = self.universe();
         match prepared {
             PreparedCompanion::Foreign { plan, sbom } => {
@@ -750,12 +763,10 @@ impl ClosureState<'_> {
         hole: &UnsatisfiedDirectDependency,
         path: &[String],
     ) -> Result<(), PackageClosureError> {
-        if path
-            .iter()
-            .any(|step| package_identity(step) == package_identity(&hole.name))
-        {
+        let step = hole_path_step(hole);
+        if path.iter().any(|seen| seen == &step) {
             let mut cycle = path.to_vec();
-            cycle.push(hole.name.clone());
+            cycle.push(step);
             return Err(PackageClosureError::Cycle { path: cycle });
         }
 
@@ -786,13 +797,14 @@ impl ClosureState<'_> {
             }
         }
 
-        let key = companion_key(&provider);
+        let key = companion_key(&provider, hole);
         if self.generated.contains_key(&key) {
             // Already closed; verify the generated candidate still satisfies the hole.
             let entry = self.generated.get(&key).expect("just checked");
             let ok = entry.candidates.iter().any(|candidate| {
                 package_identity(&candidate.name) == package_identity(&hole.name)
                     && matches_req(&candidate.version, &hole.version_req)
+                    && hole.matches_versionsuffix(candidate.versionsuffix.as_deref())
             });
             if ok {
                 return Ok(());
@@ -983,6 +995,7 @@ fn resolve_provider_candidates_for_hole(
         .providers()
         .iter()
         .filter(|provider| package_identity(&provider.name) == package_identity(&hole.name))
+        .filter(|provider| catalog_provider_matches_hole_suffix(provider, hole))
         .collect::<Vec<_>>();
     if !named.is_empty() {
         let compatible = named
@@ -995,7 +1008,24 @@ fn resolve_provider_candidates_for_hole(
                     .is_none_or(|version| matches_req(version, &hole.version_req))
             })
             .collect::<Vec<_>>();
-        return match compatible.as_slice() {
+        // Unversioned wildcards must not veto a unique versioned sibling.
+        let versioned = compatible
+            .iter()
+            .copied()
+            .filter(|provider| provider.version.is_some())
+            .collect::<Vec<_>>();
+        let preferred = match versioned.as_slice() {
+            [_] => versioned,
+            [] => compatible,
+            many => {
+                return Err(PackageClosureError::AmbiguousProvider {
+                    name: hole.name.clone(),
+                    version: format!(" ({})", hole.version_req),
+                    count: many.len(),
+                });
+            }
+        };
+        return match preferred.as_slice() {
             [provider] => Ok(vec![(*provider).clone()]),
             [] => Err(PackageClosureError::IncompatibleProviderVersion {
                 name: hole.name.clone(),
@@ -1165,6 +1195,7 @@ fn bump_request_from_provider(
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
 }
 
@@ -1245,13 +1276,81 @@ fn candidates_from_bundle(bundle: &PackageBundle) -> Result<Vec<Candidate>, Pack
     Ok(candidates)
 }
 
-fn companion_key(provider: &PackageSourceProvider) -> String {
+fn language_root_already_provided(plan: &PackagePlan, candidates: &[Candidate]) -> bool {
+    if !matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
+        return false;
+    }
+    let admitted = match hierarchy_for_with_tree(&plan.build.toolchain, None, candidates) {
+        Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+        // Unknown hierarchy is not "provided on this generation".
+        Err(_) => return false,
+    };
+    existing_language_provider(&plan.package.name, &admitted).is_some()
+}
+
+/// The identity a hole contributes to the closure path: its package, with
+/// the versionsuffix it asks for, so `-MPI` and `-CUDA` builds are two steps.
+fn hole_path_step(hole: &UnsatisfiedDirectDependency) -> String {
+    let identity = package_identity(&hole.name);
+    match hole
+        .versionsuffix
+        .as_deref()
+        .filter(|suffix| !suffix.is_empty())
+    {
+        Some(suffix) => format!("{identity}{suffix}"),
+        None => identity,
+    }
+}
+
+fn catalog_provider_matches_hole_suffix(
+    provider: &PackageSourceProvider,
+    hole: &UnsatisfiedDirectDependency,
+) -> bool {
+    if hole
+        .versionsuffix
+        .as_deref()
+        .is_none_or(|suffix| suffix.is_empty())
+    {
+        return true;
+    }
+    if provider.provider != CatalogProviderKind::EasyBuildBump {
+        return false;
+    }
+    let suffix = resolve_easyconfig_file(&provider.source)
+        .ok()
+        .and_then(|resolved| resolved.versionsuffix);
+    hole.matches_versionsuffix(suffix.as_deref())
+}
+
+fn companion_key(provider: &PackageSourceProvider, hole: &UnsatisfiedDirectDependency) -> String {
     format!(
-        "{}@{}@{}",
+        "{}@{}@{}@{}",
         package_identity(&provider.name),
         provider.version.as_deref().unwrap_or(""),
-        provider.toolchain.label()
+        provider.toolchain.label(),
+        companion_versionsuffix(provider, hole)
     )
+}
+
+fn companion_versionsuffix(
+    provider: &PackageSourceProvider,
+    hole: &UnsatisfiedDirectDependency,
+) -> String {
+    if let Some(suffix) = hole
+        .versionsuffix
+        .as_deref()
+        .filter(|suffix| !suffix.is_empty())
+    {
+        return suffix.to_string();
+    }
+    if provider.provider != CatalogProviderKind::EasyBuildBump {
+        return String::new();
+    }
+    resolve_easyconfig_file(&provider.source)
+        .ok()
+        .and_then(|resolved| resolved.versionsuffix)
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or_default()
 }
 
 fn package_identity(name: &str) -> String {

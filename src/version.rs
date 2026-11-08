@@ -316,6 +316,20 @@ fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
     }
 }
 
+/// Whether `req` names versions exactly (`==X`, a bare `X`, or a conjunction
+/// of those) rather than a range. A module spelling such as
+/// `5.0.3-GCC-13.3.0` may answer an exact pin; against a range it compares
+/// as a pre-release of its version, and `<5` would admit a 5.0.0 build.
+pub fn requirement_is_exact(req: &str) -> bool {
+    parse_requirement(req).is_ok_and(|requirement| {
+        !requirement.clauses.is_empty()
+            && requirement
+                .clauses
+                .iter()
+                .all(|clause| clause.op == RequirementOp::Exact)
+    })
+}
+
 /// Version requirements accept exact equality, ordered comparisons, bare exact
 /// versions, and comma-separated conjunctions of those clauses.
 ///

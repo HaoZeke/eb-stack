@@ -263,6 +263,7 @@ pub fn companion_requests(
                 stack_policy,
                 strict_patches: request.strict_patches,
                 package_layers: Vec::new(),
+                foreign_sources: Vec::new(),
             },
             plan.package.name.clone(),
         ));

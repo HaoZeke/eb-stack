@@ -71,19 +71,48 @@ pub fn parse_raku_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
 }
 
 fn dep(spec: &str, role: &str) -> ForeignDep {
-    let name = spec
-        .split([' ', '<', '>'])
-        .next()
-        .unwrap_or(spec)
-        .to_string();
+    let pin = raku_adverb(spec, "ver");
+    let name = raku_module_name(spec);
     ForeignDep {
         name,
-        pin: None,
+        pin,
         role: role.into(),
         original_spec: Some(spec.to_string()),
         condition: ConditionExpr::Always,
         provenance: Vec::new(),
     }
+}
+
+fn raku_adverb(spec: &str, key: &str) -> Option<String> {
+    let angled = format!(":{key}<");
+    let paren = format!(":{key}(");
+    let rest = spec
+        .split_once(&angled)
+        .or_else(|| spec.split_once(&paren))?
+        .1;
+    rest.split(['>', ')'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn raku_module_name(spec: &str) -> String {
+    let cut = ["ver", "auth", "api", "from"]
+        .into_iter()
+        .filter_map(|key| {
+            spec.find(&format!(":{key}<"))
+                .or_else(|| spec.find(&format!(":{key}(")))
+        })
+        .min()
+        .unwrap_or(spec.len());
+    spec[..cut]
+        .split([' ', '<', '>'])
+        .next()
+        .unwrap_or(&spec[..cut])
+        .trim()
+        .trim_end_matches(':')
+        .to_string()
 }
 
 #[cfg(test)]

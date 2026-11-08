@@ -17,7 +17,24 @@ impl Toolchain {
     pub fn label(&self) -> String {
         format!("{}-{}", self.name, self.version)
     }
+
+    /// EasyBuild `SYSTEM` / historical `dummy`, regardless of version spelling.
+    pub fn is_system(&self) -> bool {
+        self.name.eq_ignore_ascii_case("system") || self.name.eq_ignore_ascii_case("dummy")
+    }
+
+    /// Identity label: `system` for SYSTEM/dummy, otherwise [`Self::label`].
+    pub fn identity_label(&self) -> String {
+        if self.is_system() {
+            "system".into()
+        } else {
+            self.label()
+        }
+    }
 }
+
+/// Schema version written into every [`StackLock`].
+pub const STACK_LOCK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// One dependency an easyconfig declares, after template resolution.

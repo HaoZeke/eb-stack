@@ -6,7 +6,7 @@ use crate::package::{
     ProductProfile, VerificationCommand,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -177,30 +177,37 @@ pub enum DependencyAlias {
     /// same meaning.
     Direct(String),
     /// Control how a component constraint applies to a containing provider.
-    Provider {
-        /// EasyBuild package that provides the foreign dependency.
-        provider: String,
-        /// Whether the foreign version constraint carries over.
-        #[serde(default)]
-        constraint: AliasConstraint,
-    },
+    Provider(ProviderAlias),
+}
+
+/// Table form of [`DependencyAlias`]. Unknown keys are rejected so a typo
+/// such as `constraints` cannot silently keep the pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAlias {
+    /// EasyBuild package that provides the foreign dependency.
+    pub provider: String,
+    /// Whether the foreign version constraint carries over.
+    #[serde(default)]
+    pub constraint: AliasConstraint,
 }
 
 impl DependencyAlias {
     /// The EasyBuild package this alias resolves to, either spelling.
     pub fn provider(&self) -> &str {
         match self {
-            Self::Direct(provider) | Self::Provider { provider, .. } => provider,
+            Self::Direct(provider) => provider,
+            Self::Provider(alias) => &alias.provider,
         }
     }
 
     fn drops_constraint(&self) -> bool {
         matches!(
             self,
-            Self::Provider {
+            Self::Provider(ProviderAlias {
                 constraint: AliasConstraint::Drop,
                 ..
-            }
+            })
         )
     }
 }
@@ -372,6 +379,11 @@ impl PackageConfigLayer {
                             patch.filename.clone(),
                         ));
                     }
+                    if let Some(checksum) = &patch.sha256 {
+                        if !is_sha256_hex(checksum) {
+                            return Err(PackageConfigError::InvalidPatchChecksum(checksum.clone()));
+                        }
+                    }
                 }
             }
             for easyblock in build.easyblocks.iter().flatten() {
@@ -403,6 +415,22 @@ impl PackageConfigLayer {
                     return Err(PackageConfigError::EmptyDependencyRoles(
                         requirement.name.clone(),
                     ));
+                }
+            }
+            for (name, capability) in &dependencies.virtuals {
+                if name.trim().is_empty() {
+                    return Err(PackageConfigError::EmptyVirtualName);
+                }
+                if capability.trim().is_empty() {
+                    return Err(PackageConfigError::EmptyVirtualCapability(name.clone()));
+                }
+            }
+            for (name, alias) in &dependencies.aliases {
+                if name.trim().is_empty() {
+                    return Err(PackageConfigError::EmptyAliasName);
+                }
+                if alias.provider().trim().is_empty() {
+                    return Err(PackageConfigError::EmptyAliasProvider(name.clone()));
                 }
             }
         }
@@ -473,12 +501,26 @@ pub fn apply_package_layers(
                             {
                                 let resolved_source = existing.resolved_source.clone();
                                 let source = existing.source.clone();
+                                let url = existing.url.clone();
+                                let condition = existing.condition.clone();
+                                let sha256 = existing.sha256.clone();
                                 *existing = patch.clone();
                                 if existing.resolved_source.is_none() {
                                     existing.resolved_source = resolved_source;
                                 }
                                 if existing.source.is_none() {
                                     existing.source = source;
+                                }
+                                if existing.url.is_none() {
+                                    existing.url = url;
+                                }
+                                if existing.sha256.is_none() {
+                                    existing.sha256 = sha256;
+                                }
+                                if existing.condition == ConditionExpr::Always
+                                    && condition != ConditionExpr::Always
+                                {
+                                    existing.condition = condition;
                                 }
                             } else {
                                 plan.build.patches.push(patch.clone());
@@ -500,100 +542,10 @@ pub fn apply_package_layers(
                 }
             }
         }
-        if let Some(dependencies) = &layer.dependencies {
-            for dependency in &mut plan.dependencies {
-                if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
-                    dependency.eb_name = Some(alias.provider().to_string());
-                    if alias.drops_constraint() {
-                        dependency.constraint = None;
-                    }
-                }
-                if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
-                    dependency.virtual_capability = Some(capability.clone());
-                }
-                if dependencies
-                    .exclude_from_solve
-                    .iter()
-                    .any(|name| package_identity(name) == package_identity(&dependency.name))
-                {
-                    dependency.solver_excluded = true;
-                }
-            }
-            for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
-                ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
-            }
-        }
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
         apply_layer_source_checksums(plan, &layer.source_checksums)?;
-        for patch in &layer.profiles {
-            let existing_index = plan
-                .profiles
-                .iter()
-                .position(|profile| profile.name == patch.name);
-            let mut profile = match (existing_index, patch.inherits.as_deref()) {
-                (Some(index), _) => plan.profiles[index].clone(),
-                (None, Some(parent)) => {
-                    let mut inherited = plan
-                        .profiles
-                        .iter()
-                        .find(|profile| profile.name == parent)
-                        .cloned()
-                        .ok_or_else(|| PackageConfigError::MissingParent {
-                            profile: patch.name.clone(),
-                            parent: parent.to_string(),
-                        })?;
-                    inherited.name = patch.name.clone();
-                    inherited.default = false;
-                    inherited
-                }
-                (None, None) => ProductProfile {
-                    name: patch.name.clone(),
-                    default: false,
-                    versionsuffix: Vec::new(),
-                    platform: None,
-                    architecture: None,
-                    features: BTreeMap::new(),
-                    parameters: BTreeMap::new(),
-                    toolchain_options: BTreeMap::new(),
-                    config_options: Vec::new(),
-                    easyconfig_parameters: BTreeMap::new(),
-                    verification_commands: Vec::new(),
-                },
-            };
-
-            if let Some(default) = patch.default {
-                profile.default = default;
-            }
-            if let Some(versionsuffix) = &patch.versionsuffix {
-                profile.versionsuffix = versionsuffix.clone();
-            }
-            if let Some(platform) = &patch.platform {
-                profile.platform = Some(platform.clone());
-            }
-            if let Some(architecture) = &patch.architecture {
-                profile.architecture = Some(architecture.clone());
-            }
-            profile.features.extend(patch.features.clone());
-            profile.parameters.extend(patch.parameters.clone());
-            profile
-                .toolchain_options
-                .extend(patch.toolchain_options.clone());
-            if let Some(config_options) = &patch.config_options {
-                profile.config_options = config_options.clone();
-            }
-            profile
-                .easyconfig_parameters
-                .extend(patch.easyconfig_parameters.clone());
-            if let Some(verification_commands) = &patch.verification_commands {
-                profile.verification_commands = verification_commands.clone();
-            }
-
-            match existing_index {
-                Some(index) => plan.profiles[index] = profile,
-                None => plan.profiles.push(profile),
-            }
-        }
+        apply_profile_patches(plan, &layer.profiles)?;
     }
-
     let default_count = plan
         .profiles
         .iter()
@@ -633,13 +585,27 @@ fn ensure_dependency_requirement(
 ) {
     let condition = requirement_condition(&requirement.features);
     let identity = package_identity(&requirement.name);
-    let existing = plan.dependencies.iter_mut().find(|dependency| {
+    let mut found = false;
+    for dependency in &mut plan.dependencies {
         let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
-        package_identity(effective_name) == identity
-            && (condition == ConditionExpr::Always || dependency.condition == condition)
-    });
-    if let Some(dependency) = existing {
-        dependency.eb_name = Some(requirement.name.clone());
+        if package_identity(effective_name) != identity
+            || !(condition == ConditionExpr::Always || dependency.condition == condition)
+        {
+            continue;
+        }
+        // A virtual fftw row is not EasyBuild FFTW. Matching it would mark
+        // found and leave virtual_capability set, so SAT never sees FFTW.
+        if dependency.virtual_capability.is_some() {
+            continue;
+        }
+        found = true;
+        if dependency
+            .eb_name
+            .as_deref()
+            .is_none_or(|name| name.is_empty())
+        {
+            dependency.eb_name = Some(requirement.name.clone());
+        }
         if let Some(constraint) = &requirement.constraint {
             dependency.constraint = Some(constraint.clone());
         }
@@ -659,8 +625,10 @@ fn ensure_dependency_requirement(
                 }
             }
         }
-        dependency.condition = condition;
+        dependency.condition = condition.clone();
         dependency.solver_excluded = false;
+    }
+    if found {
         return;
     }
 
@@ -678,11 +646,135 @@ fn ensure_dependency_requirement(
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+        versionsuffix: None,
     });
 }
 
 fn is_sha256_hex(checksum: &str) -> bool {
     checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn apply_profile_patches(
+    plan: &mut PackagePlan,
+    patches: &[ProfilePatch],
+) -> Result<(), PackageConfigError> {
+    let mut remaining: BTreeSet<&str> = patches.iter().map(|patch| patch.name.as_str()).collect();
+    let mut leftover: Vec<&ProfilePatch> = patches.iter().collect();
+    while !leftover.is_empty() {
+        let (ready, rest): (Vec<&ProfilePatch>, Vec<&ProfilePatch>) =
+            leftover.into_iter().partition(|patch| {
+                patch
+                    .inherits
+                    .as_deref()
+                    .is_none_or(|parent| !remaining.contains(parent) || parent == patch.name)
+            });
+        let batch = if ready.is_empty() {
+            let Some((first, rest)) = rest.split_first() else {
+                break;
+            };
+            leftover = rest.to_vec();
+            vec![*first]
+        } else {
+            leftover = rest;
+            ready
+        };
+        for patch in batch {
+            apply_one_profile_patch(plan, patch)?;
+            remaining.remove(patch.name.as_str());
+        }
+    }
+    Ok(())
+}
+
+fn apply_one_profile_patch(
+    plan: &mut PackagePlan,
+    patch: &ProfilePatch,
+) -> Result<(), PackageConfigError> {
+    let existing_index = plan
+        .profiles
+        .iter()
+        .position(|profile| profile.name == patch.name);
+    let mut profile = match patch.inherits.as_deref() {
+        Some(parent) if parent == patch.name => match existing_index {
+            Some(index) => plan.profiles[index].clone(),
+            None => ProductProfile {
+                name: patch.name.clone(),
+                default: false,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            },
+        },
+        Some(parent) => {
+            let mut inherited = plan
+                .profiles
+                .iter()
+                .find(|profile| profile.name == parent)
+                .cloned()
+                .ok_or_else(|| PackageConfigError::MissingParent {
+                    profile: patch.name.clone(),
+                    parent: parent.to_string(),
+                })?;
+            inherited.name = patch.name.clone();
+            inherited.default = false;
+            inherited
+        }
+        None => match existing_index {
+            Some(index) => plan.profiles[index].clone(),
+            None => ProductProfile {
+                name: patch.name.clone(),
+                default: false,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            },
+        },
+    };
+
+    if let Some(default) = patch.default {
+        profile.default = default;
+    }
+    if let Some(versionsuffix) = &patch.versionsuffix {
+        profile.versionsuffix = versionsuffix.clone();
+    }
+    if let Some(platform) = &patch.platform {
+        profile.platform = Some(platform.clone());
+    }
+    if let Some(architecture) = &patch.architecture {
+        profile.architecture = Some(architecture.clone());
+    }
+    profile.features.extend(patch.features.clone());
+    profile.parameters.extend(patch.parameters.clone());
+    profile
+        .toolchain_options
+        .extend(patch.toolchain_options.clone());
+    if let Some(config_options) = &patch.config_options {
+        profile.config_options = config_options.clone();
+    }
+    profile
+        .easyconfig_parameters
+        .extend(patch.easyconfig_parameters.clone());
+    if let Some(verification_commands) = &patch.verification_commands {
+        profile.verification_commands = verification_commands.clone();
+    }
+
+    match existing_index {
+        Some(index) => plan.profiles[index] = profile,
+        None => plan.profiles.push(profile),
+    }
+    Ok(())
 }
 
 fn apply_layer_source_checksums(
@@ -720,6 +812,59 @@ fn requirement_condition(features: &BTreeMap<String, bool>) -> ConditionExpr {
                 .collect(),
         )
     }
+}
+
+/// Apply alias, virtual, exclude, and requirement policy from `layers`.
+///
+/// [`apply_package_layers`] runs this per layer. A bump merge that adds
+/// foreign inspect intents calls it again so those rows see the same policy.
+pub(crate) fn apply_package_dependency_policy(
+    plan: &mut PackagePlan,
+    layers: &[PackageConfigLayer],
+) {
+    for (layer_index, layer) in layers.iter().enumerate() {
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
+    }
+}
+
+fn apply_one_layer_dependency_policy(
+    plan: &mut PackagePlan,
+    layer: &PackageConfigLayer,
+    layer_index: usize,
+) {
+    let Some(dependencies) = &layer.dependencies else {
+        return;
+    };
+    for dependency in &mut plan.dependencies {
+        if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
+            dependency.eb_name = Some(alias.provider().to_string());
+            if alias.drops_constraint() {
+                dependency.constraint = None;
+            }
+        }
+        if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
+            dependency.virtual_capability = Some(capability.clone());
+        }
+        if dependencies
+            .exclude_from_solve
+            .iter()
+            .any(|name| exclude_matches_dependency(name, dependency))
+        {
+            dependency.solver_excluded = true;
+        }
+    }
+    for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
+        ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
+    }
+}
+
+fn exclude_matches_dependency(excluded: &str, dependency: &DependencyIntent) -> bool {
+    let excluded = package_identity(excluded);
+    package_identity(&dependency.name) == excluded
+        || dependency
+            .eb_name
+            .as_deref()
+            .is_some_and(|name| package_identity(name) == excluded)
 }
 
 fn policy_value<'a>(policy: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
@@ -789,6 +934,18 @@ pub enum PackageConfigError {
     /// An added requirement lists no roles, so it would apply nowhere.
     #[error("dependency requirement {0} must have at least one role")]
     EmptyDependencyRoles(String),
+    /// A virtual mapping blanks the capability, which would drop the dep.
+    #[error("virtual capability for {0} cannot be empty")]
+    EmptyVirtualCapability(String),
+    /// A virtual mapping has no foreign name to rewrite.
+    #[error("virtual name cannot be empty")]
+    EmptyVirtualName,
+    /// An alias blanks the provider, which would write an empty eb_name.
+    #[error("alias provider for {0} cannot be empty")]
+    EmptyAliasProvider(String),
+    /// An alias has no foreign name to rewrite.
+    #[error("alias name cannot be empty")]
+    EmptyAliasName,
     /// A patch names a path rather than a filename; EasyBuild takes the
     /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
@@ -800,6 +957,9 @@ pub enum PackageConfigError {
     /// A `source_checksums` entry is not a SHA-256 hex digest.
     #[error("source checksum {0:?} is not a SHA-256 hex digest")]
     InvalidSourceChecksum(String),
+    /// A `[[build.patches]]` sha256 is not a SHA-256 hex digest.
+    #[error("patch checksum must be exactly 64 hexadecimal characters, got {0:?}")]
+    InvalidPatchChecksum(String),
     /// `source_checksums` must name one digest per plan source.
     #[error("source_checksums has {actual} digest(s), plan has {expected} source(s)")]
     SourceChecksumCount {

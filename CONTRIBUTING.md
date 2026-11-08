@@ -77,7 +77,7 @@ layer. The public files contain reusable package intent and target topology.
 
 ## Releasing
 
-Version source of truth: `version` in root `Cargo.toml` (currently **0.6.2**).
+Version source of truth: `version` in root `Cargo.toml` (currently **0.7.1**).
 Keep these in lockstep on every release:
 
 1. `Cargo.toml` / `pixi.toml` `version`
@@ -86,7 +86,9 @@ Keep these in lockstep on every release:
 4. `docs/source/conf.py` `release`
 5. `CHANGELOG.md`: move Unreleased notes into `## X.Y.Z - YYYY-MM-DD`
 6. `CITATION.cff`: add `date-released` when the version is published
-7. The version a recorded command prints: `README.md`, this file, and
+7. The version a recorded command prints: `README.md`, this file,
+   `docs/orgmode/index.org` (the install section), `docs/orgmode/contributing.org`,
+   `docs/orgmode/changelog.org`, and
    `docs/orgmode/explanation/sbom-blast-radius.org`, whose `eb-stack --version`
    block `tests/sbom_page_drift.rs` compares with a fresh run; then
    `python scripts/gen-llms-txt.py` for `llms-full.txt`
@@ -97,10 +99,12 @@ stays absent until the test is updated for a published citation.
 Then:
 
 ```bash
-git tag -a v0.6.2 -m "eb-stack 0.6.2"
-git push origin v0.6.2
+git tag -a v0.7.1 -m "eb-stack 0.7.1"
+git push origin v0.7.1
 # .github/workflows/release.yml (cargo-dist) builds the installers
-# and publishes the GitHub Release. It does not publish to crates.io.
+# and publishes the GitHub Release. It does not publish to crates.io:
+cargo publish --locked
+# runs on a host with the crates.io token, from the tagged checkout.
 ```
 
 Verify the binary surface:
@@ -108,5 +112,5 @@ Verify the binary surface:
 ```bash
 cargo build --release
 ./target/release/eb-stack --version
-# prints eb-stack 0.6.2
+# prints eb-stack 0.7.1
 ```

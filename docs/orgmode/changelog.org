@@ -1,8 +1,8 @@
 #+TITLE: Changelog
 #+OPTIONS: toc:nil num:nil
 
-Cargo, CITATION, and Sphinx report *0.4.0*, and the notes since tag
-v0.3.0 are the 0.4.0 section of
+Cargo, CITATION, and Sphinx report *0.7.1*. The notes for every release
+since 0.3.0, 0.4.0 through 0.7.1, are the sections of
 [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]].
 
 The version-one design provides:
