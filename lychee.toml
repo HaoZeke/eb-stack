@@ -18,7 +18,7 @@ exclude = [
   # remainder is not a page.
   '^https://github\.com/quarto-dev/quarto-cli/releases/download/v%\(version\)s/',
   '^https://api\.osv\.dev/v1/vulns/',
-  '^https://api\.github\.com/repos/',
+  '^https://api\.github\.com/',
 ]
 
 exclude_path = [

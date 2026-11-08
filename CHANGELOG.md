@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## 0.5.3 - 2026-11-08
+
+### Changed
+
+- The same code as 0.5.2. `dist host` refused the v0.5.2 release because
+  dependabot had bumped the action versions inside the generated
+  `release.yml`; `dist-workspace.toml` now carries `allow-dirty = ["ci"]`.
+  The link check excludes every `api.github.com` URL, not only `/repos/`.
+
 ## 0.5.2 - 2026-11-08
 
 ### Changed
