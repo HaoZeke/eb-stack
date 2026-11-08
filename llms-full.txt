@@ -41,12 +41,13 @@ rustup default stable
 rustc --version
 ```
 
-  crates.io and the GitHub release are both 0.3.0. That binary solves a
-  stack with `--policy`, not `--stack-policy`, and it serves `mcp`. It
-  does not provide `stack gap`, `stack oom`, `stack from-commit`,
-  `rebuild-set`, `pr-overlap`, or `component-reach`. `eb-stack --version`
-  prints `0.3.0` for that release. A build of this tree prints `0.4.0`.
-  Build from main for the commands in this manual:
+  The GitHub release is 0.7.0, with installers and archives for Linux
+  (x86-64, aarch64), macOS and Windows, and it carries every command in
+  this manual. crates.io still has 0.3.0: that binary solves a stack with
+  `--policy`, not `--stack-policy`, and does not provide `stack gap`,
+  `stack oom`, `stack from-commit`, `rebuild-set`, `pr-overlap`, or
+  `component-reach`. `eb-stack --version` prints `0.3.0` for it. A build
+  of this tree prints `0.7.0`. Build from main for the commands in this manual:
 
 ```bash
 git clone https://github.com/HaoZeke/eb-stack.git
@@ -56,9 +57,9 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
   `~/.local/bin` is not on `PATH` until you add it. `eb-stack --version`
-  then prints `eb-stack 0.4.0`. `cargo binstall` is a separate program;
+  then prints `eb-stack 0.7.0`. `cargo binstall` is a separate program;
   a stock `cargo` reports `no such command: binstall`. The shell
-  installer from the GitHub release installs the 0.3.0 binary. The
+  installer from the GitHub release installs the 0.7.0 binary. The
   contributor test suite is `cargo test --locked`, on the
   [contributing](https://eb-stack.rgoswami.me/contributing.html.md) page. It is not required before
   the first solve.
@@ -13074,7 +13075,7 @@ layer. Public files contain reusable package intent and target topology.
 
 # Releasing
 
-Version source of truth is `version` in root `Cargo.toml` (currently **0.4.0**).
+Version source of truth is `version` in root `Cargo.toml` (currently **0.7.0**).
 Keep these aligned:
 
 1. `Cargo.toml` / `pixi.toml` `version`
@@ -13093,8 +13094,8 @@ to crates.io.
 
 # Changelog
 
-Cargo, CITATION, and Sphinx report **0.4.0**, and the notes since tag
-v0.3.0 are the 0.4.0 section of
+Cargo, CITATION, and Sphinx report **0.7.0**. The notes for every release
+since 0.3.0, 0.4.0 through 0.7.0, are the sections of
 [CHANGELOG.md](https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md).
 
 The version-one design provides:
