@@ -227,11 +227,14 @@ impl Requirement {
             .all(|clause| clause_matches(version, clause))
     }
 
-    /// The exact version this requirement names, when it names one.
+    /// The exact version this requirement names, when it names one. A
+    /// series pin like `==1.2.*` names none.
     pub fn exact(&self) -> Option<&str> {
         self.clauses
             .iter()
-            .find(|clause| clause.op == RequirementOp::Exact)
+            .find(|clause| {
+                clause.op == RequirementOp::Exact && series_star_prefix(&clause.version).is_none()
+            })
             .map(|clause| clause.version.as_str())
     }
 
@@ -245,16 +248,58 @@ impl Requirement {
             self.clauses
                 .iter()
                 .find(|clause| clause.op.is_lower_bound())
-                .map(|clause| clause.version.as_str())
+                .map(clause_bound_version)
         })
     }
+}
+
+/// Trailing `.*` on a pin names a release series, not the prefix itself.
+///
+/// `parse_version_parts` drops `*` as a separator, so `1.2.*` would otherwise
+/// tokenize as `[1, 2]` and `==1.2.*` would mean Exact `1.2`.
+fn series_star_prefix(version: &str) -> Option<&str> {
+    let mut prefix = version;
+    let mut stripped = false;
+    while let Some(rest) = prefix.strip_suffix(".*") {
+        prefix = rest;
+        stripped = true;
+    }
+    if stripped && prefix.chars().any(|character| character.is_ascii_digit()) {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+fn clause_bound_version(clause: &RequirementClause) -> &str {
+    series_star_prefix(&clause.version).unwrap_or(clause.version.as_str())
+}
+
+/// `1.2.*` is the series at or above the prefix and below the next series
+/// ceiling, not equality with the prefix `1.2`.
+fn matches_release_series(version: &str, prefix: &str) -> bool {
+    if cmp_version(version, prefix) == Ordering::Less {
+        return false;
+    }
+    let components = numeric_components(prefix);
+    if components.is_empty() {
+        return false;
+    }
+    let ceiling = series_ceiling(&components, components.len() - 1);
+    below_series_ceiling(version, &ceiling)
 }
 
 fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
     let right = clause.version.as_str();
     match clause.op {
-        RequirementOp::Exact => cmp_version(version, right) == Ordering::Equal,
-        RequirementOp::NotEqual => cmp_version(version, right) != Ordering::Equal,
+        RequirementOp::Exact => match series_star_prefix(right) {
+            Some(prefix) => matches_release_series(version, prefix),
+            None => cmp_version(version, right) == Ordering::Equal,
+        },
+        RequirementOp::NotEqual => match series_star_prefix(right) {
+            Some(prefix) => !matches_release_series(version, prefix),
+            None => cmp_version(version, right) != Ordering::Equal,
+        },
         RequirementOp::AtLeast => matches!(
             cmp_version(version, right),
             Ordering::Equal | Ordering::Greater
@@ -308,6 +353,30 @@ fn numeric_components(version: &str) -> Vec<u64> {
 
 /// Upper bound of a release series, as `[components…]` with `index` bumped and
 /// everything after it dropped.
+/// Whether `version` is in the series strictly below `ceiling`.
+///
+/// `cmp_version` treats a pre-release of the ceiling as Less (`1.3.0rc1` <
+/// `1.3`). That is the right order, but a series bound excludes the next
+/// series entirely, including its pre-releases.
+fn below_series_ceiling(version: &str, ceiling: &str) -> bool {
+    if cmp_version(version, ceiling) != Ordering::Less {
+        return false;
+    }
+    let version_nums = numeric_components(version);
+    let ceiling_nums = numeric_components(ceiling);
+    let n = version_nums.len().max(ceiling_nums.len());
+    for i in 0..n {
+        let left = version_nums.get(i).copied().unwrap_or(0);
+        let right = ceiling_nums.get(i).copied().unwrap_or(0);
+        match left.cmp(&right) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+    }
+    false
+}
+
 fn series_ceiling(components: &[u64], index: usize) -> String {
     let mut bound: Vec<u64> = components[..=index].to_vec();
     bound[index] += 1;

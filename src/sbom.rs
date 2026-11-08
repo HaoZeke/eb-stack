@@ -457,27 +457,33 @@ fn build_formula(
             .and_then(|m| mapped(m, package).cloned())
             .unwrap_or_else(|| package_ref.clone());
 
-        let mut inputs: Vec<Input> = Vec::new();
+        let mut input_refs: Vec<String> = Vec::new();
         let mut edges: Vec<String> = Vec::new();
         for map in [runtime_dep_map, build_dep_map].into_iter().flatten() {
             for dep_name in mapped(map, package).into_iter().flatten() {
                 if let Some(dep_ref) = component_ref(package_refs, dep_name) {
-                    // A task consumes the component its dependency produced,
-                    // which is what ties the how back to the what.
-                    inputs.push(Input {
-                        required: RequiredInputField::Resource(ResourceReference::Ref(
-                            dep_ref.clone(),
-                        )),
-                        source: None,
-                        target: None,
-                        properties: None,
-                    });
+                    input_refs.push(dep_ref.clone());
                     edges.push(task_ref(&dep_ref));
                 }
             }
         }
+        // A dependency named twice (a runtime and a build role, or a repeated
+        // line) is one input; the schema wants the inputs unique.
+        input_refs.sort();
+        input_refs.dedup();
         edges.sort();
         edges.dedup();
+        // A task consumes the component its dependency produced, which is
+        // what ties the how back to the what.
+        let inputs: Vec<Input> = input_refs
+            .into_iter()
+            .map(|dep_ref| Input {
+                required: RequiredInputField::Resource(ResourceReference::Ref(dep_ref)),
+                source: None,
+                target: None,
+                properties: None,
+            })
+            .collect();
 
         tasks.push(Task {
             bom_ref: BomReference::new(task_ref(package_ref)),

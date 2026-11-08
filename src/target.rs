@@ -319,7 +319,7 @@ pub fn resolve_target_layers(
         .into_iter()
         .map(|name| {
             let target = targets.remove(&name).expect("ordered target exists");
-            Ok(BuildTarget {
+            let built = BuildTarget {
                 name: name.clone(),
                 transport: target
                     .transport
@@ -333,9 +333,76 @@ pub fn resolve_target_layers(
                 easybuild: target
                     .easybuild
                     .ok_or(TargetError::MissingLayer(name, "easybuild"))?,
-            })
+            };
+            validate_resolved_target(&built)?;
+            Ok(built)
         })
         .collect()
+}
+
+/// A layer may name a field and leave it blank; the resolved target may not.
+fn validate_resolved_target(target: &BuildTarget) -> Result<(), TargetError> {
+    if let TargetTransport::Ssh {
+        host,
+        command,
+        sync_command,
+        ..
+    } = &target.transport
+    {
+        for (value, what) in [
+            (host, "ssh host"),
+            (command, "ssh command"),
+            (sync_command, "sync_command"),
+        ] {
+            if value.trim().is_empty() {
+                return Err(TargetError::EmptyField(target.name.clone(), what));
+            }
+        }
+    }
+    for (value, what) in [
+        (&target.easybuild.command, "easybuild command"),
+        (&target.easybuild.work_root, "work_root"),
+        (&target.easybuild.tmp_root, "tmp_root"),
+    ] {
+        if value.trim().is_empty() {
+            return Err(TargetError::EmptyField(target.name.clone(), what));
+        }
+    }
+    match &target.runtime {
+        TargetRuntime::Podman { image, command, .. }
+        | TargetRuntime::Docker { image, command, .. } => {
+            if image.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "runtime image",
+                ));
+            }
+            if command.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "runtime command",
+                ));
+            }
+        }
+        TargetRuntime::Eessi {
+            storage, command, ..
+        } => {
+            if storage.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "eessi storage",
+                ));
+            }
+            if command.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "eessi command",
+                ));
+            }
+        }
+        TargetRuntime::Host => {}
+    }
+    Ok(())
 }
 
 impl BuildTarget {
@@ -894,6 +961,9 @@ pub enum TargetError {
     #[error("target {0} has no {1} layer")]
     /// A target left a layer undefined that has no default.
     MissingLayer(String, &'static str),
+    #[error("target {0}: {1} is empty")]
+    /// A resolved target names a layer field it leaves blank.
+    EmptyField(String, &'static str),
     #[error("spawn target command {0}: {1}")]
     /// The command could not be started.
     Spawn(String, std::io::Error),

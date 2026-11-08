@@ -1281,8 +1281,60 @@ fn parse_conda_selector(selector: &str) -> ConditionExpr {
             right: right.trim().into(),
         });
     }
-    ConditionExpr::Predicate(ConditionPredicate::Platform {
-        name: selector.into(),
+    if let Some(condition) = parse_conda_python_selector(selector) {
+        return condition;
+    }
+    if selector == "unix" {
+        // conda-build: unix is every non-Windows platform.
+        return ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+            ConditionPredicate::Platform { name: "win".into() },
+        )));
+    }
+    if matches!(selector, "aarch64" | "x86_64" | "arm64" | "ppc64le") {
+        return ConditionExpr::Predicate(ConditionPredicate::Architecture {
+            name: selector.into(),
+        });
+    }
+    if matches!(selector, "linux" | "osx" | "win") {
+        return ConditionExpr::Predicate(ConditionPredicate::Platform {
+            name: selector.into(),
+        });
+    }
+    ConditionExpr::Opaque {
+        source: selector.into(),
+    }
+}
+
+/// `py3k`, `py2k` and `py>=38`: undecidable without an interpreter, so
+/// opaque rather than a platform.
+fn parse_conda_python_selector(selector: &str) -> Option<ConditionExpr> {
+    let selector = selector.trim();
+    if selector == "py2k" || selector == "py3k" {
+        return Some(ConditionExpr::Opaque {
+            source: selector.into(),
+        });
+    }
+    let rest = selector.strip_prefix("py")?;
+    let (operator, digits) = if let Some(rest) = rest.strip_prefix(">=") {
+        (">=", rest)
+    } else if let Some(rest) = rest.strip_prefix("<=") {
+        ("<=", rest)
+    } else if let Some(rest) = rest.strip_prefix('>') {
+        (">", rest)
+    } else if let Some(rest) = rest.strip_prefix('<') {
+        ("<", rest)
+    } else if let Some(rest) = rest.strip_prefix("==") {
+        ("==", rest)
+    } else if rest.chars().all(|character| character.is_ascii_digit()) {
+        ("==", rest)
+    } else {
+        return None;
+    };
+    if digits.is_empty() || !digits.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    Some(ConditionExpr::Opaque {
+        source: format!("py{operator}{digits}"),
     })
 }
 

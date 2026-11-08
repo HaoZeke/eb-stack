@@ -598,3 +598,35 @@ RUSTC_WRAPPER = "sccache"
     assert!(!joined.contains("-u CMAKE_C_COMPILER_LAUNCHER"), "{joined}");
     assert!(!joined.contains("-u RUSTC_WRAPPER"), "{joined}");
 }
+
+// Ported from develop.
+
+#[test]
+fn empty_runtime_image_is_rejected() {
+    let layer = TargetConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[targets]]
+name = "broken-podman"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "podman"
+image = ""
+
+[targets.easybuild]
+command = "eb"
+work_root = "/work"
+tmp_root = "/tmp"
+"#,
+    )
+    .expect("layer");
+    let error = resolve_target_layers(&[layer]).expect_err("empty image");
+    assert!(error.to_string().contains("runtime image"), "{error}");
+}
