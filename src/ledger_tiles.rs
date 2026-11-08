@@ -18,15 +18,18 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use rfc9162_log::store::Index;
+use rfc9162_log::{AuthenticatedLog, Keys, Store};
 use rfc9162_tiles::checkpoint::{self, ED25519_LOG};
 use rfc9162_tiles::index::KeyFn;
 use rfc9162_tiles::layout::{CHECKPOINT, TILE_WIDTH};
-use rfc9162_tiles::{Checkpoint, Note, PosixStore, Reader, Signer, TileStore, Verifier, Writer};
+use rfc9162_tiles::{Checkpoint, Note, PosixStore, Reader, Signer, TileStore, Verifier};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::ledger::{self, Entry};
 
@@ -80,6 +83,11 @@ pub fn keys_of(entry: &[u8]) -> Vec<Vec<u8>> {
 /// The key function the tile log is written and read with.
 pub fn key_fn() -> KeyFn {
     Box::new(keys_of)
+}
+
+/// The same keys for the run store.
+pub fn keys_arc() -> Keys {
+    Arc::new(keys_of)
 }
 
 /// Where the tile log of `log` lives: `tiles` when given, else the log's
@@ -158,6 +166,10 @@ pub struct SyncReport {
     /// Where a tile log that disagreed with the ledger was moved before
     /// the rebuild.
     pub rebuilt_from: Option<PathBuf>,
+    /// Sorted runs a lookup goes through after the sync.
+    pub runs: u64,
+    /// Whether this sync sealed the unsealed tail into a run.
+    pub sealed: bool,
 }
 
 impl SyncReport {
@@ -224,48 +236,64 @@ fn stale_path(dir: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// The writer over a tile log that holds exactly the ledger's lines, and
-/// what it took to get there.
-fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Writer<PosixStore>, SyncReport)> {
+/// The store over a tile log that holds exactly the ledger's lines, and
+/// what it took to get there. The lines are appended as one batch; when the
+/// unsealed tail then holds a full bundle of entries it is sealed into a
+/// sorted run whose manifest is logged, so the next checkpoint signs the
+/// index as well as the entries.
+fn open_synced(entries: &[Entry], dir: &Path) -> Result<(Store<PosixStore>, SyncReport)> {
     let leaves = ledger::leaves(entries);
-    let mut writer = Writer::open(open_store(dir)?, key_fn())
+    let mut store = Store::open(open_store(dir)?, keys_arc())
         .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
-    let held = usize::try_from(writer.size()).unwrap_or(usize::MAX);
-    let agrees = held <= leaves.len() && writer.root() == rfc9162::root(&leaves[..held]);
+    let held = usize::try_from(store.size()).unwrap_or(usize::MAX);
+    let agrees = held <= leaves.len() && store.root() == rfc9162::root(&leaves[..held]);
     let mut rebuilt_from = None;
     if !agrees {
-        drop(writer);
+        drop(store);
         let stale = stale_path(dir);
         std::fs::rename(dir, &stale)
             .with_context(|| format!("move tile log {} to {}", dir.display(), stale.display()))?;
-        writer = Writer::open(open_store(dir)?, key_fn())
+        store = Store::open(open_store(dir)?, keys_arc())
             .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
         rebuilt_from = Some(stale);
     }
     let start =
-        usize::try_from(writer.size()).expect("a synced tile log is not longer than the ledger");
-    let appended = writer
+        usize::try_from(store.size()).expect("a synced tile log is not longer than the ledger");
+    let appended = store
         .append_batch(
             entries[start..]
                 .iter()
                 .map(|entry| entry.line.clone().into_bytes()),
         )
         .map_err(|error| anyhow!("append to tile log {}: {error}", dir.display()))?;
+    let sealed_through = store
+        .live_runs()
+        .last()
+        .map_or(0, |run| run.entries.end() + 1);
+    let mut sealed = false;
+    if store.size().saturating_sub(sealed_through) >= TILE_WIDTH {
+        store
+            .seal()
+            .map_err(|error| anyhow!("seal tile log {}: {error}", dir.display()))?;
+        sealed = true;
+    }
     let report = SyncReport {
         dir: dir.to_path_buf(),
-        size: writer.size(),
-        root: rfc9162::hex(&writer.root()),
+        size: store.size(),
+        root: rfc9162::hex(&store.root()),
         appended: appended.end - appended.start,
         rebuilt_from,
+        runs: store.live_runs().len() as u64,
+        sealed,
     };
-    Ok((writer, report))
+    Ok((store, report))
 }
 
 /// Bring the tile log at `dir` to the ledger's lines: append what it lacks,
 /// or move it aside and rebuild it when its entries disagree.
 pub fn sync(entries: &[Entry], dir: &Path) -> Result<SyncReport> {
     let _lock = ledger::tile_writer_lock(dir)?;
-    let (_writer, report) = open_synced(entries, dir)?;
+    let (_store, report) = open_synced(entries, dir)?;
     Ok(report)
 }
 
@@ -278,10 +306,11 @@ pub fn checkpoint(
     origin: &str,
 ) -> Result<(SyncReport, CheckpointReport)> {
     let _lock = ledger::tile_writer_lock(dir)?;
-    let (writer, synced) = open_synced(entries, dir)?;
+    let (store, synced) = open_synced(entries, dir)?;
     let signer = Signer::new(origin, key.clone())
         .map_err(|error| anyhow!("checkpoint signer for {origin}: {error}"))?;
-    let note = writer
+    let note = store
+        .writer()
         .checkpoint(&signer, origin)
         .map_err(|error| anyhow!("checkpoint tile log {}: {error}", dir.display()))?;
     let published = Checkpoint::parse(&note.text)
@@ -473,6 +502,9 @@ pub struct Found {
     pub index: u64,
     /// The record.
     pub record: Value,
+    /// Leaf number of the logged run manifest the lookup went through, or
+    /// none when the record sits in the unsealed tail and was found by scan.
+    pub run: Option<u64>,
 }
 
 /// What `ledger find` found.
@@ -519,7 +551,7 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
     }
     let store = open_store(&dir)?;
     let published = read_checkpoint(&store, &dir, &origin, &trusted)?;
-    let reader = Reader::open(store, key_fn())
+    let reader = Reader::open(store.clone(), key_fn())
         .map_err(|error| anyhow!("open tile log {}: {error}", dir.display()))?;
     let checkpoint_root = rfc9162::hex(&published.root);
     check_prefix(
@@ -530,51 +562,99 @@ pub fn find(request: &FindRequest) -> Result<FindReport> {
         "checkpoint",
     )?;
 
-    let mut hits: Option<BTreeSet<u64>> = None;
+    // Lookups at the checkpoint: every answer carries inclusion paths against
+    // the signed size, for the record and for the run manifest that located
+    // it, so both are proven with the checkpoint root and nothing from the
+    // store is trusted.
+    let signed = Index::at(store.clone(), published.size, published.root, keys_arc())
+        .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
+    let current = Index::at(store, reader.size(), reader.root(), keys_arc())
+        .map_err(|error| anyhow!("tile log {} index: {error}", dir.display()))?;
+    let mut hits: Option<BTreeMap<u64, rfc9162_log::Located>> = None;
+    let mut past: Option<BTreeSet<u64>> = None;
     for key in &request.keys {
-        let indices = reader
+        let located = signed
             .find(key.as_bytes())
             .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
             .into_iter()
-            .collect::<BTreeSet<_>>();
+            .map(|hit| (hit.entry.index, hit))
+            .collect::<BTreeMap<_, _>>();
         hits = Some(match hits {
-            None => indices,
-            Some(sofar) => sofar.intersection(&indices).copied().collect(),
+            None => located,
+            Some(sofar) => sofar
+                .into_iter()
+                .filter(|(index, _)| located.contains_key(index))
+                .collect(),
+        });
+        let beyond = current
+            .find(key.as_bytes())
+            .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
+            .into_iter()
+            .map(|hit| hit.entry.index)
+            .filter(|index| *index >= published.size)
+            .collect::<BTreeSet<_>>();
+        past = Some(match past {
+            None => beyond,
+            Some(sofar) => sofar.intersection(&beyond).copied().collect(),
         });
     }
-    let size = usize::try_from(reader.size()).map_err(|_| anyhow!("size does not fit"))?;
-    let root = rfc9162::hex(&reader.root());
+    let size = usize::try_from(published.size).map_err(|_| anyhow!("size does not fit"))?;
     let mut found = Vec::new();
-    let mut unsigned = 0u64;
-    for index in hits.unwrap_or_default() {
-        if index >= published.size {
-            unsigned += 1;
-            continue;
-        }
-        let entry = reader
+    for (index, hit) in hits.unwrap_or_default() {
+        let entry = signed
+            .reader()
             .get(index)
             .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
             .ok_or_else(|| anyhow!("tile log {} has no entry {index}", dir.display()))?;
-        let proof = reader
-            .inclusion(index)
-            .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
-            .ok_or_else(|| {
-                anyhow!(
-                    "tile log {} has no inclusion proof for {index}",
-                    dir.display()
-                )
-            })?;
         let at = usize::try_from(index).map_err(|_| anyhow!("index does not fit"))?;
-        if !rfc9162::verify_inclusion(&rfc9162::leaf_hash(&entry), at, size, &proof, &root) {
+        if !rfc9162::verify_inclusion(
+            &rfc9162::leaf_hash(&entry),
+            at,
+            size,
+            &hit.entry.path,
+            &checkpoint_root,
+        ) {
             bail!(
-                "tile log {} entry {index} is not in its tree of size {size} root {root}",
+                "tile log {} entry {index} is not in the checkpoint of size {size} root {checkpoint_root}",
                 dir.display()
             );
         }
+        let run = match hit.run {
+            Some(run) => {
+                let manifest = signed
+                    .reader()
+                    .get(run.index)
+                    .map_err(|error| anyhow!("tile log {}: {error}", dir.display()))?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "tile log {} has no run manifest {}",
+                            dir.display(),
+                            run.index
+                        )
+                    })?;
+                let at = usize::try_from(run.index).map_err(|_| anyhow!("index does not fit"))?;
+                if !rfc9162::verify_inclusion(
+                    &rfc9162::leaf_hash(&manifest),
+                    at,
+                    size,
+                    &run.path,
+                    &checkpoint_root,
+                ) {
+                    bail!(
+                        "tile log {} run manifest {} is not in the checkpoint of size {size}",
+                        dir.display(),
+                        run.index
+                    );
+                }
+                Some(run.index)
+            }
+            None => None,
+        };
         let record: Value = serde_json::from_slice(&entry)
             .with_context(|| format!("tile log {} entry {index} is not JSON", dir.display()))?;
-        found.push(Found { index, record });
+        found.push(Found { index, record, run });
     }
+    let unsigned = past.unwrap_or_default().len() as u64;
     let stdout = if request.json {
         let mut text =
             serde_json::to_string_pretty(&found.iter().map(|f| &f.record).collect::<Vec<_>>())?;
