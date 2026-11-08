@@ -671,26 +671,40 @@ fn render_sources(
     patches: &[crate::package::PatchArtifact],
     source_root: Option<&str>,
 ) -> SourceBlock {
+    let mut git_entries: Vec<(&crate::package::SourceArtifact, String)> = Vec::new();
     let resolved = source_artifacts
         .iter()
         .filter_map(|source| {
+            // A checkout (commit set, or git with no download URL) is a
+            // git_config dict. A GitHub tag without a commit can stay an archive.
+            if source.git.is_some() && (source.commit.is_some() || source.url.is_none()) {
+                if let Some(entry) = render_git_config(source, package_name, package_version) {
+                    git_entries.push((source, entry));
+                    return None;
+                }
+            }
             let url = source
                 .url
                 .clone()
                 .or_else(|| match (&source.git, &source.tag) {
-                    (Some(git), Some(tag)) if git.contains("github.com") => Some(format!(
-                        "{}/archive/refs/tags/{tag}.tar.gz",
-                        git.trim_end_matches(".git")
-                    )),
-                    (Some(git), _) => Some(git.clone()),
+                    (Some(git), Some(tag))
+                        if git.contains("github.com") && source.commit.is_none() =>
+                    {
+                        Some(format!(
+                            "{}/archive/refs/tags/{tag}.tar.gz",
+                            git.trim_end_matches(".git")
+                        ))
+                    }
                     _ => None,
                 })?;
             Some((source, url))
         })
         .collect::<Vec<_>>();
 
-    let checksums = source_artifacts
+    let checksums = git_entries
         .iter()
+        .map(|(source, _)| *source)
+        .chain(resolved.iter().map(|(source, _)| *source))
         .filter_map(|source| source.sha256.as_ref())
         .chain(patches.iter().filter_map(|patch| patch.sha256.as_ref()))
         .map(|checksum| format!("'{}'", escape_single(checksum)))
@@ -720,15 +734,49 @@ fn render_sources(
         }
     }
 
-    let sources = resolved
-        .iter()
-        .map(|(source, url)| render_source(source, url, source_root))
-        .collect::<Vec<_>>();
+    let mut sources: Vec<String> = git_entries.into_iter().map(|(_, entry)| entry).collect();
+    sources.extend(
+        resolved
+            .iter()
+            .map(|(source, url)| render_source(source, url, source_root)),
+    );
     SourceBlock {
         prelude: String::new(),
         sources: format!("sources = {}", render_multiline_list(&sources)),
         checksums: checksum_lines,
     }
+}
+
+fn render_git_config(
+    source: &crate::package::SourceArtifact,
+    package_name: &str,
+    package_version: &str,
+) -> Option<String> {
+    let git = source.git.as_deref()?;
+    let trimmed = git.trim_end_matches('/').trim_end_matches(".git");
+    let (url, repo_name) = trimmed.rsplit_once('/')?;
+    if repo_name.is_empty() {
+        return None;
+    }
+    let filename = source
+        .filename
+        .clone()
+        .unwrap_or_else(|| format!("{package_name}-{package_version}.tar.gz"));
+    let mut git_fields = vec![
+        format!("        'url': '{}',", escape_single(url)),
+        format!("        'repo_name': '{}',", escape_single(repo_name)),
+    ];
+    if let Some(tag) = source.tag.as_deref() {
+        git_fields.push(format!("        'tag': '{}',", escape_single(tag)));
+    }
+    if let Some(commit) = source.commit.as_deref() {
+        git_fields.push(format!("        'commit': '{}',", escape_single(commit)));
+    }
+    Some(format!(
+        "{{\n    'filename': '{}',\n    'git_config': {{\n{}\n    }},\n}}",
+        escape_single(&filename),
+        git_fields.join("\n")
+    ))
 }
 
 /// Conventional EasyBuild form for a package downloaded from PyPI.

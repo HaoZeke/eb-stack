@@ -281,6 +281,15 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
         canonical_spack_version_constraint(version_field)
     } else if format == ForeignFormat::CondaForge {
         Some(rewrite_conda_eq_pin(version_field))
+    } else if format == ForeignFormat::Raku {
+        if let Some(minimum) = version_field
+            .strip_suffix('+')
+            .filter(|value| !value.is_empty())
+        {
+            Some(format!(">={minimum}"))
+        } else {
+            Some(pin.to_string())
+        }
     } else {
         Some(pin.to_string())
     }

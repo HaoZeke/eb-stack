@@ -544,7 +544,13 @@ impl EbProvider {
             return self.keys_at_level(dep, &toolchain_label(toolchain));
         }
         if crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
-            return self.keys_at_level(dep, "system");
+            let keys = self.keys_at_level(dep, "system");
+            // A SYSTEM recipe reaches only SYSTEM with a bare tuple, unless
+            // the tuple spells the module: `('OpenMPI', '5.0.3-GCC-13.3.0')`
+            // names one build as exactly as a toolchain element does.
+            if !keys.is_empty() || !version_req_spells_module(&dep.version_req) {
+                return keys;
+            }
         }
         let mut levels = self.admissible_levels(recipe);
         levels.reverse();
@@ -1488,6 +1494,14 @@ fn matching_ranks_for_key(
         })
         .map(|(rank, _)| *rank)
         .collect()
+}
+
+/// Whether an exact requirement carries a toolchain inside the version, as
+/// `==5.0.3-GCC-13.3.0` does: a module identity rather than a version.
+fn version_req_spells_module(version_req: &str) -> bool {
+    version_req
+        .strip_prefix("==")
+        .is_some_and(|pinned| pinned.matches('-').count() >= 2)
 }
 
 fn exclusion_reason(exclusion: &CandidateExclusion) -> String {

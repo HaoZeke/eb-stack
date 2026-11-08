@@ -291,7 +291,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
-enum Pep508 {
+pub(crate) enum Pep508 {
     SkipExtra {
         spec: String,
     },
@@ -327,7 +327,7 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
     hints
 }
 
-fn parse_pep508(spec: &str) -> Pep508 {
+pub(crate) fn parse_pep508(spec: &str) -> Pep508 {
     let original = spec.trim().to_string();
     if original.is_empty() {
         return Pep508::Invalid {

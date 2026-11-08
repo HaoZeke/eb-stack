@@ -1201,11 +1201,6 @@ pub fn prepare_package_bump(
     );
     pin_version_derived_dependencies(&mut plan, request, &resolved);
     apply_dependency_overrides(&mut plan, &request.overrides);
-    let recipe_checksums = plan
-        .sources
-        .iter()
-        .map(|source| source.sha256.clone())
-        .collect::<Vec<_>>();
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     // Layers write [package] version onto the plan. A CLI --version is the
@@ -1226,15 +1221,6 @@ pub fn prepare_package_bump(
                 sha256: Some(checksum.to_string()),
                 ..SourceArtifact::default()
             });
-        }
-    }
-    // A version the layer moved without a CLI digest cannot keep the old
-    // recipe's source checksums: those bytes belong to the old version.
-    if plan.package.version != resolved.version && request.source_checksum.is_none() {
-        for (source, original) in plan.sources.iter_mut().zip(recipe_checksums) {
-            if source.sha256 == original {
-                source.sha256 = None;
-            }
         }
     }
     merge_foreign_inspect_deps(&mut plan, request)?;
@@ -1406,9 +1392,8 @@ pub fn complete_package_bump_with_options(
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
-    let generation_retarget = is_generation_retarget(&source_recipe.toolchain, &request.toolchain);
     let profile_name = default_profile_name(&plan).to_string();
-    if version_changed || generation_retarget {
+    if version_changed {
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
             &profile_name,
@@ -1419,44 +1404,25 @@ pub fn complete_package_bump_with_options(
         )
         .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
         for (index, hole) in holes.into_iter().enumerate() {
-            let already_excluded = plan
-                .dependencies
-                .iter()
-                .any(|dependency| hole.matches_intent(dependency) && dependency.solver_excluded);
             for dependency in &mut plan.dependencies {
                 if hole.matches_intent(dependency) {
                     dependency.solver_excluded = true;
                 }
             }
             dropped_dep_names.push(hole.name.clone());
-            if already_excluded {
-                plan.residuals.push(Residual {
-                    id: format!("version-bump-dropped-dep:{index}"),
-                    stage: ResidualStage::Resolve,
-                    category: "version-bump-dropped-dep".into(),
-                    severity: ResidualSeverity::Judgment,
-                    summary: format!(
-                        "{} {} has no candidate on this generation after the version bump; \
-                         dropped from the emitted recipe",
-                        hole.name, hole.version_req
-                    ),
-                    evidence: None,
-                    provenance: None,
-                });
-            } else {
-                plan.residuals.push(Residual {
-                    id: format!("unresolved-generation-dep:{index}"),
-                    stage: ResidualStage::Resolve,
-                    category: "unresolved-generation-dep".into(),
-                    severity: ResidualSeverity::Blocking,
-                    summary: format!(
-                        "{} {} has no candidate on this generation",
-                        hole.name, hole.version_req
-                    ),
-                    evidence: hole.versionsuffix.clone(),
-                    provenance: None,
-                });
-            }
+            plan.residuals.push(Residual {
+                id: format!("version-bump-dropped-dep:{index}"),
+                stage: ResidualStage::Resolve,
+                category: "version-bump-dropped-dep".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!(
+                    "{} {} has no candidate on this generation after the version bump; \
+                     dropped from the emitted recipe",
+                    hole.name, hole.version_req
+                ),
+                evidence: None,
+                provenance: None,
+            });
         }
     }
     let lock = solve_package_profile_with_hierarchy(
@@ -2380,7 +2346,7 @@ fn dependency_from_easyconfig(
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),
         solver_excluded: false,
         provenance: Vec::new(),
-        versionsuffix: None,
+        versionsuffix: dependency.versionsuffix.clone(),
     }
 }
 
