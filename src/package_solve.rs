@@ -632,11 +632,16 @@ fn scoped_dependency_name(scope: &str, name: &str) -> String {
 /// the version it pins. A match that only reads `candidate.version` reports
 /// a hole for a pin the solve then locks.
 fn candidate_matches_any_spelling(candidate: &Candidate, version_req: &str) -> bool {
+    if matches_req(&candidate.version, version_req) {
+        return true;
+    }
+    // Suffix and module spellings answer only an exact pin: against a range
+    // they read as a pre-release of their version.
+    if !crate::version::requirement_is_exact(version_req) {
+        return false;
+    }
     let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
-    if matches_req(&candidate.version, version_req)
-        || (!suffix.is_empty()
-            && matches_req(&format!("{}{suffix}", candidate.version), version_req))
-    {
+    if !suffix.is_empty() && matches_req(&format!("{}{suffix}", candidate.version), version_req) {
         return true;
     }
     if is_system_toolchain(&candidate.toolchain) {

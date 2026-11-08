@@ -96,9 +96,11 @@ fn candidate_satisfies_dependency(
             candidate.version, candidate.toolchain.name, candidate.toolchain.version
         )
     };
+    let exact = crate::version::requirement_is_exact(&dependency.version_req);
     if !matches_req(&candidate.version, &dependency.version_req)
-        && !matches_req(&with_suffix, &dependency.version_req)
-        && !matches_req(&with_toolchain, &dependency.version_req)
+        && !(exact
+            && (matches_req(&with_suffix, &dependency.version_req)
+                || matches_req(&with_toolchain, &dependency.version_req)))
     {
         return false;
     }
@@ -1024,6 +1026,7 @@ impl EbProvider {
         let Some(ranked) = self.ranks.get(pkg) else {
             return Ranges::empty();
         };
+        let exact = crate::version::requirement_is_exact(version_req);
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
@@ -1045,9 +1048,13 @@ impl EbProvider {
                     c.toolchain.name, c.toolchain.version
                 )
             };
+            // A module or suffixed spelling answers only an exact pin: as a
+            // version it reads as a pre-release, and a range such as `<5`
+            // would admit `5.0.0-GCCcore-13.3.0`.
             if !matches_req(&stem, version_req)
-                && !matches_req(&with_suffix, version_req)
-                && !matches_req(&with_toolchain, version_req)
+                && !(exact
+                    && (matches_req(&with_suffix, version_req)
+                        || matches_req(&with_toolchain, version_req)))
             {
                 continue;
             }
@@ -1448,11 +1455,16 @@ fn validate_stack_policy(policy: &Policy, stack: &StackPolicy) -> Result<(), Str
 /// `candidate.version` rejects `==25.3-CUDA-12.8.0` for an NVHPC whose version
 /// field is `25.3`.
 fn candidate_matches_depreq(candidate: &Candidate, version_req: &str) -> bool {
+    if matches_req(&candidate.version, version_req) {
+        return true;
+    }
+    // Suffix and module spellings answer only an exact pin; see
+    // `requirement_is_exact`.
+    if !crate::version::requirement_is_exact(version_req) {
+        return false;
+    }
     let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
-    if matches_req(&candidate.version, version_req)
-        || (!suffix.is_empty()
-            && matches_req(&format!("{}{suffix}", candidate.version), version_req))
-    {
+    if !suffix.is_empty() && matches_req(&format!("{}{suffix}", candidate.version), version_req) {
         return true;
     }
     if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
