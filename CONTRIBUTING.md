@@ -77,7 +77,7 @@ layer. The public files contain reusable package intent and target topology.
 
 ## Releasing
 
-Version source of truth: `version` in root `Cargo.toml` (currently **0.5.0**).
+Version source of truth: `version` in root `Cargo.toml` (currently **0.5.1**).
 Keep these in lockstep on every release:
 
 1. `Cargo.toml` / `pixi.toml` `version`
@@ -97,8 +97,8 @@ stays absent until the test is updated for a published citation.
 Then:
 
 ```bash
-git tag -a v0.5.0 -m "eb-stack 0.5.0"
-git push origin v0.5.0
+git tag -a v0.5.1 -m "eb-stack 0.5.1"
+git push origin v0.5.1
 # .github/workflows/release.yml (cargo-dist) builds the installers
 # and publishes the GitHub Release. It does not publish to crates.io.
 ```
@@ -108,5 +108,5 @@ Verify the binary surface:
 ```bash
 cargo build --release
 ./target/release/eb-stack --version
-# prints eb-stack 0.5.0
+# prints eb-stack 0.5.1
 ```
