@@ -402,7 +402,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: recipe_text.clone(),
                 target: run_target.name.clone(),
                 summary: "recipe packaging preflight failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "recipe-metadata-gate".into(),
                     args: vec![recipe.display().to_string()],
@@ -447,7 +447,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: String::new(),
                 target: run_target.name.clone(),
                 summary: "package bundle staging failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "stage-bundle".into(),
                     args: vec![request.bundle.display().to_string()],
@@ -605,7 +605,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: recipe_text.clone(),
                 target: run_target.name.clone(),
                 summary: finding_summary(class, output.status.code()),
-                evidence,
+                evidence: evidence.clone(),
                 command,
                 exit_code: output.status.code(),
                 attempt: state.attempts,
