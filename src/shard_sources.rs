@@ -93,6 +93,11 @@ pub(crate) fn unsupported_option(text: &str) -> Option<String> {
         if !key.starts_with("--") && key != "-f" {
             return Some(format!("{word} is a short option eb-stack does not model"));
         }
+        // The full helper option takes precedence over PR option abbreviations.
+        if key == "--include-easyblocks" && word.contains('=') {
+            j += 1;
+            continue;
+        }
         let name = key.trim_start_matches('-');
         if RESOLUTION_OPTIONS
             .iter()
