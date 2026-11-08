@@ -353,6 +353,30 @@ fn numeric_components(version: &str) -> Vec<u64> {
 
 /// Upper bound of a release series, as `[components…]` with `index` bumped and
 /// everything after it dropped.
+/// Whether `version` is in the series strictly below `ceiling`.
+///
+/// `cmp_version` treats a pre-release of the ceiling as Less (`1.3.0rc1` <
+/// `1.3`). That is the right order, but a series bound excludes the next
+/// series entirely, including its pre-releases.
+fn below_series_ceiling(version: &str, ceiling: &str) -> bool {
+    if cmp_version(version, ceiling) != Ordering::Less {
+        return false;
+    }
+    let version_nums = numeric_components(version);
+    let ceiling_nums = numeric_components(ceiling);
+    let n = version_nums.len().max(ceiling_nums.len());
+    for i in 0..n {
+        let left = version_nums.get(i).copied().unwrap_or(0);
+        let right = ceiling_nums.get(i).copied().unwrap_or(0);
+        match left.cmp(&right) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+    }
+    false
+}
+
 fn series_ceiling(components: &[u64], index: usize) -> String {
     let mut bound: Vec<u64> = components[..=index].to_vec();
     bound[index] += 1;
