@@ -2089,6 +2089,22 @@ bundle, a rewritten tree state, a tile log of another ledger, a missing
 tile log, or a tile log behind the head is status 1, and the message
 names the tile log and the file.
 
+*Index log.* Inside the tile log, at ~DIR/index~, a second tile log holds
+the sorted-run index of the records: each sealed run's manifest is an
+entry there, so a checkpoint signs the index as well as the entries. The
+sync seals the unsealed tail into a run once it holds a full bundle of
+256 records, and ~head~ then signs the index log's own checkpoint under
+~<origin>/index~ with the same key and prints it as a third line,
+~index checkpoint ORIGIN/index size N root ROOT to PATH~; an index log
+with no run is not signed and the line is absent. ~find~ proves the
+record in the tile checkpoint and the run manifest that located it in
+the index checkpoint, two roots under one key. ~verify~ checks the
+index checkpoint's prefix as it checks the tile log's, and a rebuild of
+a tile log that disagrees with the ledger moves both logs aside. The
+data tile log still holds exactly the ledger's lines, so the signed
+heads, ~verify~ and any tlog-tiles client are unchanged; the index comes
+from the ~rfc9162-log~ crate.
+
 * ~repro summary~
 
 #+begin_src bash
