@@ -28,8 +28,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Public metadata contract
-        run: cargo test --locked --test no_helper_script
-        run: cargo test --locked --test public_metadata
+        run: |
+          cargo test --locked --test no_helper_script
+          cargo test --locked --test public_metadata
       - name: Cargo source package
         run: cargo package --locked
 
