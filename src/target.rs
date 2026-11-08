@@ -402,6 +402,24 @@ impl BuildTarget {
         Ok(destination)
     }
 
+    /// Read a path on the target through the transport, not the controller.
+    ///
+    /// EasyBuild writes command logs under `EASYBUILD_TMPDIR` on the target.
+    /// A controller-local open misses those files and classification then
+    /// sees only the outer `ERROR` line.
+    pub fn read_file(&self, path: &Path) -> Result<String, TargetError> {
+        let plan = self.route_tokens(vec!["cat".into(), path.display().to_string()], false);
+        let output = plan.execute()?;
+        if !output.status.success() {
+            return Err(TargetError::CommandFailed {
+                program: plan.program,
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     /// The command that builds one recipe, wrapped by every layer.
     pub fn build_command(&self, recipe: &str) -> CommandPlan {
         self.build_command_with_robot_paths(recipe, &[])
