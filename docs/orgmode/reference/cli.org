@@ -88,6 +88,19 @@ eb-stack package inspect \
 This writes ~package.plan.json~ and ~package.sbom.cdx.json~. It does not solve
 profiles or emit recipes, so it establishes no claim-ladder rung.
 
+Format notes. A rockspec's ~~> 1.8~ is ~>=1.8,<1.9~ and ~~= X~ is ~!=X~;
+~build_dependencies~ are build edges; a ~git+~ ~source.url~ is a git remote
+with its ~tag~ and emits a ~git_config~ source; ~source.hash~ counts only as
+a 64-hex SHA-256; ~external_dependencies~ become residuals; the plan's
+easyblock is ~LuaRocks~. A META6 ~ver<0.10+>~ is ~>=0.10~, and the ~ver~,
+~auth~, ~api~ and ~from~ adverbs are not part of the module name. A CRAN
+package's sanity dir is ~lib/R/library/<name>~. A Spack ~depends_on~ with
+~type=("build", "link")~ is a runtime edge. A PyPI or PEP 518 requirement
+gated by an environment marker is an opaque condition: it is kept out of
+the solve and reported as a ~pypi-marker~ residual. A build backend or
+overlay build tool is named only when the plan's own toolchain hierarchy
+provides it, as a recipe or as a bundle extension.
+
 ** ~package plan~
 
 #+begin_src bash
