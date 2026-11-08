@@ -159,6 +159,9 @@ pub struct BuildFinding {
     pub exit_code: Option<i32>,
     /// Attempt number this arose on.
     pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Noise-stripped causal line used to detect a stuck retry loop.
+    pub signature: Option<String>,
     #[serde(default)]
     /// Build/test metadata so results stay qualified by optarch and hardware.
     pub execution_context: ExecutionContext,
@@ -256,6 +259,14 @@ pub struct CampaignState {
     #[serde(default)]
     /// Ordered record of what happened.
     pub history: Vec<CampaignEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SHA-256 of the bundle lock files. A recipe edit that does not change
+    /// SAT keeps this identity; a new lock is a new DAG.
+    pub lock_identity: Option<String>,
+    /// First attempt that belongs to [`Self::lock_identity`]. Findings from
+    /// earlier attempts are a previous DAG and do not count toward stuck.
+    #[serde(default, skip_serializing_if = "u32_is_zero")]
+    pub lock_epoch_start_attempt: u32,
 }
 
 /// Run a campaign to completion or to its first unresolved failure.
@@ -315,8 +326,25 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             current_recipe: None,
             findings: Vec::new(),
             history: Vec::new(),
+            lock_identity: None,
+            lock_epoch_start_attempt: 0,
         }
     };
+
+    let identity = lock_identity(&locks);
+    if let (Some(previous), Some(current)) = (state.lock_identity.as_ref(), identity.as_ref()) {
+        if previous != current {
+            state.history.push(CampaignEvent {
+                attempt: state.attempts,
+                status: state.status,
+                recipe: None,
+                detail: format!("lock identity changed from {previous} to {current}"),
+            });
+            // Next attempt is the first one on the new DAG.
+            state.lock_epoch_start_attempt = state.attempts + 1;
+        }
+    }
+    state.lock_identity = identity;
 
     record_interrupted_attempt(&mut state, &request.state_path);
     state.attempts += 1;
@@ -374,13 +402,14 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: recipe_text.clone(),
                 target: run_target.name.clone(),
                 summary: "recipe packaging preflight failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "recipe-metadata-gate".into(),
                     args: vec![recipe.display().to_string()],
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                signature: Some(failure_signature(&evidence)),
                 execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
@@ -392,11 +421,15 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: Some(recipe_text),
-                detail: format!("classified packaging preflight failure as {class:?}"),
+                detail: stuck_detail(
+                    &state,
+                    format!("classified packaging preflight failure as {class:?}"),
+                ),
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
         }
+        supersede_findings(&mut state, "preflight", &recipe_text);
     }
 
     let staged_bundle = match run_target.stage_bundle(&request.bundle) {
@@ -415,13 +448,14 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: String::new(),
                 target: run_target.name.clone(),
                 summary: "package bundle staging failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "stage-bundle".into(),
                     args: vec![request.bundle.display().to_string()],
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                signature: Some(failure_signature(&evidence)),
                 execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
@@ -433,12 +467,16 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: None,
-                detail: "classified bundle staging failure as Transport".into(),
+                detail: stuck_detail(
+                    &state,
+                    "classified bundle staging failure as Transport".to_string(),
+                ),
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
         }
     };
+    supersede_findings(&mut state, "stage", "");
 
     let tmpdir_check = run_target.easybuild_tmpdir_preflight_command();
     let tmpdir_output = match tmpdir_check.execute() {
@@ -481,7 +519,8 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             command: tmpdir_check,
             exit_code: tmpdir_output.status.code(),
             attempt: state.attempts,
-            execution_context: execution_context.clone(),
+            signature: Some(failure_signature(&format!("{stdout}\n{stderr}"))),
+                execution_context: execution_context.clone(),
             status: FindingStatus::Open,
             owner: None,
             resolution: None,
@@ -554,7 +593,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            let evidence = build_failure_evidence(&stdout, &stderr);
+            let evidence = build_failure_evidence(&run_target, &stdout, &stderr);
             let class = classify_build_failure("build", &evidence, "", output.status.code());
             state.findings.push(BuildFinding {
                 id: format!(
@@ -568,10 +607,11 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: recipe_text.clone(),
                 target: run_target.name.clone(),
                 summary: finding_summary(class, output.status.code()),
-                evidence,
+                evidence: evidence.clone(),
                 command,
                 exit_code: output.status.code(),
                 attempt: state.attempts,
+                signature: Some(failure_signature(&evidence)),
                 execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
@@ -583,7 +623,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: Some(recipe_text),
-                detail: format!("classified build failure as {class:?}"),
+                detail: stuck_detail(&state, format!("classified build failure as {class:?}")),
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
@@ -668,6 +708,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     command,
                     exit_code: output.status.code(),
                     attempt: state.attempts,
+                    signature: Some(failure_signature(&format!("{stdout}\n{stderr}"))),
                     execution_context: execution_context.clone(),
                     status: FindingStatus::Open,
                     owner: None,
@@ -678,7 +719,10 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     attempt: state.attempts,
                     status: CampaignStatus::Failed,
                     recipe: Some(format!("profile:{}", profile.name)),
-                    detail: format!("classified binary verification failure as {class:?}"),
+                    detail: stuck_detail(
+                        &state,
+                        format!("classified binary verification failure as {class:?}"),
+                    ),
                 });
                 write_state(&request.state_path, &state)?;
                 return Ok(state);
@@ -819,6 +863,7 @@ fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
         },
         exit_code: None,
         attempt,
+        signature: None,
         execution_context: state.execution_context.clone(),
         status: FindingStatus::Superseded,
         owner: None,
@@ -1103,6 +1148,7 @@ fn record_target_command_failure(
         command,
         exit_code: None,
         attempt: state.attempts,
+        signature: Some(failure_signature(&error.to_string())),
         execution_context: execution_context.clone(),
         status: FindingStatus::Open,
         owner: None,
@@ -1186,10 +1232,17 @@ fn module_name(
                 "manifest with verification commands has no build.toolchain.version".into(),
             )
         })?;
-    Ok(format!(
-        "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
-        profile.versionsuffix.join("")
-    ))
+    if toolchain_name.eq_ignore_ascii_case("system") {
+        Ok(format!(
+            "{package}/{version}{}",
+            profile.versionsuffix.join("")
+        ))
+    } else {
+        Ok(format!(
+            "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
+            profile.versionsuffix.join("")
+        ))
+    }
 }
 
 fn expand_verification_token(
@@ -1249,12 +1302,37 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
     compact
 }
 
-fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
+fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> String {
     let mut evidence = compact_evidence(stdout, stderr);
     let combined = format!("{stdout}\n{stderr}");
-    for path in easybuild_output_paths(&combined).into_iter().take(4) {
-        let Ok(nested) = std::fs::read_to_string(&path) else {
-            continue;
+    let banner = easybuild_banner_fields(&combined);
+    if !banner.is_empty() {
+        evidence.push('\n');
+        evidence.push_str(&banner);
+    }
+    let mut paths = easybuild_output_paths(&combined);
+    for extra in easybuild_cmd_sh_sibling_outputs(&combined) {
+        if !paths.contains(&extra) {
+            paths.push(extra);
+        }
+    }
+    for path in paths.into_iter().take(4) {
+        let nested = if matches!(target.transport, TargetTransport::Local) {
+            match std::fs::read_to_string(&path) {
+                Ok(nested) => nested,
+                Err(_) => match target.read_file(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
+        } else {
+            match target.read_file(&path) {
+                Ok(nested) => nested,
+                Err(_) => match std::fs::read_to_string(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
         };
         evidence.push_str(&format!(
             "\nEasyBuild command output {}:\n{}",
@@ -1263,6 +1341,66 @@ fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
         ));
     }
     evidence
+}
+
+fn easybuild_banner_fields(output: &str) -> String {
+    let mut fields = Vec::new();
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        let key = if lower.contains("full command") {
+            "full command"
+        } else if lower.contains("working directory") {
+            "working directory"
+        } else if lower.contains("interactive shell script") {
+            "interactive shell script"
+        } else if lower.contains("called from") {
+            "called from"
+        } else {
+            continue;
+        };
+        let Some((_, rest)) = line.split_once("->") else {
+            continue;
+        };
+        let rest = rest
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(rest)
+            .trim();
+        if !rest.is_empty() {
+            fields.push(format!("{key}: {rest}"));
+        }
+    }
+    fields.join("\n")
+}
+
+fn easybuild_cmd_sh_sibling_outputs(output: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if !line
+            .to_ascii_lowercase()
+            .contains("interactive shell script")
+        {
+            continue;
+        }
+        let Some((_, raw_path)) = line.rsplit_once("->") else {
+            continue;
+        };
+        let raw_path = raw_path
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(raw_path)
+            .trim();
+        if raw_path.is_empty() {
+            continue;
+        }
+        let cmd = PathBuf::from(raw_path);
+        if let Some(sibling) = cmd.parent().map(|parent| parent.join("out.txt")) {
+            paths.push(sibling);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Files EasyBuild names as `output (stdout + stderr) -> <path>` for a
@@ -1555,6 +1693,270 @@ fn bundle_easyblocks(bundle: &Path) -> Vec<PathBuf> {
     walk(&bundle.join("easyblocks"), &mut out);
     out.sort();
     out
+}
+
+/// Identical causal signatures this many times means the retry is stuck.
+pub const MAX_ATTEMPTS_PER_SIGNATURE: u32 = 2;
+
+/// `base`, and when the last finding's signature has repeated
+/// [`MAX_ATTEMPTS_PER_SIGNATURE`] times on the current lock DAG, why the
+/// retry is stuck.
+fn stuck_detail(state: &CampaignState, base: String) -> String {
+    let signature = state
+        .findings
+        .last()
+        .and_then(|finding| finding.signature.as_deref())
+        .unwrap_or("");
+    if is_stuck_on_signature(state, signature) {
+        format!(
+            "{base}; stuck on signature after {MAX_ATTEMPTS_PER_SIGNATURE} identical failures: {signature}"
+        )
+    } else {
+        base
+    }
+}
+
+/// First causal error line, with path, hash, and position noise stripped.
+pub fn failure_signature(text: &str) -> String {
+    if let Some(causal) = interned_causal_section(text) {
+        let signed = signature_from_interned(causal);
+        if signed != "verification failed without a recognized error" {
+            return signed;
+        }
+    }
+    signature_from_body(text)
+}
+
+fn interned_causal_section(text: &str) -> Option<&str> {
+    let marker = "EasyBuild command output ";
+    // The last interned block is the command that failed. An earlier
+    // successful configure dump can mention the same heading.
+    text.rfind(marker).map(|start| &text[start..])
+}
+
+fn signature_from_interned(section: &str) -> String {
+    let signed = signature_from_body(section);
+    if signed != "verification failed without a recognized error" {
+        return signed;
+    }
+    interned_fallback_signature(section).unwrap_or(signed)
+}
+
+fn interned_fallback_signature(section: &str) -> Option<String> {
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_generic_failure_footer(trimmed) {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("easybuild command output ")
+            || lower == "stdout:"
+            || lower == "stderr:"
+        {
+            continue;
+        }
+        return Some(normalize_signature(trimmed));
+    }
+    None
+}
+
+fn signature_from_body(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        if is_generic_failure_footer(line) {
+            continue;
+        }
+        if line.to_ascii_lowercase().contains("cmake error") {
+            return cmake_error_signature(&lines, index);
+        }
+        if let Some(signature) = signature_from_line(line) {
+            return normalize_signature(&signature);
+        }
+    }
+    "verification failed without a recognized error".into()
+}
+
+/// How many findings already carry this exact signature on the current lock DAG.
+pub fn signature_repeat_count(state: &CampaignState, signature: &str) -> u32 {
+    let start = state.lock_epoch_start_attempt;
+    state
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding.signature.as_deref() == Some(signature)
+                && (start == 0 || finding.attempt >= start)
+        })
+        .count() as u32
+}
+
+/// True once [`MAX_ATTEMPTS_PER_SIGNATURE`] findings share `signature`.
+pub fn is_stuck_on_signature(state: &CampaignState, signature: &str) -> bool {
+    !signature.is_empty() && signature_repeat_count(state, signature) >= MAX_ATTEMPTS_PER_SIGNATURE
+}
+
+fn is_generic_failure_footer(line: &str) -> bool {
+    let line = line.trim().to_ascii_lowercase();
+    let stripped = line
+        .strip_prefix("==> error:")
+        .or_else(|| line.strip_prefix("error:"))
+        .or_else(|| line.strip_prefix("failed:"))
+        .map(str::trim)
+        .unwrap_or(line.as_str());
+    stripped == "installation failed"
+        || stripped == "installation ended unsuccessfully"
+        || stripped.starts_with("the following packages failed to install")
+        || stripped.starts_with("build of ") && stripped.contains(" failed")
+        || stripped.starts_with("installation of ") && stripped.contains(" failed")
+        || stripped.starts_with("installation ended unsuccessfully")
+        || stripped.starts_with("shell command failed")
+}
+
+fn cmake_error_signature(lines: &[&str], index: usize) -> String {
+    for message in lines.iter().skip(index + 1).take(8) {
+        let message = message.trim();
+        if message.is_empty() {
+            continue;
+        }
+        let lower = message.to_ascii_lowercase();
+        if lower.starts_with("call stack") || message.starts_with("--") {
+            continue;
+        }
+        return normalize_signature(&format!("CMake Error: {message}"));
+    }
+    normalize_signature(lines[index].trim())
+}
+
+fn signature_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(idx) = lower.find(": no such file or directory") {
+        return Some(trimmed[..idx + ": no such file or directory".len()].to_string());
+    }
+    if lower.contains("hunks failed")
+        || lower.contains("fatal error:")
+        || lower.contains("==> error:")
+        || lower.contains("error:")
+        || lower.contains("failed:")
+        || lower.contains("modulenotfounderror:")
+        || lower.contains("importerror:")
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn normalize_signature(signature: &str) -> String {
+    let collapsed = collapse_signature_noise(signature);
+    collapsed.chars().take(200).collect()
+}
+
+fn u32_is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn tmp_like_path_len(chars: &[char]) -> Option<usize> {
+    if chars.first() != Some(&'/') {
+        return None;
+    }
+    let end = chars
+        .iter()
+        .position(|&c| matches!(c, ' ' | '\t' | '\'' | '"'))
+        .unwrap_or(chars.len());
+    let path = chars[..end].iter().collect::<String>().to_ascii_lowercase();
+    let known_tmp = path.starts_with("/tmp/")
+        || path.starts_with("/work/")
+        || path.starts_with("/scratch/")
+        || path.starts_with("/dev/shm/");
+    let eb_hash_dir = path.split('/').any(|segment| {
+        segment
+            .strip_prefix("eb-")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit()))
+    });
+    (known_tmp || eb_hash_dir).then_some(end)
+}
+
+fn collapse_signature_noise(signature: &str) -> String {
+    let chars = signature.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut last_was_space = false;
+    while i < chars.len() {
+        if let Some(len) = tmp_like_path_len(&chars[i..]) {
+            out.push_str("<tmp>");
+            i += len;
+            last_was_space = false;
+            continue;
+        }
+        if chars[i] == ':' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == ':' {
+                let mut k = j + 1;
+                while k < chars.len() && chars[k].is_ascii_digit() {
+                    k += 1;
+                }
+                if k > j + 1 {
+                    out.push_str(":<pos>");
+                    i = k;
+                    last_was_space = false;
+                    continue;
+                }
+            }
+        }
+        if chars[i].is_ascii_hexdigit() {
+            let at_boundary = i == 0 || !chars[i - 1].is_ascii_alphanumeric();
+            if at_boundary {
+                let mut j = i;
+                while j < chars.len() && chars[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                let after_ok = j == chars.len() || !chars[j].is_ascii_alphanumeric();
+                if j - i >= 7 && after_ok {
+                    out.push_str("<hash>");
+                    i = j;
+                    last_was_space = false;
+                    continue;
+                }
+            }
+        }
+        if chars[i].is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        last_was_space = false;
+        i += 1;
+    }
+    out.trim().to_string()
+}
+
+fn lock_identity(locks: &[PathBuf]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if locks.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    for path in locks {
+        let name = path.file_name()?.to_string_lossy();
+        let bytes = std::fs::read(path).ok()?;
+        hasher.update(name.as_bytes());
+        hasher.update([0xff]);
+        hasher.update(&bytes);
+        hasher.update([0xff]);
+    }
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
