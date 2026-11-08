@@ -1,12 +1,14 @@
 //! PyPI and CRAN ingest, extension provides, and language-bundle emission.
 
 use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::package_catalog::resolve_package_catalog_layers;
+use eb_stack::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
 use eb_stack::package_closure::plan_package_closure_with_sources;
+use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{
-    detect_foreign_format, inspect_new_package, materialize_pypi, parse_foreign_path,
-    plan_new_package, ForeignFormat, MapClient, NewPackageRequest, Toolchain,
+    complete_package_bundle, detect_foreign_format, inspect_new_package, materialize_pypi,
+    overlay_package_identity, parse_easyconfig_trees, parse_foreign_path, plan_new_package,
+    prepare_new_package_plan, ForeignFormat, MapClient, NewPackageRequest, Toolchain,
 };
 use std::path::{Path, PathBuf};
 
@@ -729,4 +731,436 @@ fn plan_cran_takes_unpinned_versions_from_the_package_index() {
         "an R bundle needs somewhere to download from:\n{}",
         recipe.text
     );
+}
+
+// Ported from develop: tests main lacked by name.
+
+#[test]
+fn already_provided_language_root_does_not_emit_companions() {
+    let temp = tempfile::tempdir().expect("temp");
+    let filelock = temp.path().join("filelock.yaml");
+    std::fs::write(
+        &filelock,
+        r#"package:
+  name: filelock
+  version: "3.13.1"
+source:
+  url: https://example.invalid/filelock-3.13.1.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host: []
+"#,
+    )
+    .expect("filelock recipe");
+    let catalog_path = temp.path().join("catalog.toml");
+    std::fs::write(
+        &catalog_path,
+        format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "filelock"
+version = "3.13.1"
+source = "{}"
+format = "conda-forge"
+source_checksums = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#,
+            filelock.display()
+        ),
+    )
+    .expect("catalog");
+    let catalog = resolve_package_catalog_layers(&[
+        PackageCatalogLayer::from_path(&catalog_path).expect("catalog layer")
+    ])
+    .expect("resolve catalog");
+
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/torch.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/pypi_numpy/robot-pytorch")],
+        stack_policy: stack_policy(),
+    };
+    let single = plan_new_package(&request).expect("plan torch");
+    let closure = plan_package_closure_with_sources(
+        &request,
+        &catalog,
+        &PackageSourceRoots {
+            schema_version: 1,
+            source_roots: Vec::new(),
+        },
+    )
+    .expect("close torch");
+
+    assert!(
+        closure.root.easyconfigs.is_empty(),
+        "already-provided torch must not emit a pip overlay: {:?}",
+        closure.root.easyconfigs
+    );
+    assert!(
+        closure.companions.is_empty(),
+        "already-provided language root must not hole-fill leftovers: {:?}",
+        closure
+            .companions
+            .iter()
+            .map(|companion| companion.plan.package.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    let single_residuals: Vec<_> = single
+        .plan
+        .residuals
+        .iter()
+        .map(|residual| {
+            (
+                residual.category.as_str(),
+                residual.summary.as_str(),
+                residual.evidence.as_deref(),
+            )
+        })
+        .collect();
+    let closure_residuals: Vec<_> = closure
+        .root
+        .plan
+        .residuals
+        .iter()
+        .map(|residual| {
+            (
+                residual.category.as_str(),
+                residual.summary.as_str(),
+                residual.evidence.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        closure_residuals, single_residuals,
+        "closure residual must match plan_new_package"
+    );
+}
+
+/// CMake that exists only on an older foss generation is not a build tool
+/// this generation can inject.
+#[test]
+fn cmake_only_on_older_generation_is_not_injected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    write_pypi_robot(
+        &robot,
+        "    ('soupsieve', '2.6'),",
+        &[(
+            "CMake-3.26.3-foss-2023a.eb",
+            r#"name = 'CMake'
+version = '3.26.3'
+homepage = 'https://cmake.org'
+description = "Older generation CMake"
+toolchain = {'name': 'foss', 'version': '2023a'}
+moduleclass = 'tools'
+"#,
+        )],
+    );
+    let source = pypi_dump_with_requires(temp.path(), &["soupsieve>=1.6", "orphanpkg==1.2.3"]);
+    let request = NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("foreign-generation CMake must not be injected");
+    assert!(
+        bundle
+            .plan
+            .overlay_extensions
+            .iter()
+            .any(|extension| extension.name == "orphanpkg"),
+        "leftover must become an overlay so build-tool injection runs:\n{:#?}",
+        bundle.plan.overlay_extensions
+    );
+    assert!(
+        bundle.plan.dependencies.iter().all(|dependency| {
+            overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) != overlay_package_identity("CMake")
+        }),
+        "CMake from foss-2023a must not be injected into foss-2026.1:\n{:#?}",
+        bundle.plan.dependencies
+    );
+}
+
+/// A PEP 517 backend shipped only as a bundle extension on the target
+/// generation is still the module the recipe must name.
+#[test]
+fn hatchling_ext_on_target_generation_is_named_as_backend() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    write_pypi_robot(
+        &robot,
+        "    ('soupsieve', '2.6'),\n    ('hatchling', '1.27.0'),",
+        &[],
+    );
+    let source = pypi_dump_with_requires(temp.path(), &["soupsieve>=1.6"]);
+    let request = NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: stack_policy(),
+    };
+    let (mut plan, sbom) = prepare_new_package_plan(&request).expect("prepare");
+    plan.build
+        .build_systems
+        .push("backend:hatchling.build".into());
+    let tree = parse_easyconfig_trees(&[request.easyconfig_roots[0].as_path()]).expect("robot");
+    let bundle = complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
+        .expect("complete with hatchling ext");
+    assert!(
+        bundle.plan.dependencies.iter().any(|dependency| {
+            overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) == overlay_package_identity("hatchling")
+        }),
+        "hatchling must be named when the bundle already ships it:\n{:#?}",
+        bundle.plan.dependencies
+    );
+}
+
+#[test]
+fn inspect_source_tree_pep518_marker_and_extra() {
+    use eb_stack::package::{ConditionExpr, DependencyRole};
+
+    let tmp = tempfile::tempdir().expect("temp");
+    let dump = tmp.path().join("demo-1.0.0.json");
+    std::fs::write(
+        &dump,
+        r#"{
+          "info": {
+            "name": "demo",
+            "version": "1.0.0",
+            "requires_dist": []
+          },
+          "urls": []
+        }"#,
+    )
+    .expect("dump");
+    let tree = tmp.path().join("demo-1.0.0");
+    std::fs::create_dir_all(&tree).expect("dirs");
+    std::fs::write(
+        tree.join("pyproject.toml"),
+        "[build-system]\nrequires = [\"tomli>=2.0.1; python_version < 3.11\", \"pytest; extra == test\"]\n",
+    )
+    .expect("pyproject");
+    let (plan, _) =
+        inspect_new_package(&dump, Some(ForeignFormat::Pypi), &toolchain(), &[]).expect("inspect");
+    let tomli = plan
+        .dependencies
+        .iter()
+        .find(|dep| dep.name == "tomli")
+        .expect("tomli");
+    assert!(
+        tomli
+            .roles
+            .iter()
+            .any(|role| *role == DependencyRole::Build),
+        "{tomli:?}"
+    );
+    assert!(
+        !matches!(tomli.condition, ConditionExpr::Always),
+        "tomli must not be Always: {tomli:?}"
+    );
+    assert!(
+        tomli.solver_excluded,
+        "opaque PEP 518 marker must be solver-excluded: {tomli:?}"
+    );
+    assert!(
+        plan.dependencies.iter().all(|dep| dep.name != "pytest"),
+        "pytest must not be a build dep: {:?}",
+        plan.dependencies
+    );
+}
+
+/// A language-bundle recipe is a different template from ConfigureMake.
+/// Patches and configopts still have to land on it, or a CRAN/PyPI leftover
+/// that carries either silently ships without them.
+#[test]
+fn language_bundle_emit_keeps_patches_and_configopts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let patch = temp.path().join("jsonlite-fix.patch");
+    std::fs::write(&patch, "bundle patch\n").expect("write patch");
+    let layer = PackageConfigLayer::from_toml_str(&format!(
+        r#"
+schema_version = 1
+[[build.patches]]
+filename = "jsonlite-fix.patch"
+sha256 = "1b3cb9a974469894efcbb136177166fc6921db16b00683369582e0fe9a7165e9"
+source = "{patch}"
+[[profiles]]
+name = "default"
+default = true
+config_options = ["--with-bundle-flag"]
+"#,
+        patch = patch.display(),
+    ))
+    .expect("layer");
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        ],
+        package_layers: vec![layer],
+        package_index: eb_stack::parse_package_index(
+            "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+             Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+        ),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan language bundle");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("patches") && recipe.text.contains("jsonlite-fix.patch"),
+        "bundle must keep the plan patch:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("configopts") && recipe.text.contains("--with-bundle-flag"),
+        "bundle must keep plan configopts:\n{}",
+        recipe.text
+    );
+}
+
+/// `prepare_new_package_plan` is the documented split before
+/// `complete_package_bundle`. The index has to be on the plan it returns,
+/// because those two callers do not copy it again.
+#[test]
+fn prepare_new_package_plan_keeps_the_request_package_index() {
+    let index = eb_stack::parse_package_index(
+        "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+         Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+    );
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        ],
+        package_layers: Vec::new(),
+        package_index: index,
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let (plan, sbom) = prepare_new_package_plan(&request).expect("prepare");
+    assert_eq!(
+        plan.package_index, request.package_index,
+        "prepare must copy the request index onto the plan"
+    );
+    let roots = request
+        .easyconfig_roots
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let tree = parse_easyconfig_trees(&roots).expect("robot");
+    let bundle = complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
+        .expect("complete from prepare without a second index copy");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("('processx', '3.8.4'"),
+        "the index on the prepared plan supplies the leftover version:\n{}",
+        recipe.text
+    );
+}
+
+fn pypi_dump_with_requires(dir: &Path, requires: &[&str]) -> PathBuf {
+    let path = dir.join("pypi.json");
+    let requires_json = requires
+        .iter()
+        .map(|spec| format!("      \"{spec}\""))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{
+  "info": {{
+    "name": "demo",
+    "version": "1.0.0",
+    "home_page": "https://example.invalid/demo",
+    "summary": "availability fixture",
+    "license": "MIT",
+    "requires_dist": [
+{requires_json}
+    ]
+  }},
+  "urls": [
+    {{
+      "packagetype": "sdist",
+      "url": "https://example.invalid/demo-1.0.0.tar.gz",
+      "filename": "demo-1.0.0.tar.gz",
+      "digests": {{
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }}
+    }}
+  ]
+}}
+"#
+        ),
+    )
+    .expect("write pypi dump");
+    path
+}
+
+fn write_pypi_robot(dir: &Path, bundle_exts: &str, extra_easyconfigs: &[(&str, &str)]) {
+    std::fs::create_dir_all(dir).expect("robot directory");
+    std::fs::write(
+        dir.join("Python-3.13.1-foss-2026.1.eb"),
+        r#"name = 'Python'
+version = '3.13.1'
+homepage = 'https://python.org'
+description = "Test Python provider"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+moduleclass = 'lang'
+"#,
+    )
+    .expect("write Python");
+    std::fs::write(
+        dir.join("Python-bundle-PyPI-2025.04-foss-2026.1.eb"),
+        format!(
+            r#"name = 'Python-bundle-PyPI'
+version = '2025.04'
+homepage = 'https://example.invalid/python-bundle-pypi'
+description = "Test bundle"
+toolchain = {{'name': 'foss', 'version': '2026.1'}}
+dependencies = [
+    ('Python', '3.13.1'),
+]
+exts_list = [
+{bundle_exts}
+]
+moduleclass = 'lang'
+"#
+        ),
+    )
+    .expect("write bundle");
+    for (filename, body) in extra_easyconfigs {
+        std::fs::write(dir.join(filename), body).expect("write extra easyconfig");
+    }
 }

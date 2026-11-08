@@ -1,8 +1,9 @@
 use eb_stack::package::{
-    package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr, ConditionPredicate,
-    Confidence, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
-    PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity, ResidualStage,
-    SourceArtifact, SourceSpan, PACKAGE_SCHEMA_VERSION,
+    materialize_profile, package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr,
+    ConditionPredicate, Confidence, DependencyIntent, DependencyRole, OutputRequest,
+    OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, ProductProfile,
+    ProfileEnvironment, Provenance, Residual, ResidualSeverity, ResidualStage, SourceArtifact,
+    SourceSpan, PACKAGE_SCHEMA_VERSION,
 };
 use eb_stack::Toolchain;
 use serde_json::Value;
@@ -419,4 +420,181 @@ fn a_gitlab_remote_does_not_invent_a_github_archive() {
         }),
         "{references:?}"
     );
+}
+
+// Ported from develop: tests main lacked by name.
+
+#[test]
+fn empty_architecture_keeps_not_ppc64le_and_x86_64_together() {
+    let not_ppc = ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+        ConditionPredicate::Architecture {
+            name: "ppc64le".into(),
+        },
+    )));
+    let x86 = ConditionExpr::Predicate(ConditionPredicate::Architecture {
+        name: "x86_64".into(),
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        not_ppc.evaluate(&context),
+        x86.evaluate(&context),
+        "unset architecture must not admit not-ppc64le while rejecting x86_64"
+    );
+}
+
+#[test]
+fn empty_platform_keeps_unix_and_linux_together() {
+    let unix = ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+        ConditionPredicate::Platform { name: "win".into() },
+    )));
+    let linux = ConditionExpr::Predicate(ConditionPredicate::Platform {
+        name: "linux".into(),
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        unix.evaluate(&context),
+        linux.evaluate(&context),
+        "unset platform must not admit unix while rejecting linux"
+    );
+}
+
+#[test]
+fn materialize_does_not_admit_caret_pkg_not_feat_without_dependency_features() {
+    let mut plan = qmcpack_plan();
+    plan.dependencies.push(DependencyIntent {
+        id: "dep:netcdf-c".into(),
+        name: "netcdf-c".into(),
+        eb_name: Some("netCDF".into()),
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+            dependency: "hdf5".into(),
+            name: "mpi".into(),
+            enabled: false,
+        }),
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: vec![provenance(
+            200,
+            "depends_on(\"netcdf-c\", when=\"^hdf5~mpi\")",
+        )],
+    });
+    let materialized = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("materialize default");
+    assert!(
+        materialized
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.name != "netcdf-c"),
+        "caret hdf5~mpi must not admit netcdf-c: {:?}",
+        materialized.dependencies
+    );
+}
+
+#[test]
+fn missing_dependency_features_keep_hdf5_plus_and_minus_mpi_together() {
+    let plus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+        dependency: "hdf5".into(),
+        name: "mpi".into(),
+        enabled: true,
+    });
+    let minus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+        dependency: "hdf5".into(),
+        name: "mpi".into(),
+        enabled: false,
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        plus.evaluate(&context),
+        minus.evaluate(&context),
+        "missing dependency features must not admit hdf5~mpi while rejecting hdf5+mpi"
+    );
+}
+
+#[test]
+fn not_opaque_is_not_true() {
+    let opaque = ConditionExpr::Opaque {
+        source: "py3k".into(),
+    };
+    let not_opaque = ConditionExpr::Not(Box::new(opaque.clone()));
+    let context = ConditionContext::default();
+    assert!(!opaque.evaluate(&context));
+    assert!(
+        !not_opaque.evaluate(&context),
+        "Not(Opaque) must stay unknown, not become Always"
+    );
+    assert!(!ConditionExpr::Not(Box::new(not_opaque.clone())).evaluate(&context));
+    assert!(ConditionExpr::Any(vec![ConditionExpr::Always, opaque.clone()]).evaluate(&context));
+    assert!(!ConditionExpr::All(vec![ConditionExpr::Always, opaque]).evaluate(&context));
+}
+
+#[test]
+fn only_a_64_hex_checksum_is_asserted_as_sha256() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].sha256 = Some("not-a-sha256".into());
+    plan.sources.push(SourceArtifact {
+        url: Some("https://example.invalid/extra.tar.gz".into()),
+        filename: None,
+        sha256: Some("ab".repeat(32)),
+        git: None,
+        tag: None,
+        commit: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    });
+    plan.sources.push(SourceArtifact {
+        url: Some("https://example.invalid/other.tar.gz".into()),
+        filename: None,
+        sha256: Some("cd".repeat(32)),
+        git: None,
+        tag: None,
+        commit: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    });
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let hashes = sbom["metadata"]["component"]["hashes"]
+        .as_array()
+        .expect("root hashes");
+    assert_eq!(hashes.len(), 1, "{hashes:?}");
+    assert_eq!(hashes[0]["alg"], "SHA-256");
+    assert_eq!(hashes[0]["content"], "ab".repeat(32));
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution_hashes: Vec<&str> = references
+        .iter()
+        .filter(|reference| reference["type"] == "distribution")
+        .filter_map(|reference| reference["hashes"][0]["content"].as_str())
+        .collect();
+    assert!(
+        distribution_hashes.contains(&"ab".repeat(32).as_str()),
+        "{references:?}"
+    );
+    assert!(
+        distribution_hashes.contains(&"cd".repeat(32).as_str()),
+        "{references:?}"
+    );
+}
+
+#[test]
+fn overlay_extensions_appear_as_versioned_components() {
+    let mut plan = qmcpack_plan();
+    plan.overlay_extensions = vec![OverlayExtension {
+        name: "soupsieve".into(),
+        version: "2.5".into(),
+        checksum: Some("ab".repeat(32)),
+    }];
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let components = sbom["components"].as_array().expect("components");
+    let leftover = components
+        .iter()
+        .find(|component| component["name"] == "soupsieve")
+        .expect("overlay extension component");
+    assert_eq!(leftover["version"], "2.5");
+    assert_eq!(leftover["hashes"][0]["content"], "ab".repeat(32));
 }
