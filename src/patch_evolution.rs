@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use crate::domain::{Candidate, Toolchain};
-use crate::eb_emit::{find_list_assignment_span, EmitError};
+use crate::eb_emit::{find_assignment_span, find_list_assignment_span, EmitError};
 
 /// What happens to one patch across the bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,17 +115,24 @@ pub fn sibling_paths(
     new_version: &str,
     candidates: &[Candidate],
     target_toolchain: &Toolchain,
+    versionsuffix: Option<&str>,
 ) -> Vec<String> {
+    let want_suffix = versionsuffix.unwrap_or("");
     let mut siblings: Vec<&Candidate> = candidates
         .iter()
-        .filter(|c| c.name == name && c.version == new_version && !c.easyconfig_path.is_empty())
+        .filter(|c| {
+            c.name == name
+                && c.version == new_version
+                && !c.easyconfig_path.is_empty()
+                && c.versionsuffix.as_deref().unwrap_or("") == want_suffix
+        })
         .collect();
     siblings.sort_by(|a, b| {
         let a_same = a.toolchain.name == target_toolchain.name;
         let b_same = b.toolchain.name == target_toolchain.name;
         b_same
             .cmp(&a_same)
-            .then_with(|| b.toolchain.version.cmp(&a.toolchain.version))
+            .then_with(|| crate::version::cmp_version(&b.toolchain.version, &a.toolchain.version))
             .then_with(|| a.easyconfig_path.cmp(&b.easyconfig_path))
     });
     siblings
@@ -218,16 +225,16 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
     let sibling_text = std::fs::read_to_string(Path::new(sibling_path))
         .map_err(|e| EmitError::Rewrite(format!("read sibling {sibling_path}: {e}")))?;
 
-    let ours = find_list_assignment_span(text, "patches")?;
-    let theirs = find_list_assignment_span(&sibling_text, "patches")?;
+    let ours = find_patches_span(text)?;
+    let theirs = find_patches_span(&sibling_text)?;
 
-    match (ours, theirs) {
-        (Some((our_start, our_end)), Some((their_start, their_end))) => Ok(format!(
+    let spliced = match (ours, theirs) {
+        (Some((our_start, our_end)), Some((their_start, their_end))) => format!(
             "{}{}{}",
             &text[..our_start],
             &sibling_text[their_start..their_end],
             &text[our_end..]
-        )),
+        ),
         (Some((our_start, our_end)), None) => {
             // Sibling ships the new version with no patches at all: the list
             // goes away, along with a trailing newline so no blank hole stays.
@@ -235,36 +242,224 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
             if text[end..].starts_with('\n') {
                 end += 1;
             }
-            Ok(format!("{}{}", &text[..our_start], &text[end..]))
+            format!("{}{}", &text[..our_start], &text[end..])
         }
         (None, Some((their_start, their_end))) => {
-            let block = &sibling_text[their_start..their_end];
-            if let Some(pos) = find_moduleclass_line(text) {
-                Ok(format!("{}{}\n{}", &text[..pos], block, &text[pos..]))
-            } else {
-                let sep = if text.ends_with('\n') { "" } else { "\n" };
-                Ok(format!("{text}{sep}{block}\n"))
-            }
+            insert_block_before_moduleclass(text, &sibling_text[their_start..their_end])
         }
+        (None, None) => text.to_string(),
+    };
+    adopt_sibling_checksum_block(&spliced, &sibling_text)
+}
+
+fn find_patches_span(text: &str) -> Result<Option<(usize, usize)>, EmitError> {
+    if let Some(span) = find_list_assignment_span(text, "patches")? {
+        return Ok(Some(span));
+    }
+    find_assignment_span(text, "patches")
+}
+
+fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String, EmitError> {
+    let ours = find_list_assignment_span(text, "checksums")?;
+    let theirs = find_list_assignment_span(sibling_text, "checksums")?;
+    match (ours, theirs) {
+        (Some((our_start, our_end)), Some((their_start, their_end))) => {
+            let spliced = format!(
+                "{}{}{}",
+                &text[..our_start],
+                &sibling_text[their_start..their_end],
+                &text[our_end..]
+            );
+            // Emit already wrote `--source-checksum` or a cleared `''` into
+            // the first slot. The sibling list is the patch hashes; the
+            // emitted source digest wins, including an empty slot.
+            Ok(keep_emitted_source_digest(text, &spliced))
+        }
+        (Some(_), None) => Ok(retain_source_checksum_only(text)),
+        (None, Some((their_start, their_end))) => Ok(insert_block_before_moduleclass(
+            text,
+            &sibling_text[their_start..their_end],
+        )),
         (None, None) => Ok(text.to_string()),
     }
+}
+
+fn retain_source_checksum_only(text: &str) -> String {
+    let Ok(Some((assign_start, assign_end))) = find_list_assignment_span(text, "checksums") else {
+        return text.to_string();
+    };
+    let Some((digest_start, digest_end)) = first_source_sha256_span(text) else {
+        return text.to_string();
+    };
+    let digest = &text[digest_start..digest_end];
+    format!(
+        "{}checksums = ['{digest}']{}",
+        &text[..assign_start],
+        &text[assign_end..]
+    )
+}
+
+fn insert_block_before_moduleclass(text: &str, block: &str) -> String {
+    if let Some(pos) = find_moduleclass_line(text) {
+        format!("{}{}\n{}", &text[..pos], block, &text[pos..])
+    } else {
+        let sep = if text.ends_with('\n') { "" } else { "\n" };
+        format!("{text}{sep}{block}\n")
+    }
+}
+
+fn is_sha256_hex(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_checksum_algorithm_token(token: &str) -> bool {
+    matches!(
+        token.trim().to_ascii_lowercase().as_str(),
+        "sha256" | "sha512" | "sha384" | "sha224" | "sha1" | "md5" | "adler32" | "crc32" | "size"
+    )
+}
+
+/// Span of the first source digest in the `checksums` list.
+/// An empty quoted token (`''`) is the cleared source slot after a
+/// version bump. A dict key (`{'file.tar.gz': '...'}`) is skipped so
+/// the value is the slot.
+fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
+    let (assign_start, assign_end) = find_list_assignment_span(text, "checksums").ok()??;
+    let block = &text[assign_start..assign_end];
+    let bytes = block.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        let quote = bytes[i];
+        if quote == b'\'' || quote == b'"' {
+            let tok_start = i + 1;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            if i >= bytes.len() {
+                return None;
+            }
+            let tok_end = i;
+            i += 1;
+            let tok = &block[tok_start..tok_end];
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b':' {
+                i = j + 1;
+                continue;
+            }
+            // Typed tuples put the algorithm first: ('sha256', hex). Skip it
+            // so the digest stays the source slot.
+            if is_checksum_algorithm_token(tok) {
+                continue;
+            }
+            // A version bump clears the source slot to ''. That empty token
+            // is still the source digest: keep it so a sibling list cannot
+            // fill a different artifact's hash.
+            if tok.is_empty() || is_sha256_hex(tok) {
+                return Some((assign_start + tok_start, assign_start + tok_end));
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
+fn keep_emitted_source_digest(before: &str, spliced: &str) -> String {
+    let Some((keep_start, keep_end)) = first_source_sha256_span(before) else {
+        return spliced.to_string();
+    };
+    let keep = &before[keep_start..keep_end];
+    let Some((slot_start, slot_end)) = first_source_sha256_span(spliced) else {
+        return insert_source_digest(spliced, keep);
+    };
+    if &spliced[slot_start..slot_end] == keep {
+        return spliced.to_string();
+    }
+    format!("{}{}{}", &spliced[..slot_start], keep, &spliced[slot_end..])
+}
+
+fn insert_source_digest(text: &str, digest: &str) -> String {
+    let Ok(Some((assign_start, assign_end))) = find_list_assignment_span(text, "checksums") else {
+        return text.to_string();
+    };
+    format!(
+        "{}checksums = ['{digest}']{}",
+        &text[..assign_start],
+        &text[assign_end..]
+    )
 }
 
 /// Whether a patch file name embeds a version-like token other than the
 /// version being bumped to. `OpenMPI-5.0.7_fix_gpfs.patch` pins 5.0.7 even
 /// when the bump is 5.0.8 -> 5.0.10, so matching only the old version would
 /// miss it; any foreign version pin makes applicability a guess.
+fn version_token_in_name(name: &str, version: &str) -> bool {
+    name.split(|character: char| !(character.is_ascii_alphanumeric() || character == '.'))
+        .any(|token| token == version)
+}
+
+fn strip_patch_suffix(name: &str) -> &str {
+    for suffix in [
+        ".patch.gz",
+        ".diff.gz",
+        ".patch.bz2",
+        ".diff.bz2",
+        ".patch.xz",
+        ".diff.xz",
+        ".patch.zst",
+        ".diff.zst",
+        ".patch",
+        ".diff",
+    ] {
+        if let Some(stem) = name.strip_suffix(suffix) {
+            return stem;
+        }
+    }
+    name
+}
+
+fn token_looks_like_version(token: &str) -> bool {
+    // Dotted (5.0.7), all-digit (1), or letterful (2023a, 1.0rc1). A
+    // letterful token is otherwise a silent carry: 2023a is neither
+    // dotted nor all-digit.
+    !token.is_empty()
+        && (token.contains('.')
+            || token.chars().all(|character| character.is_ascii_digit())
+            || token
+                .chars()
+                .any(|character| character.is_ascii_alphabetic()))
+}
+
 fn pins_other_version(patch: &str, new_version: &str) -> bool {
+    // `X-2.0.patch` and `X-2.0.patch.gz` tokenize as a glued suffix if
+    // the extension stays; those are a self-pin on 2.0, not foreign.
+    let patch = strip_patch_suffix(patch);
+    if version_token_in_name(patch, new_version) {
+        return false;
+    }
     let bytes = patch.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i].is_ascii_digit() {
             let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.') {
                 i += 1;
             }
             let token = patch[start..i].trim_end_matches('.');
-            if token.contains('.') && token != new_version {
+            if token != new_version && token_looks_like_version(token) {
                 return true;
             }
         } else {
@@ -305,13 +500,15 @@ mod tests {
     }
 
     fn candidate(name: &str, version: &str, toolchain: (&str, &str), path: &str) -> Candidate {
+        versionprefix: None,
+        easyblock: None,
         Candidate {
+            versionprefix: None,
             easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: tc(toolchain.0, toolchain.1),
             versionsuffix: None,
-            versionprefix: None,
             easyconfig_path: path.into(),
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
@@ -356,8 +553,30 @@ mod tests {
             candidate("X", "1.0", ("GCC", "15.2.0"), "tree/old.eb"),
             candidate("Y", "2.0", ("GCC", "15.2.0"), "tree/other.eb"),
         ];
-        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"));
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"), None);
         assert_eq!(ranked, vec!["tree/g15.eb", "tree/g14.eb", "tree/i.eb"]);
+    }
+
+    #[test]
+    fn sibling_ranking_uses_numeric_toolchain_versions() {
+        let cands = vec![
+            candidate("X", "2.0", ("GCC", "9.3.0"), "tree/g9.eb"),
+            candidate("X", "2.0", ("GCC", "13.2.0"), "tree/g13.eb"),
+        ];
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"), None);
+        assert_eq!(ranked, vec!["tree/g13.eb", "tree/g9.eb"]);
+    }
+
+    #[test]
+    fn sibling_paths_keep_the_unsuffixed_identity() {
+        let mut cuda = candidate("X", "2.0", ("GCC", "13.2.0"), "tree/cuda.eb");
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let cands = vec![
+            candidate("X", "2.0", ("GCC", "13.2.0"), "tree/cpu.eb"),
+            cuda,
+        ];
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "13.2.0"), None);
+        assert_eq!(ranked, vec!["tree/cpu.eb"]);
     }
 
     #[test]
@@ -378,6 +597,12 @@ mod tests {
     }
 
     #[test]
+    fn an_undotted_version_pin_is_undecided() {
+        let plan = plan_patch_evolution("2.0", &["X-1_fix.patch".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-1_fix.patch"]);
+    }
+
+    #[test]
     fn a_pin_on_any_foreign_version_is_undecided() {
         // The dropped OpenMPI patch pinned 5.0.7 while the bump was
         // 5.0.8 -> 5.0.10: matching only the source version misses it.
@@ -391,6 +616,74 @@ mod tests {
         let new = vec!["X-2.0_fix.patch".to_string()];
         let plan = plan_patch_evolution("2.0", &new, None);
         assert!(plan.undecided().is_empty());
+    }
+
+    #[test]
+    fn a_letterful_target_version_is_a_self_pin() {
+        let plan = plan_patch_evolution("1.0rc1", &["Pkg-1.0rc1_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        let plan = plan_patch_evolution("2024a", &["X-2024a_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2024a_fix.patch")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+    }
+
+    #[test]
+    fn a_foreign_letterful_version_is_undecided() {
+        let plan = plan_patch_evolution("2024a", &["X-2023a_fix.patch".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-2023a_fix.patch"]);
+        let plan = plan_patch_evolution("2024a", &["X-2024a_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2024a_fix.patch")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+    }
+
+    #[test]
+    fn a_self_pin_that_ends_at_the_patch_suffix_is_carried() {
+        let plan = plan_patch_evolution("2.0", &["X-2.0.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2.0.patch")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+        let plan = plan_patch_evolution("2.0", &["X-2.0.diff".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2.0.diff")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+        let plan = plan_patch_evolution("2.0", &["X-2.0.patch.gz".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2.0.patch.gz")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+        let plan = plan_patch_evolution("2.0", &["X-1.0.patch.gz".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-1.0.patch.gz"]);
     }
 
     #[test]
@@ -429,5 +722,183 @@ mod tests {
         let p = out.find("patches").unwrap();
         let m = out.find("moduleclass").unwrap();
         assert!(p < m, "{out}");
+    }
+
+    #[test]
+    fn source_without_checksums_gains_the_sibling_checksums_before_moduleclass() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let src_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let patch_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    '{src_hash}',\n    '{patch_hash}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = "name = 'X'\npatches = ['old.patch']\nmoduleclass = 'lib'\n";
+        let out = adopt_sibling_patch_block(ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains("new.patch"), "{out}");
+        assert!(out.contains(&format!("'{src_hash}'")), "{out}");
+        assert!(out.contains(&format!("'{patch_hash}'")), "{out}");
+        let c = out.find("checksums").expect("sibling checksums inserted");
+        let m = out.find("moduleclass").unwrap();
+        assert!(c < m, "{out}");
+    }
+
+    #[test]
+    fn sibling_checksum_splice_keeps_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    '{sib}',\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = ['{cli}']\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(&format!("'{cli}'")), "{out}");
+        assert!(!out.contains(&format!("'{sib}'")), "{out}");
+        assert!(out.contains(&format!("'{patch}'")), "{out}");
+    }
+
+    #[test]
+    fn typed_tuple_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    ('sha256', '{sib}'),\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [('sha256', '{cli}')]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(sib), "{out}");
+        assert!(out.contains(patch), "{out}");
+    }
+
+    #[test]
+    fn dict_typed_tuple_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    {{'app-2.0.tar.gz': ('sha256', '{sib}')}},\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [{{'app-2.0.tar.gz': ('sha256', '{cli}')}}]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(sib), "{out}");
+        assert!(out.contains(patch), "{out}");
+    }
+
+    #[test]
+    fn a_cleared_source_digest_keeps_the_empty_slot_when_sibling_is_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    '{sib}',\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = "name = 'X'\npatches = ['old.patch']\nchecksums = ['']\nmoduleclass = 'lib'\n";
+        let out = adopt_sibling_patch_block(ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(
+            !out.contains(sib),
+            "cleared source slot must not take the sibling tarball hash:\n{out}"
+        );
+        assert!(
+            out.contains("''"),
+            "cleared source digest must stay the empty slot:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("'{patch}'")),
+            "sibling patch hash is still the patch slot:\n{out}"
+        );
+    }
+
+    #[test]
+    fn sibling_without_checksums_drops_stale_patch_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        std::fs::write(&sib_path, "name = 'X'\nmoduleclass = 'lib'\n").unwrap();
+        let src = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let old = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = ['{src}', '{old}']\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(!out.contains("old.patch"), "{out}");
+        assert!(out.contains(&format!("'{src}'")), "{out}");
+        assert!(!out.contains(&format!("'{old}'")), "{out}");
+    }
+
+    #[test]
+    fn empty_sibling_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        std::fs::write(
+            &sib_path,
+            "patches = ['new.patch']\nchecksums = []\nmoduleclass = 'lib'\n",
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = ['{cli}']\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(&format!("'{cli}'")), "{out}");
+    }
+
+    #[test]
+    fn commented_checksum_is_not_the_source_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    '{sib}',\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [\n    # was '{stale}'\n    '{cli}',\n]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(stale), "{out}");
+        assert!(out.contains(patch), "{out}");
     }
 }
