@@ -631,3 +631,46 @@ fn howto_accel_fixture_lifts_cpu_lib_from_shared_gpu_prelude() {
         "GpuLib-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb"
     );
 }
+
+/// The CPU list carries its own footprint in the plan, like the prelude and
+/// every shard, so a controller reserves what that list needs rather than a
+/// default.
+#[test]
+fn lift_records_the_cpu_prerequisites_footprint() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("tree");
+    base_tree(&root);
+    let out = tmp.path().join("out-lift-footprint");
+    let run = run(
+        &root,
+        &out,
+        "AccelApp-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb\n\
+         AccelPeer-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb\n",
+        &["--lift-cpu-prerequisites"],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let plan = plan_json(&out);
+    let cpu = &plan["cpu_prerequisites"];
+    let footprint = cpu["inode_footprint"]
+        .as_u64()
+        .expect("the CPU list has an inode footprint");
+    let lines = cpu["modules"].as_array().unwrap().len() + cpu["roots"].as_array().unwrap().len();
+    assert!(lines >= 1, "{cpu}");
+    let overhead = plan["inode_budget"]["line_overhead"].as_u64().unwrap();
+    let default = plan["inode_budget"]["default_footprint"].as_u64().unwrap();
+    assert_eq!(footprint, default + overhead * lines as u64, "{cpu}");
+    assert!(
+        cpu["inode_peak_module"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("CpuLib/")),
+        "{cpu}"
+    );
+    let prelude = plan["prelude"]["inode_footprint"]
+        .as_u64()
+        .expect("the prelude keeps its footprint");
+    assert!(prelude >= overhead, "{}", plan["prelude"]);
+}
