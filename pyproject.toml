@@ -1,6 +1,6 @@
 [project]
 name = "eb-stack"
-version = "0.6.0"
+version = "0.6.1"
 description = "Turn conda-forge, Spack, and EasyBuild recipes into Resolvo-solved variants, CycloneDX SBOMs, and build-evaluated package bundles"
 readme = "README.md"
 requires-python = ">=3.12"

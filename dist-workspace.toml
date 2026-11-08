@@ -18,3 +18,8 @@ targets = [
 ]
 # Publish the binary as eb-stack; crate package is eb_stack.
 pr-run-mode = "plan"
+
+# dist asks for macos-14 for Apple silicon; GitHub cancels a job on that
+# label the second it is created, so the target builds on macos-15.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

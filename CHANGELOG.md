@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## 0.6.1 - 2026-11-08
+
+### Fixed
+
+- The Apple-silicon release build runs on `macos-15`. The `macos-14` job
+  dist asked for was cancelled the second it was created, on every
+  attempt, so the 0.5.3 and 0.6.0 releases never reached the host step.
+
 ## 0.6.0 - 2026-11-08
 
 ### Added

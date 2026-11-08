@@ -11866,7 +11866,7 @@ eb-stack --version
 ```
 
 ```text
-eb-stack 0.6.0
+eb-stack 0.6.1
 ```
 
 The how-tos name the flags for each command:
