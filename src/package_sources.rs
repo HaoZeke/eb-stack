@@ -900,6 +900,7 @@ pub fn discover_provider_candidates_for_hole(
         .iter()
         .filter(|candidate| package_identity(&candidate.name) == identity)
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
+        .filter(|candidate| hole.matches_versionsuffix(candidate.versionsuffix.as_deref()))
         .filter(|candidate| {
             source_toolchain_family_is_admitted(candidate, target_parent, hierarchy)
         })
@@ -915,6 +916,7 @@ pub fn discover_provider_candidates_for_hole(
         .iter()
         .filter(|candidate| package_identity(&candidate.name) == identity)
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
+        .filter(|candidate| hole.matches_versionsuffix(candidate.versionsuffix.as_deref()))
         .cloned()
         .collect::<Vec<_>>();
 
