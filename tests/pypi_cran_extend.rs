@@ -973,13 +973,7 @@ fn inspect_source_tree_pep518_marker_and_extra() {
         .iter()
         .find(|dep| dep.name == "tomli")
         .expect("tomli");
-    assert!(
-        tomli
-            .roles
-            .iter()
-            .any(|role| *role == DependencyRole::Build),
-        "{tomli:?}"
-    );
+    assert!(tomli.roles.contains(&DependencyRole::Build), "{tomli:?}");
     assert!(
         !matches!(tomli.condition, ConditionExpr::Always),
         "tomli must not be Always: {tomli:?}"
