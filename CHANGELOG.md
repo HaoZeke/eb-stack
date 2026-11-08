@@ -2,7 +2,14 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.6.2 - 2026-11-08
+
+### Changed
+
+- `rfc9162`, `rfc9162-tiles` and `rfc9162-log` come from crates.io at
+  exactly 0.8.1 instead of a git pin, so `cargo package` resolves them;
+  0.8.1 reads a partial tile a writer has widened through the widest one,
+  which a reader at a checkpoint behind the tail needs.
 
 ### Fixed
 
