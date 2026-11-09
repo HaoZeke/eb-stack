@@ -1491,18 +1491,19 @@ dependencies = [
 
 [[package]]
 name = "rfc9162"
-version = "0.6.1"
-source = "git+https://github.com/leidarljos/rfc9162?branch=main#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
+version = "0.9.0"
+source = "git+https://github.com/leidarljos/rfc9162?branch=main#3ef36e9f03c0be9be18bff66775c72adab7cec68"
 dependencies = [
  "sha2 0.10.9",
 ]
 
 [[package]]
 name = "rfc9162-tiles"
-version = "0.6.1"
-source = "git+https://github.com/leidarljos/rfc9162?branch=main#efe31c32a8a7026c4c6d975cac9f35ed2bee2e53"
+version = "0.9.0"
+source = "git+https://github.com/leidarljos/rfc9162?branch=main#3ef36e9f03c0be9be18bff66775c72adab7cec68"
 dependencies = [
  "ed25519-dalek",
+ "miniz_oxide",
  "rfc9162",
  "serde",
  "serde_json",
