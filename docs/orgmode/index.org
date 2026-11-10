@@ -10,148 +10,75 @@
        <img class="eb-hero-mark" src="_static/mark.svg" width="56" height="56" alt="" />
        <div>
          <p class="eb-hero-name">eb-stack</p>
-         <p class="eb-hero-sub">package plan · Resolvo · EasyBuild campaign</p>
+         <p class="eb-hero-sub">0.7.1</p>
        </div>
      </div>
-     <p class="eb-hero-tagline">Parse conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild into one canonical manifest and planned SBOM; solve product profiles with Resolvo; emit conventional recipes; build-evaluate them on a declarative target.</p>
-     <div class="eb-hero-pills">
-       <span>package plan</span>
-       <span>package bump</span>
-       <span>resolvo SAT</span>
-       <span>planned SBOM</span>
-       <span>typed campaigns</span>
-     </div>
-     <p class="eb-hero-flow">recipe → manifest + SBOM → profiles + Resolvo → .eb set → campaign evidence</p>
+     <p class="eb-hero-tagline">eb-stack reads conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild recipes into one package plan, writes a planned CycloneDX SBOM and a Resolvo lock per profile, emits one conventional easyconfig per profile, and drives those recipes through a persisted build campaign.</p>
    </div>
 
 ============
 ``eb-stack``
 ============
 
-:Author: `Rohit Goswami <https://rgoswami.me>`_
-
-A plan is not a build. ``package plan`` and ``package bump`` can establish only *resolves* (a Resolvo lock and an emitted recipe). Only ``campaign run`` establishes *builds* and *binary-verified*.
-
-Start with the :doc:`tutorial`. With no EasyBuild install, run the inspect snippet under *Inspect from a fresh clone*. Closure, generation, baseline, and reachability are in the :doc:`reference/glossary`.
-
-The GitHub release and the crates.io package (both 0.7.1) and a build from main carry ``stack gap``, ``stack oom``, ``stack from-commit``, ``rebuild-set``, ``pr-overlap``, and ``component-reach``.
-
-.. important::
-
-   *New here?* → :doc:`tutorial`
-
-   *Whole annual rebuild?* → :doc:`howto/run-annual-bump`
-
-   *New package from conda-forge/Spack?* → :doc:`howto/new-package`
-
-   *Site Python extras on the European Environment for Scientific Software Installations (EESSI)?* → :doc:`howto/pypi-extend`
-
-   *Site R extras on EESSI?* → :doc:`howto/cran-extend`
-
-   *eOn on EESSI with EESSI-extend?* → :doc:`howto/eon-eessi-extend`
-
-   *Spack on EESSI, EESSI installs as externals?* → :doc:`howto/spack-externals-eessi`
-
-   *Existing recipe bump?* → :doc:`howto/bump-recipe`
-
-   *Shared builds across open pull requests?* → :doc:`howto/pr-overlap`
-
-   *Find open easybuild-easyconfigs pull requests that add the same software?* → :doc:`howto/easyconfigs-pr-overlap`
-
-   *What an in-place patch forces EESSI to rebuild?* → :doc:`howto/rebuild-set`
-
-   *What does a version bump cost next to an in-place patch?* → :doc:`howto/rebuild-set`
-
-   *What a site module list lacks?* → :doc:`howto/stack-gap`
-
-   *Which modules carry a component?* → :doc:`howto/component-reach`
-
-   *Find from-commit pins an EasyBuild release already contains?* → :doc:`howto/from-commit-released`
-
-   *A plan an architecture cannot build?* → :doc:`howto/arch-unsupported`
-
-   *A patch the bot will not find?* → :doc:`howto/patch-presence`
-   *An easystack entry outside its EESSI version's generations?* → :doc:`howto/generation-lint`
-   *A build list that names software the baseline already provides?* → :doc:`howto/build-list-provided`
-   *Which route closes a module the stack does not have?* → :doc:`howto/module-gap`
-   *CUDA compute-capability mismatches in a plan?* → :doc:`howto/cuda-compute-capabilities`
-   *A test that fails on one architecture?* → :doc:`howto/arch-known-failures`
-   *A plan entry likely to run out of memory in a bot job?* → :doc:`howto/oom-profile`
-   *Which kind of FAILURE a bot job reported?* → :doc:`howto/bot-classify`
-
-   *Split one Jenkins build list into shards that build at once?* → :doc:`howto/stack-shard`
-
-   *Plan software-layer pull requests that do not overlap?* → :doc:`howto/stack-batch`
-
-   *Regroup a Jenkins build list under the previous sections?* → :doc:`howto/stack-sections`
-
-   *Write the YAML eb --easystack reads?* → :doc:`howto/stack-easystack`
-
-   *What easyblock, templates, and hierarchy would EasyBuild use?* → :doc:`howto/recipe-identity`
-
-   *What is the newest stable upstream release of a recipe?* → :doc:`howto/package-latest`
-
-   *Where does the reproduction grind stand?* → :doc:`howto/repro-summary`
-
-   *A site recipe that shadows an EESSI module?* → :doc:`howto/site-layer-shadow`
-
-   *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
-
-   *CLI surface?* → :doc:`reference/cli`
-
-   *Model Context Protocol server?* → :doc:`reference/mcp`
-
-   *Bundle schemas?* → :doc:`reference/package-bundles`
-
-   *Build targets?* → :doc:`reference/targets`
-
-   *Campaign findings?* → :doc:`reference/campaigns`
-
-   *Repair a failed campaign?* → :doc:`howto/repair-campaign`
+Version 0.7.1 is the crates.io package and the GitHub release. ``package plan`` and ``package bump`` establish *resolves*. ``campaign run`` establishes *builds* and *binary-verified*.
 
 .. grid:: 1 1 2 2
    :gutter: 2
 
-   .. grid-item-card:: Tutorial: package to verified build
+   .. grid-item-card:: Get started
+      :link: get-started
+      :link-type: doc
+
+      Inspect a bundled recipe, split a build list, and see exit 78.
+
+   .. grid-item-card:: Installation
+      :link: install
+      :link-type: doc
+
+      Release archives for Linux, macOS, and Windows, plus crates.io and a checkout.
+
+   .. grid-item-card:: Tutorial
       :link: tutorial
       :link-type: doc
 
-      Plan conda-forge eOn, inspect its lock/recipe, and drive a target campaign.
+      Plan conda-forge eOn and drive a target campaign.
 
-   .. grid-item-card:: Annual rebuild (operator)
-      :link: howto/run-annual-bump
+   .. grid-item-card:: Sharding and inode admission
+      :link: explanation/sharding-admission
       :link-type: doc
 
-      Generate canonical bump bundles, solve the stack, and repair typed findings.
+      How a build list becomes shards, and when a lane is refused.
 
-   .. grid-item-card:: Solve a stack lock
-      :link: howto/solve-lock
+   .. grid-item-card:: How-to guides
+      :link: howto/stack-shard
       :link-type: doc
 
-      Co-select a generation with Resolvo; emit lock and build list.
+      Task pages for build lists, bumps, campaigns, and site checks. The sidebar lists every guide.
 
-   .. grid-item-card:: Reproduction fidelity
-      :link: explanation/fidelity
+   .. grid-item-card:: Command reference
+      :link: reference/cli
       :link-type: doc
 
-      Frozen real-recipe regressions, empirical claims, and limitations.
+      Flags, exit statuses, and the Rust API.
 
-   .. grid-item-card:: Package bundle contract
-      :link: reference/package-bundles
+   .. grid-item-card:: Contributing
+      :link: contributing
       :link-type: doc
 
-      Manifest, planned SBOM, profile locks, residuals, and variant recipes.
+      Toolchain, tests, and how the manual is built.
 
-   .. grid-item-card:: Targets and campaigns
-      :link: reference/targets
+   .. grid-item-card:: Changelog
+      :link: changelog
       :link-type: doc
 
-      Layered routing, container isolation, persisted findings, and repairs.
+      Release notes from 0.3.0 through 0.7.1.
 
 .. toctree::
    :maxdepth: 1
    :caption: Getting Started
 
+   get-started
+   install
    tutorial
 
 .. toctree::
@@ -210,8 +137,9 @@ The GitHub release and the crates.io package (both 0.7.1) and a build from main 
 
 .. toctree::
    :maxdepth: 1
-   :caption: Explanation
+   :caption: Topics
 
+   explanation/sharding-admission
    explanation/lifecycle
    explanation/architecture
    explanation/optimization-model
@@ -229,150 +157,67 @@ The GitHub release and the crates.io package (both 0.7.1) and a build from main 
    changelog
 #+end_export
 
-* What it is
+* Why
 
 #+begin_export rst
 .. figure:: images/claim-ladder.svg
    :alt: Claim ladder from inspect through resolves, builds, and binary-verified
    :align: center
 
-   Independent claim ladder: planning establishes only *resolves*; campaigns own *builds* and *binary-verified*.
+   Claim ladder: package plan and package bump establish resolves. campaign run establishes builds and binary-verified.
 #+end_export
 
+  A site that rebuilds an EESSI or EasyBuild generation keeps the dependency
+  lock, the EasyBuild run, and the checks after install as separate records.
+  ~eb-stack~ names those records ~resolves~, ~builds~, and ~binary-verified~.
+  ~package plan~ and ~package bump~ establish ~resolves~. ~campaign run~
+  establishes the other two. The campaign JSON spells the third claim
+  ~binary_verified~. Closure, generation, baseline, toolchain family, and
+  reachability are in the [[file:reference/glossary.org][glossary]].
 
-  ~eb-stack~ parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN),
-  Cargo, LuaRocks, Raku, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
-  canonical package plan. It emits a planned CycloneDX Software Bill of Materials (SBOM), materializes
-  independently installable profiles, applies distribution/site preferences
-  inside [[https://github.com/mamba-org/resolvo][Resolvo]], writes one lock and conventional ~.eb~ file per profile,
-  and drives the resulting bundle through a persisted target-routed build
-  campaign. Existing-recipe bumps use the same manifest, SBOM, solver, and
-  campaign artifacts as new packages.
+  The same plan feeds a Jenkins build list. ~stack shard~ splits the list
+  into jobs that can run together, and ~stack admit~ exits 78 when the
+  scratch inode quota cannot hold the next lane. That model is
+  [[file:explanation/sharding-admission.org][Sharding and inode admission]].
 
-  Closure, generation, baseline, toolchain family, reachability, and the
-  claim ladder (~resolves~, ~builds~, ~binary-verified~) are defined in the
-  [[file:reference/glossary.org][glossary]]. The campaign JSON spells the third claim ~binary_verified~.
+  EasyBuild still performs the build and the install. ~eb-stack~ routes
+  ~eb --robot~ through a configured target. The emitted SBOM is the planned
+  inventory; binary verification is the campaign claim that runs after install.
+  The dependency domain is EasyBuild's ~name~ / ~version~ / ~toolchain~ /
+  ~dependencies~ shape. Preferences for a distribution or a site are inputs
+  to [[https://github.com/mamba-org/resolvo][Resolvo]].
 
-* What it is not
+* Who it is for
 
-  - *Not* an EasyBuild replacement. ~eb-stack~ routes ~eb --robot~ through a
-    configured target; EasyBuild still implements all build and install steps.
-  - *Not* a general-purpose Python dependency resolver. The domain model is
-    EasyBuild's ~name~ / ~version~ / ~toolchain~ / ~dependencies~ shape only.
-  - *Not* a post-install compliance scanner. The emitted SBOM is a *planned*
-    inventory. Binary verification is a separate campaign claim.
+  Site administrators building a stack start with
+  [[file:install.org][Installation]] and [[file:get-started.org][Get started]],
+  then the how-to guides in the sidebar (annual bump, new package, shard,
+  campaign repair). The GitHub release is 0.7.1, with archives for Linux
+  (x86-64, aarch64), macOS, and Windows. ~cargo install eb_stack --locked~
+  builds that same 0.7.1 from crates.io. ~eb-stack --version~ prints
+  ~eb-stack 0.7.1~.
 
-* Install
+  Contributors start at [[file:contributing.org][Contributing]]: Rust 1.90,
+  ~cargo test --locked~, and the Org-to-Sphinx build. The generated Rust API
+  is the [[file:reference/rust-api.org][Rust API]] page.
 
-  Rust 1.90 or newer. ~rustc~ 1.83 stops while reading the crate index:
-  the Cargo feature ~edition2024~ is not stabilized. With rustup:
+* Where to go
 
-#+begin_src bash
-rustup toolchain install stable
-rustup default stable
-rustc --version
-#+end_src
-
-  The GitHub release is 0.7.1, with installers and archives for Linux
-  (x86-64, aarch64), macOS and Windows, and it carries every command in
-  this manual; ~cargo install eb_stack --locked~ builds the same 0.7.1
-  from crates.io. A build of this tree prints ~0.7.1~. To build from main:
-
-#+begin_src bash
-git clone https://github.com/HaoZeke/eb-stack.git
-cd eb-stack
-cargo build --locked --release
-install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
-#+end_src
-
-  =~/.local/bin= is not on ~PATH~ until you add it. ~eb-stack --version~
-  then prints ~eb-stack 0.7.1~. ~cargo binstall~ is a separate program;
-  a stock ~cargo~ reports ~no such command: binstall~. The shell
-  installer from the GitHub release installs the 0.7.1 binary. The
-  contributor test suite is ~cargo test --locked~, on the
-  [[file:contributing.org][contributing]] page. It is not required before
-  the first solve.
-
-* Inspect from a fresh clone
-
-  The bundled conda-forge eOn recipe and public profile make the parser and
-  artifact boundary runnable without EasyBuild or an external robot tree:
-
-#+begin_src bash
-eb-stack package inspect \
-  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
-  --format conda-forge \
-  --toolchain foss/2026.1 \
-  --package-config examples/packages/common.toml \
-  --package-config examples/packages/eon.toml \
-  --out-dir /tmp/eon-inspect
-
-python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null
-python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
-#+end_src
-
-  The two files are the canonical build manifest and planned CycloneDX SBOM.
-  Inspection does not solve dependencies, emit recipes, or establish a build
-  claim; those stages need an EasyBuild robot tree and configured target.
-
-* Documentation map
-
-  - [[file:reference/glossary.org][Glossary]]: closure, generation, baseline, reachability, and the claim ladder.
-  - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]]: start here.
-  - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]]:
-    operator guide for a whole rebuild (what it closes, the residual, the
-    claim ladder, and the CI-known bumps).
-  - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]]:
-    canonical plan + profiles + Resolvo + campaign.
-  - How-to guides: [[file:howto/pypi-extend.org][site Python extras]],
-    [[file:howto/cran-extend.org][site R extras]],
-    [[file:howto/solve-lock.org][solve a stack lock]],
-    [[file:howto/stack-gap.org][classify a site module list]],
-    [[file:howto/repair-campaign.org][repair a failed campaign]],
-    [[file:howto/emit-reports.org][emit a build list and stack diff]],
-    [[file:howto/bump-recipe.org][bump a recipe]],
-    [[file:howto/root-priority.org][declare root priority]],
-    [[file:howto/easyblock-reach.org][which easyconfigs an easyblock change reaches]],
-    [[file:howto/pr-overlap.org][find shared builds across open pull requests]],
-    [[file:howto/easyconfigs-pr-overlap.org][find open easybuild-easyconfigs pull requests that add the same software]],
-    [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
-    [[file:howto/component-reach.org][which modules carry a component]],
-    [[file:howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]],
-    [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]],
-    [[file:howto/patch-presence.org][find a missing patch before the bot does]].
-    [[file:howto/generation-lint.org][refuse entries outside the EESSI version's generations]].
-    [[file:howto/build-list-provided.org][fail a build list that names software the baseline provides]].
-    [[file:howto/module-gap.org][route the modules a stack does not have]].
-    [[file:howto/cuda-compute-capabilities.org][check CUDA compute-capability mismatches in a plan]].
-    [[file:howto/arch-known-failures.org][warn about known per-architecture failures]].
-    [[file:howto/oom-profile.org][warn before a bot job runs out of memory]].
-    [[file:howto/bot-classify.org][read an EESSI bot FAILURE]],
-    [[file:howto/stack-shard.org][split a Jenkins build list into shards]],
-    [[file:howto/stack-batch.org][plan software-layer pull requests that do not overlap]],
-    [[file:howto/stack-sections.org][regroup a Jenkins build list under the previous sections]],
-    [[file:howto/stack-easystack.org][write an easystack from a stack lock]],
-    [[file:howto/recipe-identity.org][read the easyblock, templates, and hierarchy]],
-    [[file:howto/package-latest.org][report the newest stable upstream release]],
-    [[file:howto/repro-summary.org][read the reproduction scoreboard]],
-    [[file:howto/site-layer-shadow.org][report a site recipe that shadows an EESSI module]].
-  - Reference: [[file:reference/glossary.org][glossary]],
-    [[file:reference/cli.org][CLI]],
-    [[file:reference/rust-api.org][Rust API]],
+  - [[file:get-started.org][Get started]]: inspect, shard, and exit 78 on the bundled fixtures.
+  - [[file:install.org][Installation]]: per-platform release archives, crates.io, and a checkout.
+  - [[file:tutorial.org][Tutorial]]: conda-forge eOn through a target campaign.
+  - [[file:howto/run-annual-bump.org][Annual bump]] and
+    [[file:howto/new-package.org][a new package]].
+  - [[file:howto/stack-shard.org][Split a build list]] and
+    [[file:explanation/sharding-admission.org][the sharding topic]].
+  - [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],
     [[file:reference/targets.org][build targets]],
-    [[file:reference/campaigns.org][campaign state and findings]],
-    [[file:reference/policy.org][policy JSON schema]], and
-    [[file:reference/formats.org][whole-stack output formats]].
-  - Explanation: [[file:explanation/architecture.org][architecture]],
-    [[file:explanation/optimization-model.org][the optimization model]],
-    [[file:explanation/parser-approach.org][the parser approach]],
-    [[file:explanation/fidelity.org][reproduction fidelity and limitations]],
-    [[file:explanation/lifecycle.org][from recipe to installed stack]],
-    [[file:explanation/pr-overlap.org][from one easystack line to a build set]],
-    [[file:explanation/rebuild-set.org][what an in-place patch forces a rebuild of]],
+    [[file:reference/campaigns.org][campaign state]].
+  - [[file:explanation/lifecycle.org][From recipe to verified package]] and
     [[file:explanation/sbom-blast-radius.org][what a dependency closure answers]].
-  - Project: [[file:contributing.org][contributing]], [[file:changelog.org][changelog]].
+  - [[file:contributing.org][Contributing]] and [[file:changelog.org][Changelog]].
 
 * Citation
 

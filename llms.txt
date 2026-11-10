@@ -6,7 +6,9 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or newer builds it 
 
 ## Getting started
 
-- [eb-stack](https://eb-stack.rgoswami.me/index.html.md): eb-stack parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, Raku, and EasyBuild recipes into one canonical package plan.
+- [eb-stack](https://eb-stack.rgoswami.me/index.html.md): A site that rebuilds an EESSI or EasyBuild generation keeps the dependency lock, the EasyBuild run, and the checks after install as separate records.
+- [Get started](https://eb-stack.rgoswami.me/get-started.html.md): This path is for a site administrator. It uses a checkout of the repository and eb-stack 0.7.1 on PATH. The fixtures in the checkout are the inputs. Installation is how the binary gets onto PATH. A full EasyBuild
+- [Installation](https://eb-stack.rgoswami.me/install.html.md): eb-stack 0.7.1 is the crates.io package eb_stack and the GitHub release v0.7.1.
 - [Tutorial: foreign recipe to verified EasyBuild package](https://eb-stack.rgoswami.me/tutorial.html.md): This tutorial plans conda-forge eOn, explains the artifacts, and routes the result into a build campaign.
 
 ## How-to guides
@@ -59,8 +61,9 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or newer builds it 
 - [Policy JSON schema](https://eb-stack.rgoswami.me/reference/policy.html.md): A policy is the input that turns a universe of parsed easyconfig candidates into one selection.
 - [Output formats](https://eb-stack.rgoswami.me/reference/formats.html.md): - schema_version :: 1. - toolchain :: The policy's target toolchain (not necessarily every package's own toolchain field, though in practice they match). - generation_label :: Optional human label, e.g. "foss-2025b"
 
-## Explanation
+## Topics
 
+- [Sharding and inode admission](https://eb-stack.rgoswami.me/explanation/sharding-admission.html.md): A Jenkins build list for one node type is one file of easyconfig lines.
 - [From recipe to verified package](https://eb-stack.rgoswami.me/explanation/lifecycle.html.md): The lifecycle has three claims. Treating them as one is the main source of incorrect status reports. The campaign JSON field for the third claim is binary_verified; prose calls it binary-verified. Those names, and
 - [Architecture](https://eb-stack.rgoswami.me/explanation/architecture.html.md): eb-stack separates package intent, dependency selection, recipe emission, and empirical build evidence.
 - [The optimization model](https://eb-stack.rgoswami.me/explanation/optimization-model.html.md): eb-stack uses resolvo, a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) solver, as its feasibility core.

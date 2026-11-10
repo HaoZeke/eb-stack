@@ -27,7 +27,7 @@ FULL_NAME = "llms-full.txt"
 SECTION_FOR_PREFIX = (
     ("howto/", "How-to guides"),
     ("reference/", "Reference"),
-    ("explanation/", "Explanation"),
+    ("explanation/", "Topics"),
 )
 
 OPTIONAL_STEMS = {"contributing", "changelog"}
@@ -129,7 +129,7 @@ def page_title(source: str, name: str) -> str:
 def section_for(name: str) -> str:
     if name in OPTIONAL_STEMS:
         return "Optional"
-    if name in {"index", "tutorial"}:
+    if name in {"index", "tutorial", "get-started", "install"}:
         return "Getting started"
     for prefix, section in SECTION_FOR_PREFIX:
         if name.startswith(prefix):
@@ -348,7 +348,7 @@ def render_index(pages: list[dict[str, str]]) -> str:
         "Getting started",
         "How-to guides",
         "Reference",
-        "Explanation",
+        "Topics",
         "Skills",
         "Project",
         "Optional",

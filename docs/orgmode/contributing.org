@@ -3,7 +3,10 @@
 
 This page mirrors the repository ~CONTRIBUTING.md~ for the documentation
 site. The source of truth for development gates is the markdown file at the
-repo root; keep them aligned when you change either.
+repo root; keep them aligned when you change either. Site administrators
+start at [[file:get-started.org][Get started]] and
+[[file:install.org][Installation]]. The shard and inode model is
+[[file:explanation/sharding-admission.org][Sharding and inode admission]].
 
 * Development environment
 

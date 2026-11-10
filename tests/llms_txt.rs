@@ -30,7 +30,7 @@ fn llms_txt_matches_the_org_manual() {
         "## Getting started",
         "## How-to guides",
         "## Reference",
-        "## Explanation",
+        "## Topics",
         "## Skills",
         "## Project",
         "## Optional",

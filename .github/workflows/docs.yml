@@ -1,0 +1,77 @@
+# Build the Sphinx site. This workflow does not deploy, does not publish
+# GitHub Pages, and does not read secrets.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: prefix-dev/setup-pixi@v0.11.2
+        with:
+          cache: true
+          environments: docs
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install sphinx-rustdocgen
+        run: cargo install sphinx-rustdocgen --locked || cargo install sphinx-rustdocgen
+
+      - name: Docs venv with sphinxcontrib-rust
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-docs
+          .venv-docs/bin/pip install -U pip
+          .venv-docs/bin/pip install \
+            'sphinx>=9,<10' \
+            'shibuya>=2025.12.13,<2026' \
+            'sphinx-sitemap>=2.9,<3' \
+            'sphinx-copybutton>=0.5.2,<1' \
+            'sphinx-design>=0.6,<1' \
+            'sphinxcontrib-rust>=1,<2' \
+            'sphinx-rustdoc-postprocess>=0.1,<0.2'
+          .venv-docs/bin/python -c 'import sphinxcontrib_rust; print("ok")'
+
+      - name: llms.txt matches the Org manual
+        run: python3 scripts/gen-llms-txt.py --check
+
+      - name: Build documentation
+        run: pixi run -e docs docbld
+        env:
+          EB_STACK_DOCS_PYTHON: ${{ github.workspace }}/.venv-docs/bin/python
+
+      - name: Assert the site built
+        run: |
+          set -euo pipefail
+          test -s docs/source/index.rst
+          test -f docs/build/index.html
+          test -f docs/build/get-started.html
+          test -f docs/build/install.html
+          test -f docs/build/explanation/sharding-admission.html
+          test -f docs/build/search.html
+          test -f docs/build/changelog.html
+          test -f docs/build/contributing.html
+          test -f docs/build/reference/cli.html
+          test -f docs/build/reference/rust-api.html
+          test -f docs/build/crates/eb_stack/lib.html
+          grep -q 'Copyright (c) eb-stack developers' docs/build/index.html
+          grep -q 'stack admit' docs/build/explanation/sharding-admission.html
+          grep -q 'search' docs/build/index.html

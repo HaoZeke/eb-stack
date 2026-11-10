@@ -87,7 +87,8 @@ Keep these in lockstep on every release:
 5. `CHANGELOG.md`: move Unreleased notes into `## X.Y.Z - YYYY-MM-DD`
 6. `CITATION.cff`: add `date-released` when the version is published
 7. The version a recorded command prints: `README.md`, this file,
-   `docs/orgmode/index.org` (the install section), `docs/orgmode/contributing.org`,
+   `docs/orgmode/index.org` (the install section), `docs/orgmode/install.org`,
+   `docs/orgmode/get-started.org`, `docs/orgmode/contributing.org`,
    `docs/orgmode/changelog.org`, and
    `docs/orgmode/explanation/sbom-blast-radius.org`, whose `eb-stack --version`
    block `tests/sbom_page_drift.rs` compares with a fresh run; then

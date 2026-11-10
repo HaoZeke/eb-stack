@@ -10,7 +10,8 @@ shards need goes to ~prelude.list~, which builds first.
 
 Why you'd use it: a site build list for one CPU target is too long for
 one job, and a naive split rebuilds HDF5 in every shard. The prelude
-holds the shared dependencies once.
+holds the shared dependencies once. The footprint model and exit 78 are
+[[file:../explanation/sharding-admission.org][Sharding and inode admission]].
 
 * Split the fixture wave
 

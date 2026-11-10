@@ -1,0 +1,128 @@
+#+TITLE: Installation
+#+OPTIONS: toc:t num:nil author:nil
+
+~eb-stack~ 0.7.1 is the crates.io package ~eb_stack~ and the GitHub
+release ~v0.7.1~. The binary name is ~eb-stack~. A release archive is a prebuilt binary. Building from a checkout, or
+~cargo install eb_stack --locked~, needs Rust 1.90 or newer: that floor is ~rust-version~ in
+the root ~Cargo.toml~. ~rustup toolchain install stable~ provides a
+new enough compiler.
+
+After installation, the [[file:get-started.org][get started]] page runs
+inspect, shard, and admit on the fixtures in a checkout. Contributor
+builds are on the [[file:contributing.org][contributing]] page.
+
+* Linux and macOS
+
+The shell installer picks the archive for the host:
+
+| Host | Archive |
+|-
+| Linux x86-64 | ~eb_stack-x86_64-unknown-linux-gnu.tar.xz~ |
+| Linux aarch64 | ~eb_stack-aarch64-unknown-linux-gnu.tar.xz~ |
+| macOS Apple silicon | ~eb_stack-aarch64-apple-darwin.tar.xz~ |
+| macOS x86-64 | ~eb_stack-x86_64-apple-darwin.tar.xz~ |
+
+#+begin_src bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.1/eb_stack-installer.sh \
+  | sh
+eb-stack --version
+#+end_src
+
+The script prints ~downloading eb_stack 0.7.1~ and the target triple,
+then ~installing to~ the Cargo bin directory (~$CARGO_HOME/bin~, or
+~~/.cargo/bin~ when ~CARGO_HOME~ is unset), then ~everything's installed!~.
+~eb-stack --version~ prints:
+
+#+begin_example
+eb-stack 0.7.1
+#+end_example
+
+Add that bin directory to ~PATH~ when it is absent from the shell's ~PATH~.
+
+* Linux x86-64 archive
+
+The checksum file from the release is a ~sha256sum~ line. The archive
+contains ~eb-stack~, ~LICENSE~, ~README.md~, and ~CHANGELOG.md~.
+
+#+begin_src bash
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.1/eb_stack-x86_64-unknown-linux-gnu.tar.xz
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.1/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
+sha256sum -c eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
+tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
+./eb_stack-x86_64-unknown-linux-gnu/eb-stack --version
+#+end_src
+
+#+begin_example
+eb_stack-x86_64-unknown-linux-gnu.tar.xz: OK
+eb-stack 0.7.1
+#+end_example
+
+The checksum published for 0.7.1 is
+~2e7dc571286fef9b214c04d1d870f4ceb79c5ed659eafb29748fc16c631e92da~.
+
+* Windows
+
+The release archive is
+~eb_stack-x86_64-pc-windows-msvc.zip~. It contains ~eb-stack.exe~,
+~LICENSE~, ~README.md~, and ~CHANGELOG.md~. The PowerShell installer on
+the same release is ~eb_stack-installer.ps1~; its help says it unpacks
+the archive into ~$env:CARGO_HOME/bin~ (or ~$HOME/.cargo/bin~) and adds
+that directory to the user ~Path~.
+
+#+begin_src bash
+curl -fsSL -o eb_stack-x86_64-pc-windows-msvc.zip \
+  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.1/eb_stack-x86_64-pc-windows-msvc.zip
+unzip -l eb_stack-x86_64-pc-windows-msvc.zip
+#+end_src
+
+#+begin_example
+Archive:  eb_stack-x86_64-pc-windows-msvc.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+    98204  2026-11-08 18:27   CHANGELOG.md
+ 26136064  2026-11-08 18:27   eb-stack.exe
+     1142  2026-11-08 18:27   LICENSE
+    25363  2026-11-08 18:27   README.md
+---------                     -------
+ 26260773                     4 files
+#+end_example
+
+* crates.io
+
+#+begin_src bash
+cargo install eb_stack --locked
+eb-stack --version
+#+end_src
+
+~cargo install~ builds the 0.7.1 crate. The resulting ~eb-stack --version~
+prints ~eb-stack 0.7.1~, the same string as the GitHub release binary.
+~cargo binstall~ is a separate program. Stock Cargo on this host
+answers:
+
+#+begin_src bash
+cargo binstall
+#+end_src
+
+#+begin_example
+error: no such command: `binstall`
+#+end_example
+
+* From a git checkout
+
+#+begin_src bash
+git clone https://github.com/HaoZeke/eb-stack.git
+cd eb-stack
+cargo build --locked --release
+install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
+eb-stack --version
+#+end_src
+
+A release build of this tree prints:
+
+#+begin_example
+eb-stack 0.7.1
+#+end_example
+
+~=~/.local/bin~ has to be on ~PATH~. The test suite is ~cargo test
+--locked~, described on the [[file:contributing.org][contributing]] page.

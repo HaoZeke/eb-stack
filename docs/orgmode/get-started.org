@@ -1,0 +1,115 @@
+#+TITLE: Get started
+#+OPTIONS: toc:t num:nil author:nil
+
+This path is for a site administrator. It uses a checkout of the
+repository and ~eb-stack~ 0.7.1 on ~PATH~. The fixtures in the checkout
+are the inputs. [[file:install.org][Installation]] is how the binary
+gets onto ~PATH~. A full EasyBuild campaign is the
+[[file:tutorial.org][tutorial]]. People changing the tool start at
+[[file:contributing.org][Contributing]].
+
+The commands below were run with the 0.7.1 binary. ~--version~ prints
+the version the binary was built as.
+
+* Confirm the binary
+
+#+begin_src bash
+eb-stack --version
+#+end_src
+
+#+begin_example
+eb-stack 0.7.1
+#+end_example
+
+* Inspect a conda-forge recipe
+
+~package inspect~ writes the canonical manifest and the planned
+CycloneDX software bill of materials. The glossary names the later rungs ~resolves~, ~builds~, and
+~binary-verified~. Inspect stops before a Resolvo lock, so those rungs
+stay unset. The names are in the
+[[file:reference/glossary.org][glossary]].
+
+#+begin_src bash
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
+  --toolchain foss/2026.1 \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
+  --out-dir /tmp/eon-inspect
+
+python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null
+python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
+#+end_src
+
+#+begin_example
+manifest=/tmp/eon-inspect/package.plan.json
+sbom=/tmp/eon-inspect/package.sbom.cdx.json
+#+end_example
+
+~python3 -m json.tool~ exits 0 for both files.
+
+* Split one build list
+
+~tests/stack_shard_fixtures/wave1.list~ is four lines: OpenFOAM,
+ParaView, PETSc, and Hypre. PETSc depends on Hypre, so those two lines
+share a shard. OpenFOAM and ParaView both need HDF5 and Szip; OpenFOAM
+and PETSc both need MathLib. Those shared modules go to the prelude.
+The model is [[file:explanation/sharding-admission.org][Sharding and inode admission]].
+The same fixture, with the flags for fetched commits and accelerator
+roots, is [[file:howto/stack-shard.org][Split a Jenkins build list into shards]].
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/wave1.list \
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \
+  --installed tests/stack_shard_fixtures/installed.txt \
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \
+  --shards 4 \
+  --generated-at 2026-11-03T00:00:00Z \
+  --out-dir /tmp/docs-shards
+#+end_src
+
+#+begin_example
+shards=3 prelude=3 lines=4
+#+end_example
+
+~--shards 4~ is an upper bound. Three groups exist, so three shard files
+are written. ~/tmp/docs-shards/prelude.list~ holds Szip, HDF5, and
+MathLib. The PETSc shard lists Hypre first.
+
+* Refuse a job the quota cannot hold
+
+~stack admit~ is the check a controller runs before it starts one lane.
+The quota below has 100000 inodes left under the soft limit
+(~3000000 - 2900000~). The lane's footprint is 351000 and the margin is
+100000, so the headroom is ~100000 - 351000 - 100000 = -351000~. The
+process exits 78. The reservation directory stays empty.
+
+#+begin_src bash
+mkdir -p /tmp/eb-stack-docs/admit-no
+cat > /tmp/eb-stack-docs/quota-tight.json <<'EOF'
+{"inodes_used": 2900000, "inodes_soft": 3000000, "inodes_hard": 3500000}
+EOF
+eb-stack stack admit \
+  --quota-json /tmp/eb-stack-docs/quota-tight.json \
+  --footprint 351000 \
+  --margin 100000 \
+  --job lane-1 \
+  --reservations /tmp/eb-stack-docs/admit-no \
+  --ts 2026-11-10T12:00:00Z
+#+end_src
+
+#+begin_example
+{"admitted":false,"available":100000,"counted":[],"footprint":351000,"grace":null,"hard":3500000,"headroom":-351000,"job":"lane-1","live_jobs":null,"live_jobs_cmd":null,"lock":null,"lock_kind":null,"margin":100000,"refusal":null,"reservation":null,"reserved":0,"soft":3000000,"soft_exceeded":false,"stale":[],"stale_dropped":false,"ts":"2026-11-10T12:00:00Z","unknown":[],"unknown_reserved":0,"used":2900000}
+#+end_example
+
+The exit status is 78. Exit statuses for the rest of the CLI are in the
+[[file:reference/cli.org][command-line reference]].
+
+* Next
+
+- [[file:explanation/sharding-admission.org][Sharding and inode admission]] for the footprint, the concurrent cap, and the GPFS grace period.
+- [[file:howto/stack-shard.org][Split a Jenkins build list into shards]] for CPU prerequisites and ~--from-commit~ lines.
+- [[file:tutorial.org][Tutorial]] to plan eOn and run a campaign on a target.
+- [[file:contributing.org][Contributing]] to build the manual and run the test suite.

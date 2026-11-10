@@ -7,8 +7,8 @@ import sys
 from docutils import nodes
 
 project = "eb-stack"
-copyright = "2026, Rohit Goswami"
-author = "Rohit Goswami"
+copyright = "Copyright (c) eb-stack developers"
+author = "eb-stack developers"
 release = "0.7.1"
 
 # -- General configuration ---------------------------------------------------
@@ -86,12 +86,16 @@ html_theme_options = {
     "dark_logo": "_static/logo-dark.svg",
     "nav_links": [
         {
-            "title": "Tutorial",
-            "url": "tutorial",
+            "title": "Get started",
+            "url": "get-started",
         },
         {
-            "title": "Annual bump",
-            "url": "howto/run-annual-bump",
+            "title": "Install",
+            "url": "install",
+        },
+        {
+            "title": "Sharding",
+            "url": "explanation/sharding-admission",
         },
         {
             "title": "CLI",

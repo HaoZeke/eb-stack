@@ -1,0 +1,220 @@
+#+TITLE: Sharding and inode admission
+#+OPTIONS: toc:t num:nil author:nil
+
+A Jenkins build list for one node type is one file of easyconfig lines.
+~stack shard~ splits that file into shard lists that can build at the
+same time, plus a prelude of the modules those shards share. ~stack
+admit~ is the gate in front of each lane: it exits 0 and writes a
+reservation when the scratch inode quota can hold the lane, and exits
+78 when it cannot. The commands are
+[[file:../howto/stack-shard.org][Split a Jenkins build list into shards]]
+and the [[file:../reference/cli.org][command-line reference]]. A short
+run on the bundled fixture is [[file:../get-started.org][Get started]].
+
+#+begin_src dot :file ../images/sharding-admission.svg :exports results
+digraph A {
+  graph [fontname="Jost", fontsize=12, rankdir=TB, splines=true, bgcolor="transparent"];
+  node  [fontname="Jost", fontsize=11, shape=box, style="rounded,filled",
+         fillcolor="white", color="#004D40", fontcolor="#004D40"];
+  edge  [fontname="Jost", fontsize=10, color="#004D40"];
+
+  list     [label="build list\none node type"];
+  closure  [label="closure of each line\nminus installed modules"];
+  groups   [label="one shard when a line's\neasyconfig sits in\nanother line's closure"];
+  prelude  [label="prelude.list\nmodules two or more\nshards need", fillcolor="#F1DB4B"];
+  shards   [label="shard-NN.list\ninput lines, verbatim"];
+  foot     [label="inode footprint\nlargest module\n+ 1000 inodes per line"];
+  cap      [label="max_concurrent_shards\nlargest shards first\nunder quota minus margin", fillcolor="#004D40", fontcolor="white"];
+  admit    [label="stack admit\nlock, then quota\nand live jobs"];
+  ok       [label="exit 0\n<job>.json", fillcolor="#004D40", fontcolor="white"];
+  refuse   [label="exit 78\nno reservation", fillcolor="#FF655D", fontcolor="white"];
+
+  list -> closure -> groups;
+  groups -> prelude;
+  groups -> shards -> foot -> cap -> admit;
+  admit -> ok;
+  admit -> refuse;
+}
+#+end_src
+
+* What shares a shard
+
+A line's set is its closure over ~--easyconfigs~, with modules that are
+already installed removed. Two lines share a shard only when one line's
+easyconfig is in the other's set. Every other module that two or more
+shards need is written to ~prelude.list~, which builds first. ~--shards~
+is an upper bound: the command writes one file per group, and fewer
+files when fewer groups exist.
+
+Lines stay verbatim, including ~--hooks~, ~--include-easyblocks~, and
+~--from-commit~. A dependency that is itself a line of the build list
+stays in that shard and is ordered first. zlib installed through the
+module tree, or CMake listed in ~--installed~, is left out of both the
+prelude and the shards.
+
+* Footprints
+
+A shard builds its modules one after another, so one build tree is on
+scratch at a time. The shard's ~inode_footprint~ is the largest module
+footprint in the shard, plus ~--inode-line-overhead~ inodes (1000) for
+each build-list line in the shard. The extra inodes are the tarballs,
+the EasyBuild tmpdir, and the logs that line leaves until the job ends.
+
+The prelude is one job. Its footprint uses the same largest-module rule
+and a single 1000-inode overhead when the prelude has any module.
+
+A module's footprint is the software name's entry in
+~--inode-footprints~. That file is the ~footprints.json~ from ~stack
+footprints~, or a flat object such as ~{"CP2K": 350000}~. With no file,
+the built-in class table applies:
+
+| Software | Inodes |
+|-
+| CP2K | 350000 |
+| LAMMPS, PyTorch, SeisSol, NVHPC, intel, intel-compilers | 150000 |
+| any other package | 60000 |
+
+~stack footprints~ fills the table from ledger records whose ~build~
+object carries ~inodes_peak~, then from a static ~Name<TAB>inodes~
+table, then from the classes. When a ledger peak and a table line both
+name a package, the larger value is kept.
+
+* How many shards run at once
+
+~--inode-quota~ and ~--inode-margin~ (100000) set a budget of quota
+minus margin. ~max_concurrent_shards~ is how many shard footprints fit
+in that budget, taking the largest first. The prelude is a separate job
+and is left out of that sum. A shard whose own footprint is above the
+budget fails the command, and the command writes nothing. The quota
+changes ~plan.json~ and the summary line. The shard list files are the
+same files the command writes without the quota flags.
+
+The bundled wave is four lines and three shards. With
+~--inode-quota 250000~ and ~--inode-margin 100000~ the budget is
+150000. The Hypre/PETSc shard is 62000 (the default 60000 for Hypre,
+plus 2000 for two lines). ParaView and OpenFOAM are 61000 each. The
+prelude is 61000, peak Szip. Two shard footprints sum to 123000, inside the budget; three sum to
+184000, over the budget. The summary reports ~max_concurrent=2~.
+
+#+begin_src bash
+eb-stack stack shard \
+  --build-list tests/stack_shard_fixtures/wave1.list \
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \
+  --installed tests/stack_shard_fixtures/installed.txt \
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \
+  --shards 4 \
+  --inode-quota 250000 \
+  --inode-margin 100000 \
+  --generated-at 2026-11-03T00:00:00Z \
+  --out-dir /tmp/docs-shards-quota
+#+end_src
+
+#+begin_example
+shards=3 prelude=3 lines=4 max_concurrent=2
+#+end_example
+
+* Admission
+
+The controller asks ~stack admit~ while it holds ~--lock~, so the quota
+observation and the reservation write are one step. ~--lock-kind posix~
+is the fcntl record lock a Python ~lockf~ takes on the same file;
+~flock~ is the default. The two kinds are separate lock spaces.
+~--quota-cmd~ and ~--live-jobs-cmd~ run inside the lock. A list of job
+ids expanded by the shell before the lock can miss a job that reserved
+in between.
+
+The quota document is ~inodes_available~, or ~inodes_used~ together with
+the limits. Which limit governs follows GPFS:
+
+- ~inodes_soft~ when ~inodes_grace~ is absent or ~none~
+- ~inodes_hard~ while ~inodes_grace~ is a remaining time, such as ~6 days~
+- ~inodes_soft~ again when ~inodes_grace~ is ~expired~
+
+~soft_exceeded~ in the decision is true when used inodes are above the
+soft limit. Headroom is available inodes, minus reservations of jobs
+that are still running, minus this job's footprint, minus the margin.
+The job's own earlier reservation is left out of the sum, so a retry is
+judged on the other jobs. A live job with no reservation counts
+~--unknown-reserve~ inodes (0 unless the controller sets it). A
+reservation whose job is absent from the live list is stale: ignored,
+and deleted only with ~--drop-stale~.
+
+Exit 0 writes ~<job>.json~ (~job~, ~footprint~, ~margin~, ~ts~) under
+~--reservations~. Exit 78 writes nothing. A quota command or a scheduler
+command that fails also exits 78, and the JSON ~refusal~ field says why.
+A reservation file that is unreadable exits 1, because a reservation
+that cannot be parsed would hide inodes.
+
+With 2900000 inodes used and a soft limit of 3000000, 100000 inodes are
+available. A footprint of 351000 and a margin of 100000 leave a
+headroom of -351000.
+
+#+begin_src bash
+mkdir -p /tmp/eb-stack-docs/admit-no
+cat > /tmp/eb-stack-docs/quota-tight.json <<'EOF'
+{"inodes_used": 2900000, "inodes_soft": 3000000, "inodes_hard": 3500000}
+EOF
+eb-stack stack admit \
+  --quota-json /tmp/eb-stack-docs/quota-tight.json \
+  --footprint 351000 \
+  --margin 100000 \
+  --job lane-1 \
+  --reservations /tmp/eb-stack-docs/admit-no \
+  --ts 2026-11-10T12:00:00Z
+#+end_src
+
+#+begin_example
+{"admitted":false,"available":100000,"counted":[],"footprint":351000,"grace":null,"hard":3500000,"headroom":-351000,"job":"lane-1","live_jobs":null,"live_jobs_cmd":null,"lock":null,"lock_kind":null,"margin":100000,"refusal":null,"reservation":null,"reserved":0,"soft":3000000,"soft_exceeded":false,"stale":[],"stale_dropped":false,"ts":"2026-11-10T12:00:00Z","unknown":[],"unknown_reserved":0,"used":2900000}
+#+end_example
+
+The process exits 78.
+
+The same used count above the soft limit, with grace still running,
+draws on the hard limit: ~3500000 - 3100000 = 400000~ available. A
+200000 footprint and a 100000 margin leave 100000 of headroom, and the
+command admits the job. ~soft_exceeded~ is true.
+
+#+begin_src bash
+mkdir -p /tmp/eb-stack-docs/admit-grace
+cat > /tmp/eb-stack-docs/quota-grace.json <<'EOF'
+{"inodes_used": 3100000, "inodes_soft": 3000000, "inodes_hard": 3500000, "inodes_grace": "6 days"}
+EOF
+eb-stack stack admit \
+  --quota-json /tmp/eb-stack-docs/quota-grace.json \
+  --footprint 200000 \
+  --margin 100000 \
+  --job lane-1 \
+  --reservations /tmp/eb-stack-docs/admit-grace \
+  --ts 2026-11-10T12:00:00Z
+#+end_src
+
+#+begin_example
+{"admitted":true,"available":400000,"counted":[],"footprint":200000,"grace":"6 days","hard":3500000,"headroom":100000,"job":"lane-1","live_jobs":null,"live_jobs_cmd":null,"lock":null,"lock_kind":null,"margin":100000,"refusal":null,"reservation":"/tmp/eb-stack-docs/admit-grace/lane-1.json","reserved":0,"soft":3000000,"soft_exceeded":true,"stale":[],"stale_dropped":false,"ts":"2026-11-10T12:00:00Z","unknown":[],"unknown_reserved":0,"used":3100000}
+#+end_example
+
+The process exits 0. The reservation is the JSON object ~job~,
+~footprint~, ~margin~, and ~ts~.
+
+After the grace period the soft limit governs again. Used inodes are
+already above it, so available is 0 and the same footprint is refused
+with exit 78. ~grace~ in the JSON line is ~expired~.
+
+#+begin_src bash
+mkdir -p /tmp/eb-stack-docs/admit-expired
+cat > /tmp/eb-stack-docs/quota-expired.json <<'EOF'
+{"inodes_used": 3100000, "inodes_soft": 3000000, "inodes_hard": 3500000, "inodes_grace": "expired"}
+EOF
+eb-stack stack admit \
+  --quota-json /tmp/eb-stack-docs/quota-expired.json \
+  --footprint 200000 \
+  --margin 100000 \
+  --job lane-1 \
+  --reservations /tmp/eb-stack-docs/admit-expired \
+  --ts 2026-11-10T12:00:00Z
+#+end_src
+
+#+begin_example
+{"admitted":false,"available":0,"counted":[],"footprint":200000,"grace":"expired","hard":3500000,"headroom":-300000,"job":"lane-1","live_jobs":null,"live_jobs_cmd":null,"lock":null,"lock_kind":null,"margin":100000,"refusal":null,"reservation":null,"reserved":0,"soft":3000000,"soft_exceeded":true,"stale":[],"stale_dropped":false,"ts":"2026-11-10T12:00:00Z","unknown":[],"unknown_reserved":0,"used":3100000}
+#+end_example
+
+The process exits 78.

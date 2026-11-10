@@ -127,6 +127,9 @@ an EasyBuild robot tree and a configured build target.
 
 The manual is organized around operator tasks:
 
+- [get started](docs/orgmode/get-started.org) on the bundled fixtures;
+- [installation](docs/orgmode/install.org) for Linux, macOS, Windows, crates.io, and a checkout;
+- [sharding and inode admission](docs/orgmode/explanation/sharding-admission.org);
 - [foreign recipe to verified package](docs/orgmode/tutorial.org);
 - [package bundle schemas](docs/orgmode/reference/package-bundles.org);
 - [layered build targets](docs/orgmode/reference/targets.org);
