@@ -6,7 +6,7 @@ timeout = 20
 accept = [200, 206, 429, 500, 502, 503, 504]
 # GitHub occasionally answers 5xx on a pull-request URL during a full-site crawl.
 max_retries = 5
-retry_wait_time = "2s"
+retry_wait_time = 2
 
 # Package, site, and repository URLs may 404 until each public surface is published.
 # github.com/example is used only for structured artifact examples.
