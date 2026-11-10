@@ -72,6 +72,9 @@ jobs:
           test -f docs/build/reference/cli.html
           test -f docs/build/reference/rust-api.html
           test -f docs/build/crates/eb_stack/lib.html
+          # Sphinx splits code literals into per-word <span class="pre"> elements,
+          # so multi-word phrases only exist in the tag-stripped text.
+          shard_text=$(sed -e 's/&#160;/ /g' -e 's/<[^>]*>//g' docs/build/explanation/sharding-admission.html)
           grep -q 'Copyright (c) eb-stack developers' docs/build/index.html
-          grep -q 'stack admit' docs/build/explanation/sharding-admission.html
+          grep -q 'stack admit' <<<"$shard_text"
           grep -q 'search' docs/build/index.html
