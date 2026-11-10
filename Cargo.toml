@@ -116,9 +116,9 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
 # RFC 9162 Merkle log for `ledger`, plus tiled/indexed storage.
 # A shared source gives both crates the same Merkle tree types.
 # Exact versions define registry dependencies, and the revision fixes development source.
-rfc9162 = "=0.8.1"
-rfc9162-tiles = "=0.8.1"
-rfc9162-log = "=0.8.1"
+rfc9162 = { version = "=0.9.0", git = "https://github.com/leidarljos/rfc9162", rev = "7822543636525bec7346d903ebb13a4867266d7d" }
+rfc9162-tiles = { version = "=0.9.0", git = "https://github.com/leidarljos/rfc9162", rev = "7822543636525bec7346d903ebb13a4867266d7d" }
+rfc9162-log = { version = "=0.9.0", git = "https://github.com/leidarljos/rfc9162", rev = "7822543636525bec7346d903ebb13a4867266d7d" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
