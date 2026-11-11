@@ -1460,11 +1460,18 @@ mod tests {
         }];
         let text = "checksums = []\n";
         let rewritten = rewrite_crate_checksums(text, &BTreeSet::new(), &crates);
-        assert!(rewritten.lines().all(|line| line.chars().count() <= 120), "{rewritten}");
+        assert!(
+            rewritten.lines().all(|line| line.chars().count() <= 120),
+            "{rewritten}"
+        );
         let recipe = crate::eb_parse::resolve_easyconfig_str(&format!(
             "name = Demo\nversion = 1\ntoolchain = SYSTEM\n{rewritten}"
-        )).unwrap();
-        assert_eq!(recipe.checksums_by_filename[&format!("{name}-{version}.tar.gz")], digest);
+        ))
+        .unwrap();
+        assert_eq!(
+            recipe.checksums_by_filename[&format!("{name}-{version}.tar.gz")],
+            digest
+        );
     }
 
     #[test]
