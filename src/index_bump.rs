@@ -48,7 +48,7 @@ pub(crate) fn rewrite_fetched_recipe(
     };
     let mut text = text.to_string();
     if list_body(&text, "crates").is_some() {
-        match rewrite_crates(&text, &recipe, archives, client) {
+        match rewrite_crates(&text, &recipe, prior, archives, client) {
             Ok((rewritten, notes)) => {
                 text = rewritten;
                 residuals.extend(notes);
@@ -85,6 +85,7 @@ struct GitSource {
 fn rewrite_crates(
     text: &str,
     recipe: &ResolvedEasyconfig,
+    prior: Option<&ResolvedEasyconfig>,
     archives: &[FetchedArchive<'_>],
     client: &dyn RegistryClient,
 ) -> Result<(String, Vec<Residual>), String> {
@@ -99,7 +100,10 @@ fn rewrite_crates(
             .to_string()
     })?;
     let (app_in_cratesio, crates) = locked_crates(&manifest, &lock)?;
-    let old_files = crate_filenames_in_list(text);
+    let mut old_files = crate_filenames_in_list(text);
+    if let Some(prior) = prior {
+        old_files.extend(prior.crate_source_names.iter().cloned());
+    }
     let mut rewritten = replace_list_body(
         text,
         "crates",
