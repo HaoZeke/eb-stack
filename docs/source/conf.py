@@ -9,7 +9,7 @@ from docutils import nodes
 project = "eb-stack"
 copyright = "Copyright (c) eb-stack developers"
 author = "eb-stack developers"
-release = "0.7.1"
+release = "0.7.2"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -78,9 +78,7 @@ html_theme_options = {
     "github_url": "https://github.com/HaoZeke/eb-stack",
     "accent_color": "teal",
     "dark_code": True,
-    "open_in_chatgpt": False,
-    "open_in_claude": False,
-    "open_in_perplexity": False,
+    "show_ai_links": False,
     "globaltoc_expand_depth": 1,
     "light_logo": "_static/logo-light.svg",
     "dark_logo": "_static/logo-dark.svg",
@@ -200,36 +198,36 @@ def _tracked_source_context(app, pagename, templatename, context, doctree):
         context["llm_markdown_url"] = ""
 
 
-def _generate_llm_pages(app):
+def _generate_markdown_pages(app):
     """Write docs/llm from the Org manual. Those pages are not stored in git."""
     del app
     script = os.path.join(_repo, "scripts", "gen-llms-txt.py")
     subprocess.check_call([sys.executable, script, "--pages-only"], cwd=_repo)
 
 
-def _publish_llm(app, exception):
+def _publish_markdown_pages(app, exception):
     """Copy the llms.txt index and per-page markdown into the HTML tree."""
     if exception is not None:
         return
     out = app.outdir
     for name in ("llms.txt", "llms-full.txt"):
         shutil.copyfile(os.path.join(_repo, name), os.path.join(out, name))
-    llm = os.path.join(_repo, "docs", "llm")
-    for dirpath, _dirnames, filenames in os.walk(llm):
+    markdown_pages = os.path.join(_repo, "docs", "llm")
+    for dirpath, _dirnames, filenames in os.walk(markdown_pages):
         for filename in filenames:
             if not filename.endswith(".md"):
                 continue
             src = os.path.join(dirpath, filename)
-            rel = os.path.relpath(src, llm)
+            rel = os.path.relpath(src, markdown_pages)
             dest = os.path.join(out, os.path.splitext(rel)[0] + ".html.md")
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copyfile(src, dest)
 
 
 def setup(app):
-    app.connect("builder-inited", _generate_llm_pages)
+    app.connect("builder-inited", _generate_markdown_pages)
     app.connect("html-page-context", _tracked_source_context)
-    app.connect("build-finished", _publish_llm)
+    app.connect("build-finished", _publish_markdown_pages)
 
 # sphinx-sitemap
 sitemap_url_scheme = "{link}"

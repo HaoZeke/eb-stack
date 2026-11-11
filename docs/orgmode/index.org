@@ -10,7 +10,7 @@
        <img class="eb-hero-mark" src="_static/mark.svg" width="56" height="56" alt="" />
        <div>
          <p class="eb-hero-name">eb-stack</p>
-         <p class="eb-hero-sub">0.7.1</p>
+         <p class="eb-hero-sub">0.7.2</p>
        </div>
      </div>
      <p class="eb-hero-tagline">eb-stack reads conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild recipes into one package plan, writes a planned CycloneDX SBOM and a Resolvo lock per profile, emits one conventional easyconfig per profile, and drives those recipes through a persisted build campaign.</p>
@@ -20,7 +20,7 @@
 ``eb-stack``
 ============
 
-Version 0.7.1 is the crates.io package and the GitHub release. ``package plan`` and ``package bump`` establish *resolves*. ``campaign run`` establishes *builds* and *binary-verified*.
+Version 0.7.2 is the crates.io package and the GitHub release. ``package plan`` and ``package bump`` establish *resolves*. ``campaign run`` establishes *builds* and *binary-verified*.
 
 .. grid:: 1 1 2 2
    :gutter: 2
@@ -71,7 +71,7 @@ Version 0.7.1 is the crates.io package and the GitHub release. ``package plan`` 
       :link: changelog
       :link-type: doc
 
-      Release notes from 0.3.0 through 0.7.1.
+      Release notes from 0.3.0 through 0.7.2.
 
 .. toctree::
    :maxdepth: 1
@@ -192,10 +192,10 @@ Version 0.7.1 is the crates.io package and the GitHub release. ``package plan`` 
   Site administrators building a stack start with
   [[file:install.org][Installation]] and [[file:get-started.org][Get started]],
   then the how-to guides in the sidebar (annual bump, new package, shard,
-  campaign repair). The GitHub release is 0.7.1, with archives for Linux
+  campaign repair). The GitHub release is 0.7.2, with archives for Linux
   (x86-64, aarch64), macOS, and Windows. ~cargo install eb_stack --locked~
-  builds that same 0.7.1 from crates.io. ~eb-stack --version~ prints
-  ~eb-stack 0.7.1~.
+  builds that same 0.7.2 from crates.io. ~eb-stack --version~ prints
+  ~eb-stack 0.7.2~.
 
   Contributors start at [[file:contributing.org][Contributing]]: Rust 1.90,
   ~cargo test --locked~, and the Org-to-Sphinx build. The generated Rust API

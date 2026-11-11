@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## 0.7.2 - 2026-11-11
+
+### Fixed
+
+- Cargo checksum entries with long crate filenames use multiline dictionaries
+  within the EasyBuild line limit.
+- Repeated Cargo bumps replace checksums identified by the original recipe,
+  the emitted recipe and the fetched lockfile, including when the target
+  recipe is present in the robot tree.
+- Recipe and module directory walks stay bounded while resolving stack inputs.
+
+### Docs
+
+- The manual groups installation, first commands and task-specific guides
+  around the executable command surface.
+
 ## 0.7.1 - 2026-11-08
 
 ### Changed

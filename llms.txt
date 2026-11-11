@@ -7,8 +7,8 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or newer builds it 
 ## Getting started
 
 - [eb-stack](https://eb-stack.rgoswami.me/index.html.md): A site that rebuilds an EESSI or EasyBuild generation keeps the dependency lock, the EasyBuild run, and the checks after install as separate records.
-- [Get started](https://eb-stack.rgoswami.me/get-started.html.md): This path is for a site administrator. It uses a checkout of the repository and eb-stack 0.7.1 on PATH. The fixtures in the checkout are the inputs. Installation is how the binary gets onto PATH. A full EasyBuild
-- [Installation](https://eb-stack.rgoswami.me/install.html.md): eb-stack 0.7.1 is the crates.io package eb_stack and the GitHub release v0.7.1.
+- [Get started](https://eb-stack.rgoswami.me/get-started.html.md): This path is for a site administrator. It uses a checkout of the repository and eb-stack 0.7.2 on PATH. The fixtures in the checkout are the inputs. Installation is how the binary gets onto PATH. A full EasyBuild
+- [Installation](https://eb-stack.rgoswami.me/install.html.md): eb-stack 0.7.2 is the crates.io package eb_stack and the GitHub release v0.7.2.
 - [Tutorial: foreign recipe to verified EasyBuild package](https://eb-stack.rgoswami.me/tutorial.html.md): This tutorial plans conda-forge eOn, explains the artifacts, and routes the result into a build campaign.
 
 ## How-to guides
@@ -101,4 +101,4 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.90 or newer builds it 
 ## Optional
 
 - [Contributing](https://eb-stack.rgoswami.me/contributing.html.md): This page mirrors the repository CONTRIBUTING.md for the documentation site.
-- [Changelog](https://eb-stack.rgoswami.me/changelog.html.md): Cargo, CITATION, and Sphinx report 0.7.1.
+- [Changelog](https://eb-stack.rgoswami.me/changelog.html.md): Cargo, CITATION, and Sphinx report 0.7.2.
