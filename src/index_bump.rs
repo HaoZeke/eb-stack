@@ -1473,7 +1473,7 @@ mod tests {
             "{rewritten}"
         );
         let recipe = crate::eb_parse::resolve_easyconfig_str(&format!(
-            "name = 'Demo'\nversion = 1\ntoolchain = SYSTEM\n{rewritten}"
+            "name = Demo\nversion = 1\ntoolchain = SYSTEM\n{rewritten}"
         ))
         .unwrap();
         assert_eq!(
