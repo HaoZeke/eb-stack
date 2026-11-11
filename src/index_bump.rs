@@ -1499,21 +1499,28 @@ mod tests {
              source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{digest}\"\n"
         );
         let archive = tar_gz(&[
-            ("demo/Cargo.toml", "[package]\nname = \"demo\"\nversion = \"2.0.0\"\n"),
+            (
+                "demo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"2.0.0\"\n",
+            ),
             ("demo/Cargo.lock", &lock),
         ]);
         let archives = [FetchedArchive {
             filename: "demo.tar.gz",
             bytes: &archive,
         }];
-        let (rewritten, residuals) = rewrite_fetched_recipe(
-            &text, Some(&prior), &archives, &MapClient::default()
-        );
+        let (rewritten, residuals) =
+            rewrite_fetched_recipe(&text, Some(&prior), &archives, &MapClient::default());
         assert!(residuals.is_empty(), "{residuals:?}");
         let recipe = crate::eb_parse::resolve_easyconfig_str(&rewritten).unwrap();
         assert_eq!(recipe.checksum_entry_keys.len(), 2, "{rewritten}");
-        assert!(!recipe.checksums_by_filename.contains_key("removed-0.1.tar.gz"));
-        assert_eq!(recipe.checksums_by_filename["retained-1.0.0.tar.gz"], digest);
+        assert!(!recipe
+            .checksums_by_filename
+            .contains_key("removed-0.1.tar.gz"));
+        assert_eq!(
+            recipe.checksums_by_filename["retained-1.0.0.tar.gz"],
+            digest
+        );
         assert_eq!(recipe.checksums_by_filename["demo.tar.gz"], "source");
     }
 
