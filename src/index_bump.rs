@@ -104,6 +104,12 @@ fn rewrite_crates(
     if let Some(prior) = prior {
         old_files.extend(prior.crate_source_names.iter().cloned());
     }
+    old_files.extend(
+        crates
+            .iter()
+            .filter(|crate_| crate_.git.is_none())
+            .map(crate_filename),
+    );
     let mut rewritten = replace_list_body(
         text,
         "crates",
