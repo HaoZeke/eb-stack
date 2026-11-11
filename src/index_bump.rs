@@ -1487,6 +1487,37 @@ mod tests {
     }
 
     #[test]
+    fn cargo_checksum_refresh_removes_crates_from_the_prior_recipe() {
+        let prior_text = "name = 'Demo'\nversion = '1'\ntoolchain = SYSTEM\n\
+            sources = ['demo.tar.gz']\ncrates = [('removed', '0.1')]\n\
+            checksums = [{'demo.tar.gz': 'source'}, {'removed-0.1.tar.gz': 'old'}]\n";
+        let prior = crate::eb_parse::resolve_easyconfig_str(prior_text).unwrap();
+        let text = prior_text.replace("('removed', '0.1')", "('retained', '1.0.0')");
+        let digest = "a".repeat(64);
+        let lock = format!(
+            "version = 3\n[[package]]\nname = \"retained\"\nversion = \"1.0.0\"\n\
+             source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{digest}\"\n"
+        );
+        let archive = tar_gz(&[
+            ("demo/Cargo.toml", "[package]\nname = \"demo\"\nversion = \"2.0.0\"\n"),
+            ("demo/Cargo.lock", &lock),
+        ]);
+        let archives = [FetchedArchive {
+            filename: "demo.tar.gz",
+            bytes: &archive,
+        }];
+        let (rewritten, residuals) = rewrite_fetched_recipe(
+            &text, Some(&prior), &archives, &MapClient::default()
+        );
+        assert!(residuals.is_empty(), "{residuals:?}");
+        let recipe = crate::eb_parse::resolve_easyconfig_str(&rewritten).unwrap();
+        assert_eq!(recipe.checksum_entry_keys.len(), 2, "{rewritten}");
+        assert!(!recipe.checksums_by_filename.contains_key("removed-0.1.tar.gz"));
+        assert_eq!(recipe.checksums_by_filename["retained-1.0.0.tar.gz"], digest);
+        assert_eq!(recipe.checksums_by_filename["demo.tar.gz"], "source");
+    }
+
+    #[test]
     fn cargo_lock_replaces_the_crates_list_and_their_checksums() {
         let lock = r#"
 version = 3
