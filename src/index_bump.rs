@@ -1448,6 +1448,26 @@ mod tests {
     }
 
     #[test]
+    fn cargo_checksum_long_filename_stays_within_recipe_line_width() {
+        let name = "component-with-a-long-registry-name";
+        let version = "1.2.3+long-upstream-source-revision-0123456789abcdef";
+        let digest = "a".repeat(64);
+        let crates = vec![LockedCrate {
+            name: name.into(),
+            version: version.into(),
+            checksum: Some(digest.clone()),
+            git: None,
+        }];
+        let text = "checksums = []\n";
+        let rewritten = rewrite_crate_checksums(text, &BTreeSet::new(), &crates);
+        assert!(rewritten.lines().all(|line| line.chars().count() <= 120), "{rewritten}");
+        let recipe = crate::eb_parse::resolve_easyconfig_str(&format!(
+            "name = Demo\nversion = 1\ntoolchain = SYSTEM\n{rewritten}"
+        )).unwrap();
+        assert_eq!(recipe.checksums_by_filename[&format!("{name}-{version}.tar.gz")], digest);
+    }
+
+    #[test]
     fn cargo_lock_replaces_the_crates_list_and_their_checksums() {
         let lock = r#"
 version = 3
