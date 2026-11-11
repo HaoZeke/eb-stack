@@ -48,7 +48,7 @@ pub(crate) fn rewrite_fetched_recipe(
     };
     let mut text = text.to_string();
     if list_body(&text, "crates").is_some() {
-        match rewrite_crates(&text, &recipe, archives, client) {
+        match rewrite_crates(&text, &recipe, prior, archives, client) {
             Ok((rewritten, notes)) => {
                 text = rewritten;
                 residuals.extend(notes);
@@ -85,6 +85,7 @@ struct GitSource {
 fn rewrite_crates(
     text: &str,
     recipe: &ResolvedEasyconfig,
+    prior: Option<&ResolvedEasyconfig>,
     archives: &[FetchedArchive<'_>],
     client: &dyn RegistryClient,
 ) -> Result<(String, Vec<Residual>), String> {
@@ -99,7 +100,16 @@ fn rewrite_crates(
             .to_string()
     })?;
     let (app_in_cratesio, crates) = locked_crates(&manifest, &lock)?;
-    let old_files = crate_filenames_in_list(text);
+    let mut old_files = crate_filenames_in_list(text);
+    if let Some(prior) = prior {
+        old_files.extend(prior.crate_source_names.iter().cloned());
+    }
+    old_files.extend(
+        crates
+            .iter()
+            .filter(|crate_| crate_.git.is_none())
+            .map(crate_filename),
+    );
     let mut rewritten = replace_list_body(
         text,
         "crates",
@@ -430,7 +440,15 @@ fn rewrite_crate_checksums(
         .filter(|crate_| crate_.git.is_none())
         .filter_map(|crate_| {
             let checksum = crate_.checksum.as_deref()?;
-            Some(format!("{{'{}': '{checksum}'}}", crate_filename(crate_)))
+            let filename = crate_filename(crate_);
+            let entry = format!("{{'{filename}': '{checksum}'}}");
+            if entry.chars().count() + 5 > 120 {
+                Some(format!(
+                    "{{\n        '{filename}':\n            '{checksum}',\n    }}"
+                ))
+            } else {
+                Some(entry)
+            }
         })
         .collect::<Vec<_>>();
     let mut out = Vec::new();
@@ -1445,6 +1463,71 @@ mod tests {
             builder.finish().unwrap();
         }
         encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn cargo_checksum_long_filename_stays_within_recipe_line_width() {
+        let name = "component-with-a-long-registry-name";
+        let version = "1.2.3+long-upstream-source-revision-0123456789abcdef";
+        let digest = "a".repeat(64);
+        let crates = vec![LockedCrate {
+            name: name.into(),
+            version: version.into(),
+            checksum: Some(digest.clone()),
+            git: None,
+        }];
+        let text = "checksums = []\n";
+        let rewritten = rewrite_crate_checksums(text, &BTreeSet::new(), &crates);
+        assert!(
+            rewritten.lines().all(|line| line.chars().count() <= 120),
+            "{rewritten}"
+        );
+        let recipe = crate::eb_parse::resolve_easyconfig_str(&format!(
+            "name = 'Demo'\nversion = 1\ntoolchain = SYSTEM\n{rewritten}"
+        ))
+        .unwrap();
+        assert_eq!(
+            recipe.checksums_by_filename[&format!("{name}-{version}.tar.gz")],
+            digest
+        );
+    }
+
+    #[test]
+    fn cargo_checksum_refresh_removes_crates_from_the_prior_recipe() {
+        let prior_text = "name = 'Demo'\nversion = '1'\ntoolchain = SYSTEM\n\
+            sources = ['demo.tar.gz']\ncrates = [('removed', '0.1')]\n\
+            checksums = [{'demo.tar.gz': 'source'}, {'removed-0.1.tar.gz': 'old'}]\n";
+        let prior = crate::eb_parse::resolve_easyconfig_str(prior_text).unwrap();
+        let text = prior_text.replace("('removed', '0.1')", "('retained', '1.0.0')");
+        let digest = "a".repeat(64);
+        let lock = format!(
+            "version = 3\n[[package]]\nname = \"retained\"\nversion = \"1.0.0\"\n\
+             source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{digest}\"\n"
+        );
+        let archive = tar_gz(&[
+            (
+                "demo/Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"2.0.0\"\n",
+            ),
+            ("demo/Cargo.lock", &lock),
+        ]);
+        let archives = [FetchedArchive {
+            filename: "demo.tar.gz",
+            bytes: &archive,
+        }];
+        let (rewritten, residuals) =
+            rewrite_fetched_recipe(&text, Some(&prior), &archives, &MapClient::default());
+        assert!(residuals.is_empty(), "{residuals:?}");
+        let recipe = crate::eb_parse::resolve_easyconfig_str(&rewritten).unwrap();
+        assert_eq!(recipe.checksum_entry_keys.len(), 2, "{rewritten}");
+        assert!(!recipe
+            .checksums_by_filename
+            .contains_key("removed-0.1.tar.gz"));
+        assert_eq!(
+            recipe.checksums_by_filename["retained-1.0.0.tar.gz"],
+            digest
+        );
+        assert_eq!(recipe.checksums_by_filename["demo.tar.gz"], "source");
     }
 
     #[test]
