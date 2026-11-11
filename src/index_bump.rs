@@ -430,7 +430,15 @@ fn rewrite_crate_checksums(
         .filter(|crate_| crate_.git.is_none())
         .filter_map(|crate_| {
             let checksum = crate_.checksum.as_deref()?;
-            Some(format!("{{'{}': '{checksum}'}}", crate_filename(crate_)))
+            let filename = crate_filename(crate_);
+            let entry = format!("{{'{filename}': '{checksum}'}}");
+            if entry.chars().count() + 5 > 120 {
+                Some(format!(
+                    "{{\n        '{filename}':\n            '{checksum}',\n    }}"
+                ))
+            } else {
+                Some(entry)
+            }
         })
         .collect::<Vec<_>>();
     let mut out = Vec::new();
