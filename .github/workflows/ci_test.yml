@@ -299,3 +299,87 @@ jobs:
             echo "expected recipe check to fail without robot deps" >&2
             exit 1
           fi
+
+  portable-candidate:
+    name: portable Linux candidate (no publication)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: portable-candidate-musl
+      - name: Install portable C toolchain
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y musl-tools
+      - name: Build baseline static candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CARGO_ENCODED_RUSTFLAGS
+          export RUSTFLAGS='-C target-cpu=x86-64'
+          export CC_x86_64_unknown_linux_musl=musl-gcc
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin eb-stack
+          BIN=target/x86_64-unknown-linux-musl/release/eb-stack
+          if readelf -l "$BIN" | grep -q INTERP; then
+            echo "portable candidate has a dynamic interpreter" >&2
+            exit 1
+          fi
+          "$BIN" --version
+          "$BIN" stack capacity --snapshot tests/planning_capacity_fixtures/snapshot.json \
+            --partition local --target example/host --feature scratch-node \
+            --cpus 4 --memory-mib 4096 --exclusive-node true --max-slots-per-node 1 \
+            --generated-at 2026-01-01T12:00:10Z --max-age-seconds 60 \
+            > target/portable-capacity-check.json
+          "$BIN" stack shard --help > target/portable-shard-help.txt
+          grep -q -- --storage-policy target/portable-shard-help.txt
+      - name: Package source-bound candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          binary = pathlib.Path("target/x86_64-unknown-linux-musl/release/eb-stack")
+          check = json.loads(pathlib.Path("target/portable-capacity-check.json").read_text())
+          assert check["queue_fitting_nodes"] == 1 and check["free_slots"] == 1
+          root = pathlib.Path("target/portable-candidate")
+          name = "eb-stack-" + source + "-x86_64-unknown-linux-musl"
+          payload = root / name
+          payload.mkdir(parents=True)
+          shutil.copy2(binary, payload / "eb-stack")
+          shutil.copy2("LICENSE", payload / "LICENSE")
+          receipt = {
+              "schema_version": 1, "candidate": True, "release": False,
+              "source": source, "source_tree": tree,
+              "target": "x86_64-unknown-linux-musl", "target_cpu": "x86-64",
+              "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+              "dynamic_interpreter": False,
+              "startup_checks": ["version", "captured-capacity", "shard-storage-help"],
+              "full_suite_status": "consult the workflow result",
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
+          }
+          encoded = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+          (payload / "receipt.json").write_bytes(encoded)
+          (root / "receipt.json").write_bytes(encoded)
+          epoch = subprocess.check_output(["git", "show", "-s", "--format=%ct", "HEAD"], text=True).strip()
+          archive = root / (name + ".tar.xz")
+          subprocess.run(["tar", "--sort=name", "--mtime=@" + epoch, "--owner=0",
+                          "--group=0", "--numeric-owner", "-cJf", str(archive),
+                          "-C", str(root), name], check=True)
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          (root / (archive.name + ".sha256")).write_text(digest + "  " + archive.name + "\n")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: portable-candidate-x86_64-unknown-linux-musl
+          path: |
+            target/portable-candidate/*.tar.xz
+            target/portable-candidate/*.sha256
+            target/portable-candidate/receipt.json
+          if-no-files-found: error
