@@ -149,14 +149,19 @@ fn resource_pair(
 }
 
 impl Node {
-    fn resources(&self) -> Option<(Resources, Resources)> {
+    fn resources(&self, require_gpu: bool) -> Option<(Resources, Resources, bool)> {
         let cpu = resource_pair(self.cpus_total, self.cpus_allocatable, self.cpus_allocated)?;
         let mem = resource_pair(
             self.memory_mib_total,
             self.memory_mib_allocatable,
             self.memory_mib_allocated,
         )?;
-        let gpu = resource_pair(self.gpus_total, self.gpus_allocatable, self.gpus_allocated)?;
+        let gpu = resource_pair(self.gpus_total, self.gpus_allocatable, self.gpus_allocated);
+        if require_gpu && gpu.is_none() {
+            return None;
+        }
+        let gpu_known = gpu.is_some();
+        let gpu = gpu.unwrap_or((0, 0));
         Some((
             Resources {
                 cpus: cpu.0,
@@ -168,6 +173,7 @@ impl Node {
                 memory_mib: mem.1,
                 gpus: gpu.1,
             },
+            gpu_known,
         ))
     }
 
@@ -278,6 +284,7 @@ pub fn inspect(
     let mut free_slots = 0u64;
     let mut idle_nodes = 0u64;
     let mut free = Resources::default();
+    let mut gpu_unknown_nodes = 0u64;
     let mut excluded: BTreeMap<String, u64> = BTreeMap::new();
     let mut states: BTreeMap<String, u64> = BTreeMap::new();
     for node in &snapshot.nodes {
@@ -331,7 +338,7 @@ pub fn inspect(
                 continue;
             }
         };
-        let Some((configured, remaining)) = node.resources() else {
+        let Some((configured, remaining, gpu_known)) = node.resources(request.gpus > 0) else {
             *excluded
                 .entry("resources_unknown_or_inconsistent".into())
                 .or_default() += 1;
@@ -355,6 +362,9 @@ pub fn inspect(
                 .entry("active_features_unavailable_or_unknown".into())
                 .or_default() += 1;
             continue;
+        }
+        if !gpu_known {
+            gpu_unknown_nodes += 1;
         }
         free.add(remaining)?;
         let slots = remaining.slots(request);
@@ -429,6 +439,8 @@ pub fn inspect(
               "request":request,"partition_target_nodes":partition_target_nodes,
               "feature_eligible_nodes":eligible,"queue_fitting_nodes":queue_fitting,
               "idle_nodes":idle_nodes,"free_fitting_nodes":free_fitting,"free_slots":free_slots,
-              "known_free_resources":free,"state_counts":states,"excluded":excluded,"pending":pending}),
+              "known_free_resources":{"cpus":free.cpus,"memory_mib":free.memory_mib,
+                 "gpus":if gpu_unknown_nodes == 0 {Some(free.gpus)} else {None}},
+              "gpu_capacity_unknown_nodes":gpu_unknown_nodes,"state_counts":states,"excluded":excluded,"pending":pending}),
     )
 }

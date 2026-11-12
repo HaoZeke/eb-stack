@@ -172,3 +172,31 @@ fn malformed_constraints_duplicates_and_inconsistent_resources_are_not_accepted(
     value["cpus_allocated"] = json!(17);
     assert_eq!(report(&snapshot(vec![value]))["free_slots"], 0);
 }
+
+#[test]
+fn cpu_requests_do_not_require_gpu_observations() {
+    let mut n = node("cpu-only", &["IDLE"]);
+    n["gpus_allocatable"] = Value::Null;
+    n["gpus_allocated"] = Value::Null;
+    let mut req = request();
+    req.gpus = 0;
+    req.gpu_type = None;
+    let value = inspect(
+        &serde_json::to_vec(&snapshot(vec![n])).unwrap(),
+        &req,
+        "2026-01-01T12:00:10Z",
+        60,
+    )
+    .unwrap();
+    assert_eq!(value["free_slots"], 2);
+    assert_eq!(value["gpu_capacity_unknown_nodes"], 1);
+    assert!(value["known_free_resources"]["gpus"].is_null());
+    req.memory_mib = 0;
+    assert!(inspect(
+        &serde_json::to_vec(&snapshot(vec![])).unwrap(),
+        &req,
+        "2026-01-01T12:00:10Z",
+        60
+    )
+    .is_err());
+}
