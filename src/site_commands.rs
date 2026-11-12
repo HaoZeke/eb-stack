@@ -4107,13 +4107,12 @@ pub fn run_stack_shard_with_sources(
             .cpu_prerequisites
             .iter()
             .cloned()
-            .chain(cpu_root_lines.iter().filter_map(|&i| {
-                let closure = &closures[i];
-                closure
-                    .to_build
-                    .contains(&closure.root)
-                    .then(|| closure.root.clone())
-            }))
+            .chain(
+                cpu_root_lines
+                    .iter()
+                    .filter(|&&i| closures[i].to_build.contains(&closures[i].root))
+                    .map(|&i| closures[i].root.clone()),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
