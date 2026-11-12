@@ -214,6 +214,11 @@ fn shard_cli_preserves_defaults_and_binds_every_opt_in_list_to_its_bytes() {
         if quota {
             cmd.args(["--inode-quota", "4000000"]);
         }
+        if out == "materialized" {
+            cmd.arg("--materialize")
+                .arg("--build-robot-path")
+                .arg(fixtures.join("easyconfigs"));
+        }
         cmd.output().unwrap()
     };
     let baseline = run("baseline", false, false);
@@ -247,6 +252,27 @@ fn shard_cli_preserves_defaults_and_binds_every_opt_in_list_to_its_bytes() {
         assert_eq!(phase["storage"]["admission_required"], true);
         assert_eq!(phase["storage"]["admission_bypass"], false);
         assert_eq!(phase["placement"], "node-local");
+    }
+    let materialized = run("materialized", true, false);
+    assert!(
+        materialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&materialized.stderr)
+    );
+    let materialized: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("materialized/plan.json")).unwrap())
+            .unwrap();
+    for phase in
+        std::iter::once(&materialized["prelude"]).chain(materialized["shards"].as_array().unwrap())
+    {
+        let name = phase["storage"]["execution_list_file"].as_str().unwrap();
+        assert!(name.ends_with(".local.list"));
+        assert_ne!(name, phase["storage"]["list_file"].as_str().unwrap());
+        let bytes = std::fs::read(dir.path().join("materialized").join(name)).unwrap();
+        assert_eq!(
+            phase["storage"]["execution_list_sha256"],
+            format!("{:x}", Sha256::digest(bytes))
+        );
     }
     let conflict = run("conflict", true, true);
     assert!(!conflict.status.success());
