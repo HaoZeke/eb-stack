@@ -13546,8 +13546,8 @@ eb_stack_gap
 eb_stack_provided
 eb_stack_shadow
 eb_stack_batch
-eb_stack_shard
 eb_stack_capacity
+eb_stack_shard
 eb_stack_footprints
 eb_stack_admit
 eb_stack_arch
