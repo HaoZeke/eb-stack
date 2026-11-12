@@ -1074,6 +1074,7 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
             }
         }
     }
+    waiting.remove(&args.job);
     let mut decision = decide_with_waiting(
         quota.available,
         (&reservations, &waiting),
