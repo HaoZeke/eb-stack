@@ -467,6 +467,62 @@ pub fn max_concurrent(footprints: &[u64], budget: u64) -> usize {
     fit
 }
 
+/// Where a shard keeps its build tree while it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Shared scratch, charged against the inode quota.
+    Shared,
+    /// The node's own disk (`--constraint=scratch-node`), outside the quota.
+    NodeLocal,
+}
+
+impl Placement {
+    /// The name `plan.json` uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::NodeLocal => "node-local",
+        }
+    }
+}
+
+/// The placement of each shard. Without `scratch_node` every shard is
+/// shared. With it, a shard that needs a real disk goes node-local, the
+/// others fill `budget` smallest first, and a shard that does not fit goes
+/// node-local: the largest move the most inodes off the shared quota.
+#[must_use]
+pub fn place(
+    sizes: &[u64],
+    needs_disk: &[bool],
+    budget: Option<u64>,
+    scratch_node: bool,
+) -> Vec<Placement> {
+    let mut placement = vec![Placement::Shared; sizes.len()];
+    if !scratch_node {
+        return placement;
+    }
+    let mut order = Vec::new();
+    for s in 0..sizes.len() {
+        if needs_disk.get(s).copied().unwrap_or(false) {
+            placement[s] = Placement::NodeLocal;
+        } else {
+            order.push(s);
+        }
+    }
+    order.sort_by_key(|&s| (sizes[s], s));
+    let mut used = 0u64;
+    for s in order {
+        match budget {
+            Some(budget) if used.saturating_add(sizes[s]) > budget => {
+                placement[s] = Placement::NodeLocal;
+            }
+            _ => used = used.saturating_add(sizes[s]),
+        }
+    }
+    placement
+}
+
 /// The inode budget of a shard plan, for `plan.json`.
 pub struct PlanBudget {
     /// `--inode-quota`, when given.
@@ -481,6 +537,11 @@ pub struct PlanBudget {
     pub footprints: Footprints,
     /// `--inode-line-overhead`.
     pub line_overhead: u64,
+    /// `--scratch-node`: a shard may build on node-local scratch.
+    pub scratch_node: bool,
+    /// `--node-local-package`: software names whose builds need a real
+    /// disk, not tmpfs and not shared scratch.
+    pub node_local_packages: BTreeSet<String>,
 }
 
 impl PlanBudget {
@@ -501,12 +562,16 @@ impl PlanBudget {
             "footprints_sha256": self.footprints_sha256,
             "default_footprint": self.footprints.default,
             "line_overhead": self.line_overhead,
+            "scratch_node": self.scratch_node,
+            "node_local_packages": self.node_local_packages,
         })
     }
 
-    /// The footprint of each shard, the prelude's, and the cap. The cap is
-    /// the shard count when no quota is given. An error names a shard that
-    /// does not fit under the budget on its own.
+    /// The footprint and placement of each shard, the prelude's footprint,
+    /// and the cap. The cap is the shard count when no quota is given; with
+    /// one, it is the shared shards that fit at once plus every node-local
+    /// shard. An error names a shared shard that does not fit under the
+    /// budget on its own.
     pub fn apply(
         &self,
         shards: &[crate::shard::Shard],
@@ -544,13 +609,23 @@ impl PlanBudget {
             &self.footprints,
             self.line_overhead,
         );
+        let sizes: Vec<u64> = footprints.iter().map(|f| f.inodes).collect();
+        let needs_disk: Vec<bool> = shards
+            .iter()
+            .map(|(modules, _)| {
+                modules
+                    .iter()
+                    .any(|m| self.node_local_packages.contains(package_of_module(m)))
+            })
+            .collect();
+        let placements = place(&sizes, &needs_disk, self.budget(), self.scratch_node);
         let cap = match self.budget() {
             None => shards.len(),
             Some(budget) => {
                 if let Some((s, big)) = footprints
                     .iter()
                     .enumerate()
-                    .find(|(_, f)| f.inodes > budget)
+                    .find(|(s, f)| placements[*s] == Placement::Shared && f.inodes > budget)
                 {
                     bail!(
                         "{} needs {} inodes ({} for {} plus {} line overhead); the quota {} minus the margin {} leaves {}; nothing written",
@@ -564,12 +639,23 @@ impl PlanBudget {
                         budget
                     );
                 }
-                let sizes: Vec<u64> = footprints.iter().map(|f| f.inodes).collect();
-                max_concurrent(&sizes, budget)
+                let shared: Vec<u64> = (0..sizes.len())
+                    .filter(|&s| placements[s] == Placement::Shared)
+                    .map(|s| sizes[s])
+                    .collect();
+                max_concurrent(&shared, budget) + (sizes.len() - shared.len())
             }
         };
         Ok((
-            footprints.iter().map(ShardFootprint::to_json).collect(),
+            footprints
+                .iter()
+                .zip(&placements)
+                .map(|(f, p)| {
+                    let mut value = f.to_json();
+                    value["placement"] = json!(p.as_str());
+                    value
+                })
+                .collect(),
             prelude_footprint.to_json(),
             cap,
         ))
@@ -1339,6 +1425,8 @@ mod tests {
             footprints_sha256: None,
             footprints: Footprints::builtin(),
             line_overhead: DEFAULT_LINE_OVERHEAD,
+            scratch_node: false,
+            node_local_packages: BTreeSet::new(),
         };
         let shards = vec![crate::shard::Shard {
             lines: vec![0],
@@ -1359,8 +1447,82 @@ mod tests {
             .apply(&shards, &["zlib/1.3.1".into()], |s| format!("shard-{s}"))
             .unwrap();
         assert_eq!(per_shard[0]["inodes"], 351_000);
+        assert_eq!(per_shard[0]["placement"], "shared");
         assert_eq!(prelude["inodes"], 61_000);
         assert_eq!(cap, 1);
+    }
+
+    #[test]
+    fn placement_is_shared_without_scratch_node() {
+        let sizes = [351_000, 61_000, 151_000];
+        let placed = place(&sizes, &[true, false, false], Some(100_000), false);
+        assert_eq!(placed, vec![Placement::Shared; 3]);
+    }
+
+    #[test]
+    fn placement_fills_the_budget_smallest_first_and_moves_the_rest() {
+        let sizes = [351_000, 61_000, 151_000, 61_000];
+        let placed = place(&sizes, &[false; 4], Some(300_000), true);
+        assert_eq!(
+            placed,
+            vec![
+                Placement::NodeLocal,
+                Placement::Shared,
+                Placement::Shared,
+                Placement::Shared
+            ]
+        );
+        let tight = place(&sizes, &[false; 4], Some(130_000), true);
+        assert_eq!(
+            tight,
+            vec![
+                Placement::NodeLocal,
+                Placement::Shared,
+                Placement::NodeLocal,
+                Placement::Shared
+            ]
+        );
+        let unbounded = place(&sizes, &[false, false, true, false], None, true);
+        assert_eq!(unbounded[2], Placement::NodeLocal);
+        assert_eq!(unbounded.iter().filter(|p| **p == Placement::Shared).count(), 3);
+    }
+
+    #[test]
+    fn the_plan_budget_moves_a_shard_that_never_fits_to_node_local() {
+        let budget = PlanBudget {
+            quota: Some(400_000),
+            margin: 100_000,
+            footprints_file: None,
+            footprints_sha256: None,
+            footprints: Footprints::builtin(),
+            line_overhead: DEFAULT_LINE_OVERHEAD,
+            scratch_node: true,
+            node_local_packages: ["readcon-core".to_string()].into_iter().collect(),
+        };
+        let shards = vec![
+            crate::shard::Shard {
+                lines: vec![0],
+                modules: vec!["CP2K/2025.2-foss-2025a".into()],
+                weight: 1,
+            },
+            crate::shard::Shard {
+                lines: vec![1],
+                modules: vec!["readcon-core/0.18.0-GCCcore-15.2.0".into()],
+                weight: 1,
+            },
+            crate::shard::Shard {
+                lines: vec![2],
+                modules: vec!["zlib/1.3.1".into()],
+                weight: 1,
+            },
+        ];
+        let (per_shard, _, cap) = budget
+            .apply(&shards, &[], |s| format!("shard-{:02}", s + 1))
+            .unwrap();
+        assert_eq!(per_shard[0]["placement"], "node-local");
+        assert_eq!(per_shard[1]["placement"], "node-local");
+        assert_eq!(per_shard[2]["placement"], "shared");
+        assert_eq!(cap, 3);
     }
 
     fn reservation(job: &str, footprint: u64) -> Reservation {

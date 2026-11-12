@@ -484,6 +484,8 @@ fn tool_catalog() -> Vec<Value> {
                 ("inode_margin", "integer"),
                 ("inode_line_overhead", "integer"),
                 ("lift_cpu_prerequisites", "boolean"),
+                ("scratch_node", "boolean"),
+                ("node_local_package", "array"),
             ],
         ),
         tool_with_optional(
@@ -3302,6 +3304,8 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         inode_line_overhead: optional_u64(arguments, "inode_line_overhead")?
             .unwrap_or(crate::inode_budget::DEFAULT_LINE_OVERHEAD),
         lift_cpu_prerequisites: optional_bool(arguments, "lift_cpu_prerequisites"),
+        scratch_node: optional_bool(arguments, "scratch_node"),
+        node_local_packages: string_array(arguments, "node_local_package")?,
     };
     let sources = crate::site_commands::StackShardSources {
         easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),

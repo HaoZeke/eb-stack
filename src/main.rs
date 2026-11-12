@@ -1279,6 +1279,14 @@ struct ShardArgs {
     /// `/accel/` prefix.
     #[arg(long)]
     lift_cpu_prerequisites: bool,
+    /// Let a shard build on node-local scratch (`--constraint=scratch-node`),
+    /// outside `--inode-quota`: shards with a `--node-local-package` and
+    /// shards that do not fit the quota get `placement = "node-local"`.
+    #[arg(long)]
+    scratch_node: bool,
+    /// A software name whose build needs a real disk (not tmpfs). Repeatable.
+    #[arg(long = "node-local-package")]
+    node_local_packages: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -3615,6 +3623,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 inode_margin,
                 inode_line_overhead,
                 lift_cpu_prerequisites,
+                scratch_node,
+                node_local_packages,
             } = *args;
             let run = eb_stack::site_commands::run_stack_shard_sources(
                 &eb_stack::site_commands::StackShardRequest {
@@ -3636,6 +3646,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     inode_margin,
                     inode_line_overhead,
                     lift_cpu_prerequisites,
+                    scratch_node,
+                    node_local_packages,
                 },
                 &eb_stack::site_commands::StackShardSources {
                     easyconfigs_repo,

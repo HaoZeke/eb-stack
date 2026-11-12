@@ -2239,6 +2239,12 @@ pub struct StackShardRequest {
     /// prelude even when only one root needs them. Default is false (shared
     /// dependencies only), matching historical `stack shard` behaviour.
     pub lift_cpu_prerequisites: bool,
+    /// Opt-in: a shard may build on node-local scratch
+    /// (`--constraint=scratch-node`), outside the inode quota.
+    pub scratch_node: bool,
+    /// Software names whose builds need a real disk; their shards build
+    /// node-local when `scratch_node` is set.
+    pub node_local_packages: Vec<String>,
 }
 
 /// What `stack shard` wrote.
@@ -2760,6 +2766,8 @@ pub fn run_stack_shard_with_sources(
         footprints_sha256,
         footprints,
         line_overhead: args.inode_line_overhead,
+        scratch_node: args.scratch_node,
+        node_local_packages: args.node_local_packages.iter().cloned().collect(),
     };
     if let Some(repo) = &extra.easyconfigs_repo {
         // Git parent discovery must not substitute a different source repository.
@@ -3641,6 +3649,18 @@ pub fn run_stack_shard_with_sources(
     if let Some(digest) = &budget.footprints_sha256 {
         digest_input.push_str(&format!("inode_footprints={digest}\n"));
     }
+    // Placement is opt-in, so a plan without it keeps its digest.
+    if args.scratch_node {
+        digest_input.push_str(&format!(
+            "scratch_node=true\nnode_local_packages={}\n",
+            budget
+                .node_local_packages
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
     for (source, status) in &tree_status {
         digest_input.push_str(&format!(
             "tree={source} {}\n",
@@ -3731,6 +3751,7 @@ pub fn run_stack_shard_with_sources(
             "inode_footprint": shard_footprints[s]["inodes"],
             "inode_peak_module": shard_footprints[s]["peak_module"],
             "inode_overhead": shard_footprints[s]["overhead"],
+            "placement": shard_footprints[s]["placement"],
         }));
     }
     for &i in &cpu_root_lines {
@@ -4442,6 +4463,8 @@ mod tests {
                 generated_at: Some("2026-11-04T00:00:00Z".into()),
                 out_dir: root.join("out"),
                 lift_cpu_prerequisites: false,
+                scratch_node: false,
+                node_local_packages: Vec::new(),
             }
         }
 
