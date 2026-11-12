@@ -596,3 +596,53 @@ fn recipe_hierarchy_export_adds_the_synthetic_rule() {
         "{export_json}"
     );
 }
+
+#[test]
+fn recipe_check_file_roots_match_directories_and_preserve_later_precedence() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let body = "easyblock = 'Bundle'\nname = 'Widget'\nversion = '1'\nhomepage = 'https://example.invalid/widget'\ndescription = 'Robot root fixture'\ntoolchain = SYSTEM\ndependencies = [('Dep', '1')]\n";
+    let recipe = first.join("Widget-1.eb");
+    let overlay = second.join("Widget-1.eb");
+    std::fs::write(&recipe, body).unwrap();
+    std::fs::write(&overlay, body).unwrap();
+    std::fs::write(
+        first.join("Dep-1.eb"),
+        "name = 'Dep'\nversion = '1'\ntoolchain = SYSTEM\n",
+    ).unwrap();
+    let run = |roots: &[&std::path::Path]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
+        cmd.current_dir(&first).args(["recipe", "check", "--strict", "--recipe"]).arg(&recipe);
+        for root in roots {
+            cmd.arg("--easyconfigs").arg(root);
+        }
+        cmd.output().unwrap()
+    };
+    let directory = run(&[&first]);
+    assert!(directory.status.success(), "{}", String::from_utf8_lossy(&directory.stderr));
+    for root in [recipe.as_path(), std::path::Path::new("Widget-1.eb")] {
+        let file = run(&[root]);
+        assert!(file.status.success(), "{}", String::from_utf8_lossy(&file.stderr));
+        assert_eq!(file.stdout, directory.stdout);
+        assert_eq!(file.stderr, directory.stderr);
+    }
+    let directories = run(&[&first, &second]);
+    assert!(!directories.status.success());
+    assert!(String::from_utf8_lossy(&directories.stdout).contains("EB_MAINT_DUPLICATE_UPSTREAM"));
+    for roots in [
+        [recipe.as_path(), overlay.as_path()],
+        [recipe.as_path(), second.as_path()],
+        [first.as_path(), overlay.as_path()],
+    ] {
+        let files = run(&roots);
+        assert_eq!(files.status.code(), directories.status.code());
+        assert_eq!(files.stdout, directories.stdout);
+        assert_eq!(files.stderr, directories.stderr);
+        let reversed = run(&[roots[1], roots[0]]);
+        assert!(reversed.status.success(), "{}", String::from_utf8_lossy(&reversed.stderr));
+        assert_eq!(reversed.stdout, directory.stdout);
+    }
+}

@@ -3045,7 +3045,20 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 println!("recipe metadata resolves");
                 return Ok(());
             }
-            let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+            let roots = easyconfigs
+                .iter()
+                .map(|path| {
+                    if path.is_file()
+                        && path.extension().and_then(|extension| extension.to_str()) == Some("eb")
+                    {
+                        path.parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .unwrap_or_else(|| Path::new("."))
+                    } else {
+                        path.as_path()
+                    }
+                })
+                .collect::<Vec<_>>();
             let tree = parse_easyconfig_trees(&roots).map_err(|error| {
                 let listed = easyconfigs
                     .iter()
