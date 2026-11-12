@@ -201,6 +201,7 @@ jobs:
             --test stack_shard \
             --test stack_shard_destinations \
             --test stack_admit \
+            --test admission_forecast_lifecycle \
             --test stack_shard_cpu_prelude \
             --test stack_shard_sources \
             --test robot_lookup \

@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Explicit waiting forecasts arbitrate admission under the shared lock without
+  charging each other's build peaks; setup, admitted, legacy and unknown writers
+  retain their reservations.
 - Explicit root module destinations govern installed-state checks, dependency
   traversal, shard weight and inode estimates without borrowing a same-named
   root from another module tree.

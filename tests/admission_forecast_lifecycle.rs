@@ -1,6 +1,6 @@
 //! Explicit waiting forecasts arbitrate through the same admission lock.
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 struct Fixture {
@@ -159,5 +159,5 @@ fn stale_waiting_records_follow_the_explicit_stale_removal_policy() {
                "--drop-stale", "--lock"]).arg(&fixture.lock)
         .args(["--lock-kind", "posix"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(!Path::new(&fixture.reservations.join("11.json")).exists());
+    assert!(!fixture.reservations.join("11.json").exists());
 }
