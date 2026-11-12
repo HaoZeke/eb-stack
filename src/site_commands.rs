@@ -3385,10 +3385,10 @@ pub fn run_stack_shard_with_sources(
             closure_against_installed(&universe, &universe_starts, Choice::Newest, &|key| {
                 !universe_missing.contains(key) && is_installed(key)
             })
-                .to_build
-                .iter()
-                .map(module_name)
-                .collect(),
+            .to_build
+            .iter()
+            .map(module_name)
+            .collect(),
         );
     }
     // A robot-path easyconfig a fetched line builds, where its tree has a
