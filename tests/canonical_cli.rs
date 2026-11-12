@@ -604,7 +604,7 @@ fn recipe_check_file_roots_match_directories_and_preserve_later_precedence() {
     let second = temp.path().join("second");
     std::fs::create_dir(&first).unwrap();
     std::fs::create_dir(&second).unwrap();
-    let body = "easyblock = 'Bundle'\nname = 'Widget'\nversion = '1'\nhomepage = 'https://example.invalid/widget'\ndescription = 'Robot root fixture'\ntoolchain = SYSTEM\ndependencies = [('Dep', '1')]\n";
+    let body = "easyblock = 'Bundle'\nname = 'Widget'\nversion = '1'\nhomepage = 'https://example.invalid/widget'\ndescription = 'Robot root fixture'\ntoolchain = SYSTEM\nsources = ['Widget-1.tar.gz']\nchecksums = ['deadbeef']\ndependencies = [('Dep', '1')]\nmoduleclass = 'tools'\n";
     let recipe = first.join("Widget-1.eb");
     let overlay = second.join("Widget-1.eb");
     std::fs::write(&recipe, body).unwrap();
