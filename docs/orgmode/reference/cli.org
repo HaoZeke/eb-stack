@@ -439,6 +439,26 @@ authored content.
 
 * Stack commands
 
+** ~stack capacity~
+
+Read one captured normalized scheduler observation with ~--snapshot~.
+Scope it using the exact ~--partition~, maintained physical-host ~--target~
+and repeated literal ~--feature~ requirements. Resolve the single-node demand
+with ~--cpus~, ~--memory-mib~, ~--gpus~ and optional ~--gpu-type~.
+~--exclusive-node true|false~ records resolved whole-node policy;
+~--max-slots-per-node~ caps its advertised slots. ~--generated-at~ and
+~--max-age-seconds~ bound a deterministic timestamped replay. The output is
+advisory, contains no node names and grants no execution or storage admission.
+
+~stack shard --storage-policy~ selects an opt-in captured policy that allocates
+the smallest phases fitting its shared budget to shared storage and eligible
+overflow phases to node-local storage. It conflicts with ~--inode-quota~.
+The policy preserves the configured ~--inode-margin~ and binds the actual
+ordinary and materialized execution-list hashes. The executor verifies storage
+and uses normal admission for every actual domain. See
+[[file:planning-capacity.org][the capacity and phase-storage reference]] for the full schema.
+
+
 #+begin_src bash
 eb-stack stack solve \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
