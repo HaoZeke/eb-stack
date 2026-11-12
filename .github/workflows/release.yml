@@ -140,7 +140,21 @@ jobs:
         run: |
           ${{ matrix.packages_install }}
       - name: Build artifacts
+        shell: bash
         run: |
+          case "${{ join(matrix.targets, ' ') }}" in
+            *x86_64-unknown-linux-musl*)
+              unset CARGO_ENCODED_RUSTFLAGS
+              export RUSTFLAGS='-C target-cpu=x86-64'
+              export CFLAGS='-march=x86-64 -mtune=generic'
+              export CXXFLAGS="$CFLAGS"
+              export CFLAGS_x86_64_unknown_linux_musl="$CFLAGS"
+              export CXXFLAGS_x86_64_unknown_linux_musl="$CXXFLAGS"
+              printf 'portable_target=x86_64-unknown-linux-musl\n'
+              printf 'RUSTFLAGS=%s\nCARGO_ENCODED_RUSTFLAGS=unset\nCFLAGS=%s\nCXXFLAGS=%s\n' \
+                "$RUSTFLAGS" "$CFLAGS" "$CXXFLAGS"
+              ;;
+          esac
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
