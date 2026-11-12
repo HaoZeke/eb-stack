@@ -2710,7 +2710,11 @@ pub fn run_stack_shard_sources(
     run_stack_shard_with_sources(args, sources, &pr_overlap::UreqGet)
 }
 /// Bind storage advice to the exact generated list bytes held by the planner.
-fn bind_storage_list(phase: &mut serde_json::Value, files: &[(String, String)]) -> Result<()> {
+fn bind_storage_list(
+    phase: &mut serde_json::Value,
+    files: &[(String, String)],
+    materialized: bool,
+) -> Result<()> {
     let name = phase["file"]
         .as_str()
         .context("storage phase list file is missing")?
@@ -2722,6 +2726,22 @@ fn bind_storage_list(phase: &mut serde_json::Value, files: &[(String, String)]) 
         .context("storage phase list is not generated")?;
     phase["storage"]["list_file"] = json!(name);
     phase["storage"]["list_sha256"] = json!(sha256_hex(text.as_bytes()));
+    let execution_file = if materialized {
+        format!(
+            "{}.local.list",
+            name.strip_suffix(".list")
+                .context("phase list suffix is invalid")?
+        )
+    } else {
+        name.clone()
+    };
+    let execution = files
+        .iter()
+        .find(|(file, _)| file == &execution_file)
+        .map(|(_, text)| text)
+        .context("storage execution list is not generated")?;
+    phase["storage"]["execution_list_file"] = json!(execution_file);
+    phase["storage"]["execution_list_sha256"] = json!(sha256_hex(execution.as_bytes()));
     Ok(())
 }
 
@@ -4191,14 +4211,14 @@ pub fn run_stack_shard_with_storage(
         policy.annotate(&mut document, &required_disk, &stamp)?;
         for phase in ["cpu_prerequisites", "prelude"] {
             if document[phase].get("storage").is_some() {
-                bind_storage_list(&mut document[phase], &files)?;
+                bind_storage_list(&mut document[phase], &files, materialized_json.is_some())?;
             }
         }
         for phase in document["shards"]
             .as_array_mut()
             .context("plan shards are missing")?
         {
-            bind_storage_list(phase, &files)?;
+            bind_storage_list(phase, &files, materialized_json.is_some())?;
         }
     }
 

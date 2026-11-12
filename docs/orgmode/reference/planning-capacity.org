@@ -161,3 +161,9 @@ Each emitted phase =storage= object binds =list_file= and =list_sha256= to the
 exact generated list bytes. Execution verifies these fields together with the
 final plan file digest; =inputs.sha256= is an input fingerprint, not the final
 plan digest.
+
+With =--materialize=, =execution_list_file= and =execution_list_sha256= bind
+the generated =*.local.list= bytes actually consumed by the build driver.
+Without materialization these fields bind the ordinary list. The original
+=list_file= and =list_sha256= remain available in both modes. An executor
+accepts only the explicitly bound execution list, not a filename alias.
