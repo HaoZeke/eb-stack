@@ -2724,8 +2724,8 @@ fn bind_storage_list(
         .find(|(file, _)| file == &name)
         .map(|(_, text)| text)
         .context("storage phase list is not generated")?;
-    phase["storage"]["list_file"] = json!(name);
-    phase["storage"]["list_sha256"] = json!(sha256_hex(text.as_bytes()));
+    phase["storage"]["list_file"] = serde_json::json!(name);
+    phase["storage"]["list_sha256"] = serde_json::json!(sha256_hex(text.as_bytes()));
     let execution_file = if materialized {
         format!(
             "{}.local.list",
@@ -2740,8 +2740,8 @@ fn bind_storage_list(
         .find(|(file, _)| file == &execution_file)
         .map(|(_, text)| text)
         .context("storage execution list is not generated")?;
-    phase["storage"]["execution_list_file"] = json!(execution_file);
-    phase["storage"]["execution_list_sha256"] = json!(sha256_hex(execution.as_bytes()));
+    phase["storage"]["execution_list_file"] = serde_json::json!(execution_file);
+    phase["storage"]["execution_list_sha256"] = serde_json::json!(sha256_hex(execution.as_bytes()));
     Ok(())
 }
 
