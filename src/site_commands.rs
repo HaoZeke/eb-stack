@@ -2360,6 +2360,42 @@ fn modules_under(root: &Path) -> Result<std::collections::BTreeSet<String>> {
     Ok(out)
 }
 
+/// An explicit module destination is independent of the installed search paths.
+/// EasyBuild places its default module view below the destination's `all` directory.
+fn shard_root_destination(line: &crate::shard::ShardLine) -> Result<Option<PathBuf>> {
+    const OPTION: &str = "--installpath-modules";
+    let mut words = line.text.split_whitespace().skip(1);
+    let mut destination = None;
+    while let Some(word) = words.next() {
+        let value = if word == OPTION {
+            Some(words.next().unwrap_or(""))
+        } else {
+            word.strip_prefix("--installpath-modules=")
+        };
+        let Some(value) = value else { continue };
+        let path = PathBuf::from(value);
+        if destination.is_some()
+            || !path.is_absolute()
+            || value.contains(['$', '~', '\'', '"', '`', '\\'])
+        {
+            return Err(usage(format!(
+                "line {}: --installpath-modules requires one literal absolute path",
+                line.number
+            )));
+        }
+        destination = Some(path);
+    }
+    Ok(destination)
+}
+
+fn shard_root_module_exists(destination: &Path, module: &str) -> bool {
+    let path = destination.join("all").join(module);
+    path.is_file() || path.with_file_name(format!(
+        "{}.lua",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    )).is_file()
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
@@ -3185,8 +3221,38 @@ pub fn run_stack_shard_with_sources(
         .filter(|(line, _)| line.forced)
         .filter_map(|(_, key)| key.clone())
         .collect();
-    let is_installed =
+    let default_installed =
         |key: &ModuleKey| !forced.contains(key) && installed.contains(&module_name(key));
+    let destinations = lines
+        .iter()
+        .map(shard_root_destination)
+        .collect::<Result<Vec<_>>>()?;
+    let root_installed: Vec<Option<bool>> = starts
+        .iter()
+        .zip(&destinations)
+        .map(|(start, destination)| {
+            start.as_ref().zip(destination.as_ref()).map(|(key, path)| {
+                !forced.contains(key) && shard_root_module_exists(path, &module_name(key))
+            })
+        })
+        .collect();
+    // Ordering must include a module whenever any requested destination needs it.
+    let mut requested_installed = BTreeMap::new();
+    for (i, start) in starts.iter().enumerate() {
+        if let Some(key) = start {
+            let available = root_installed[i].unwrap_or_else(|| default_installed(key));
+            requested_installed
+                .entry(key.clone())
+                .and_modify(|known| *known &= available)
+                .or_insert(available);
+        }
+    }
+    let is_installed = |key: &ModuleKey| {
+        requested_installed
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| default_installed(key))
+    };
 
     // Second pass: closures, a dependency order per universe, and where each
     // module's easyconfig comes from (the first line that reaches it wins).
@@ -3218,7 +3284,13 @@ pub fn run_stack_shard_with_sources(
                 &universe,
                 std::slice::from_ref(start),
                 Choice::Newest,
-                &is_installed,
+                &|key| {
+                    if key == start {
+                        root_installed[i].unwrap_or_else(|| default_installed(key))
+                    } else {
+                        default_installed(key)
+                    }
+                },
             );
             if !closure.unresolved.is_empty() {
                 let needs: Vec<String> = closure
@@ -3539,6 +3611,14 @@ pub fn run_stack_shard_with_sources(
     }
     for module in &installed {
         digest_input.push_str(&format!("installed={module}\n"));
+    }
+    for (i, status) in root_installed.iter().enumerate() {
+        if let Some(available) = status {
+            digest_input.push_str(&format!(
+                "root_destination_installed={} {available}\n",
+                lines[i].number
+            ));
+        }
     }
     for (file, digest) in &easyconfig_digests {
         digest_input.push_str(&format!("easyconfig={file} {digest}\n"));
