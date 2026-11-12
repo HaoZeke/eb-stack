@@ -1304,6 +1304,9 @@ struct ShardArgs {
     /// per software name. Absent is the built-in class table.
     #[arg(long)]
     inode_footprints: Option<PathBuf>,
+    /// Captured capacity and live shared-budget policy; admission stays unchanged.
+    #[arg(long, conflicts_with = "inode_quota")]
+    storage_policy: Option<PathBuf>,
     /// Inodes kept free under `--inode-quota`.
     #[arg(long, default_value_t = eb_stack::inode_budget::DEFAULT_MARGIN)]
     inode_margin: u64,
@@ -3680,11 +3683,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 out_dir,
                 inode_quota,
                 inode_footprints,
+                storage_policy,
                 inode_margin,
                 inode_line_overhead,
                 lift_cpu_prerequisites,
             } = *args;
-            let run = eb_stack::site_commands::run_stack_shard_sources(
+            let run = eb_stack::site_commands::run_stack_shard_sources_storage(
                 &eb_stack::site_commands::StackShardRequest {
                     build_list,
                     easyconfigs,
@@ -3710,6 +3714,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     materialize,
                     build_robot_paths,
                 },
+                storage_policy.as_deref(),
             )?;
             for warning in &run.warnings {
                 eprintln!("warning: {warning}");

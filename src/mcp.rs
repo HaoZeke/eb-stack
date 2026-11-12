@@ -487,6 +487,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("generated_at", "string"),
                 ("inode_quota", "integer"),
                 ("inode_footprints", "string"),
+                ("storage_policy", "string"),
                 ("inode_margin", "integer"),
                 ("inode_line_overhead", "integer"),
                 ("lift_cpu_prerequisites", "boolean"),
@@ -3345,8 +3346,12 @@ fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {
         materialize: optional_bool(arguments, "materialize"),
         build_robot_paths: string_array(arguments, "build_robot_path")?,
     };
-    let run = crate::site_commands::run_stack_shard_sources(&request, &sources)
-        .map_err(workflow_error)?;
+    let run = crate::site_commands::run_stack_shard_sources_storage(
+        &request,
+        &sources,
+        optional_path(arguments, "storage_policy").as_deref(),
+    )
+    .map_err(workflow_error)?;
     Ok(json!({
         "text": run.summary(),
         "shards": run.shards,

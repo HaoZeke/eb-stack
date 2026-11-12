@@ -2716,6 +2716,25 @@ pub fn run_stack_shard_with_sources(
     extra: &StackShardSources,
     http: &dyn pr_overlap::HttpGet,
 ) -> Result<StackShardRun> {
+    run_stack_shard_with_storage(args, extra, None, http)
+}
+
+/// Plan with optional storage advice while preserving legacy constructor fields.
+pub fn run_stack_shard_sources_storage(
+    args: &StackShardRequest,
+    extra: &StackShardSources,
+    storage_policy: Option<&Path>,
+) -> Result<StackShardRun> {
+    run_stack_shard_with_storage(args, extra, storage_policy, &pr_overlap::UreqGet)
+}
+
+/// Plan against explicit sources and an optional captured storage policy.
+pub fn run_stack_shard_with_storage(
+    args: &StackShardRequest,
+    extra: &StackShardSources,
+    storage_policy_path: Option<&Path>,
+    http: &dyn pr_overlap::HttpGet,
+) -> Result<StackShardRun> {
     use crate::accel_install::is_accelerator_candidate_filtered;
     use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
     use crate::domain::Candidate;
@@ -2728,6 +2747,14 @@ pub fn run_stack_shard_with_sources(
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
+    if storage_policy_path.is_some() && args.inode_quota.is_some() {
+        return Err(usage(
+            "--storage-policy and --inode-quota are mutually exclusive planning budgets",
+        ));
+    }
+    let storage_policy = storage_policy_path
+        .map(|path| crate::planning_storage::StoragePolicy::capture(path, args.inode_margin))
+        .transpose()?;
     const FETCHED: &str = "fetched by EasyBuild (--from-pr or --from-commit)";
     const UNPARSED: &str = "on the robot path, not parsed by eb-stack";
 
@@ -2742,16 +2769,22 @@ pub fn run_stack_shard_with_sources(
             )));
         }
     }
-    let (footprints, footprints_sha256) = match &args.inode_footprints {
+    let (footprints, footprints_sha256, required_disk) = match &args.inode_footprints {
         Some(path) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("--inode-footprints {}: not readable", path.display()))?;
+            let captured = crate::inode_budget::parse_footprint_document(&text, path)?;
             (
-                crate::inode_budget::parse_footprints(&text, path)?,
+                captured.footprints,
                 Some(sha256_hex(text.as_bytes())),
+                captured.requires_real_disk,
             )
         }
-        None => (crate::inode_budget::Footprints::builtin(), None),
+        None => (
+            crate::inode_budget::Footprints::builtin(),
+            None,
+            BTreeSet::new(),
+        ),
     };
     let budget = crate::inode_budget::PlanBudget {
         quota: args.inode_quota,
@@ -3647,6 +3680,9 @@ pub fn run_stack_shard_with_sources(
             status.as_deref().unwrap_or("found")
         ));
     }
+    if let Some(policy) = &storage_policy {
+        digest_input.push_str(&policy.fingerprint());
+    }
     let inputs_digest = sha256_hex(digest_input.as_bytes());
 
     let mut files: Vec<(String, String)> = vec![(
@@ -4134,6 +4170,10 @@ pub fn run_stack_shard_with_sources(
             "modules": module_meta(&planned.cpu_prerequisites),
             "roots": cpu_root_json,
         });
+    }
+
+    if let Some(policy) = &storage_policy {
+        policy.annotate(&mut document, &required_disk, &stamp)?;
     }
 
     std::fs::create_dir_all(&args.out_dir)
