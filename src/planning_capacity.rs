@@ -3,7 +3,7 @@
 //! Allocatable resources are scheduler-effective capacities before allocation.
 //! This module performs no scheduler calls and never grants storage admission.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,10 @@ struct Snapshot {
     pending_jobs: Option<Vec<Pending>>,
     #[serde(default)]
     pending_complete: bool,
+    #[serde(default)]
+    partition_inventory_complete: bool,
+    #[serde(default)]
+    selected_partitions: BTreeSet<String>,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +246,29 @@ pub fn inspect(
         bail!("absent pending data cannot be complete");
     }
     let _cluster = &snapshot.cluster;
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let partition_known = snapshot.selected_partitions.contains(&request.partition)
+        || snapshot
+            .nodes
+            .iter()
+            .any(|node| node.partitions.contains(&request.partition));
+    if !snapshot.partition_inventory_complete || !partition_known {
+        return Ok(
+            json!({"schema_version":1,"advisory":true,"placement_guarantee":false,
+            "status":"unknown","usable_for_placement":false,
+            "reason":if !snapshot.partition_inventory_complete {"partition_inventory_incomplete"} else {"requested_partition_unknown"},
+            "snapshot":{"observed_at":snapshot.observed_at,"observed_until":snapshot.observed_until,
+                        "evaluated_at":evaluated_at,"age_seconds":age.num_milliseconds() as f64 / 1000.0,
+                        "max_age_seconds":max_age_seconds,"sha256":digest,"raw_sha256":snapshot.raw_sha256,
+                        "partition_inventory_complete":snapshot.partition_inventory_complete},
+            "request":request,"partition_target_nodes":null,"feature_eligible_nodes":null,
+            "queue_fitting_nodes":null,"idle_nodes":null,"free_fitting_nodes":null,"free_slots":null,
+            "known_free_resources":null,"pending":{"status":"unknown","complete":false,"known_demand":null}}),
+        );
+    }
     let mut identities = BTreeSet::new();
     let mut scoped = Vec::new();
     let mut partition_target_nodes = 0u64;
@@ -393,15 +420,12 @@ pub fn inspect(
         json!({"status":"unknown", "complete":false, "confirmed_matching_jobs":null,
                "possibly_competing_jobs":null, "known_demand":null})
     };
-    let digest: String = Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
     Ok(
         json!({"schema_version":1,"advisory":true,"placement_guarantee":false,
               "snapshot":{"observed_at":snapshot.observed_at,"observed_until":snapshot.observed_until,
                           "evaluated_at":evaluated_at,"age_seconds":age.num_milliseconds() as f64 / 1000.0,
                           "max_age_seconds":max_age_seconds,"sha256":digest,"raw_sha256":snapshot.raw_sha256},
+              "status":"known","usable_for_placement":true,
               "request":request,"partition_target_nodes":partition_target_nodes,
               "feature_eligible_nodes":eligible,"queue_fitting_nodes":queue_fitting,
               "idle_nodes":idle_nodes,"free_fitting_nodes":free_fitting,"free_slots":free_slots,
