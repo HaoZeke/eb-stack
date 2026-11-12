@@ -1,0 +1,40 @@
+{
+  "cluster": "example",
+  "nodes": [
+    {
+      "active_features": [
+        "scratch-node"
+      ],
+      "available_features": [
+        "scratch-node"
+      ],
+      "cpu_load": 0.5,
+      "cpus_allocatable": 16,
+      "cpus_allocated": 0,
+      "cpus_total": 16,
+      "gpus_allocatable": 0,
+      "gpus_allocated": 0,
+      "gpus_total": 0,
+      "memory_mib_allocatable": 32768,
+      "memory_mib_allocated": 0,
+      "memory_mib_total": 32768,
+      "name": "node-a",
+      "partitions": [
+        "compute",
+        "local"
+      ],
+      "state_flags": [
+        "IDLE"
+      ],
+      "target": "example/host"
+    }
+  ],
+  "observed_at": "2026-01-01T12:00:00Z",
+  "observed_until": "2026-01-01T12:00:01Z",
+  "partition_inventory_complete": true,
+  "schema_version": 1,
+  "selected_partitions": [
+    "compute",
+    "local"
+  ]
+}

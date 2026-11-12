@@ -1,0 +1,158 @@
+#+TITLE: Scheduler capacity and phase storage
+#+FILETAGS: :planning:slurm:storage:
+#+DATE: [2026-11-12 Thu]
+#+DESCRIPTION: Advisory capacity snapshots, exact scheduler constraints and opt-in per-phase storage placement with unchanged execution admission.
+#+STATUS: source-interface
+
+* Capacity is an observation
+
+=stack capacity= reads one normalized JSON snapshot. It does not query the
+scheduler, probe hosts, predict a queue wait, reserve a node or grant storage
+admission. The collector owns a bounded cached scheduler query and its
+provenance. The report contains aggregates and input hashes, not node names.
+Account, QOS, priority, reservations and intervening scheduler changes can
+prevent a reported fit from starting.
+
+The node =target= is an explicit maintained physical-host profile label.
+It is not a CPUID, guest or compiler-ISA attestation. Execution identity and
+compiler-target checks remain authoritative. Available and active features
+are distinct. Required features are literal names combined with AND;
+expressions are rejected rather than simplified.
+
+The synthetic input is [[file:../../../tests/planning_capacity_fixtures/snapshot.json][snapshot.json]]. Its schema version is 1:
+
+- =observed_at= is the observation start; =observed_until= optionally records
+  its end. =raw_sha256= optionally binds the original scheduler response.
+- =partition_inventory_complete= must establish full requested-partition
+  visibility. =selected_partitions= can explicitly name a known empty view.
+  An incomplete or missing view produces unknown/null advice, never a
+  measured zero or automatic storage route.
+- =nodes= contains unique =name=/=target= pairs, exact =partitions=,
+  =available_features=, =active_features= and =state_flags=.
+- =cpus_allocatable= is scheduler-effective CPU capacity before subtracting
+  =cpus_allocated=. Memory and GPU fields have the same meaning, with
+  =memory_mib_*= and =gpus_*= names. Optional =*_total= fields bound them.
+  Missing values are null/unknown. Inconsistent allocations are excluded.
+- Scheduler memory uses usable configured memory minus allocated memory.
+  OS =FreeMem= and =cpu_load= do not decide fit. The collector normalizes
+  scheduler-specific units and unknown sentinels; CPU load is informational.
+- =pending_jobs= is optional. Each row has an ID, state, partitions, optional
+  physical target and feature constraints, and total job CPU/memory/GPU
+  demand. Missing constraints/resources remain visible as possible demand;
+  absent pending data is unknown. =pending_complete= must not claim absent
+  data is complete.
+
+The [[https://slurm.schedmd.com/scontrol.html][scheduler field reference]] defines allocated memory and node states;
+[[https://slurm.schedmd.com/sinfo.html][the node-state reference]] identifies drained, reserved and down resources.
+The normalized schema avoids depending on one scheduler JSON plugin version.
+Collectors must include hidden configured partitions when establishing a
+complete view, and minimize scheduler RPCs.
+
+#+begin_src sh
+eb-stack stack capacity \\
+  --snapshot tests/planning_capacity_fixtures/snapshot.json \\
+  --partition local --target example/host --feature scratch-node \\
+  --cpus 4 --memory-mib 4096 --exclusive-node true --max-slots-per-node 1 \\
+  --generated-at 2026-01-01T12:00:10Z
+#+end_src
+
+The example reports one queue-fitting node and one free slot. These are
+advice, not an allocation. =ALLOCATED= can count as a future queue fit but
+has no free slot; drained, reserved, down and unknown states do not count.
+Per-node CPU, memory and GPU fits are computed before totals are added, so
+fragments on different nodes cannot create a fictitious fitting node.
+
+Requests contain resolved demands. Raw scheduler =--mem=0= means whole-node
+memory; it is not a zero-memory request. Resolve it, and partition defaults,
+before supplying a positive =memory_mib=. A CPU-only request does not require
+known GPU capacity; the GPU aggregate stays null when unknown.
+
+=exclusive_node=true= limits a node to one slot and excludes busy nodes from
+free exclusive fits. Explicit =false= permits resource-based sharing;
+=max_slots_per_node= can impose a stricter positive limit. Unknown
+exclusivity yields null free-slot advice and disables automatic placement.
+A configurable maximum observation age rejects stale or future snapshots.
+=--generated-at= makes replay deterministic. SHA256 covers the exact input
+bytes, including whitespace.
+
+* Storage advice is opt-in on stack shard
+
+The synthetic [[file:../../../tests/planning_capacity_fixtures/storage-policy.json][storage-policy.json]] selects one captured snapshot by path and
+expected SHA256. Its fields are:
+
+- =schema_version=1=, =capacity_snapshot=, =capacity_sha256=,
+  =max_age_seconds= and the literal =node_local_feature=.
+- =shared_budget= with =observed_at=, live =available_inodes=,
+  =reserved_inodes= and =margin_inodes=. Its margin must equal the caller's
+  configured =--inode-margin=; stale shared observations are refused.
+- =profiles= for =cpu_prerequisites=, =prelude= and =shards=.
+  Each specifies =compile_target=, =shared_route=, =node_local_route=,
+  and =shared=/=node_local= resolved capacity requests. Physical host labels
+  and compile targets are independent, including emulated execution routes.
+  The node-local request must retain the configured feature exactly.
+
+#+begin_src sh
+eb-stack stack shard \\
+  --build-list tests/stack_shard_fixtures/wave1.list \\
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \\
+  --installed tests/stack_shard_fixtures/installed.txt \\
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \\
+  --shards 4 \\
+  --storage-policy tests/planning_capacity_fixtures/storage-policy.json \\
+  --generated-at 2026-01-01T12:00:10Z --out-dir build/capacity-demo
+#+end_src
+
+=--storage-policy= and =--inode-quota= are mutually exclusive planning budget
+sources. Without a policy, existing constructors, fields and execution
+behavior remain unchanged. The opt-in path annotates every nonempty CPU
+prerequisite, prelude and shard phase. It orders phases by inode footprint,
+then phase ID; smallest phases spend the observed shared budget first.
+Overflow phases select =node-local= only when the exact configured route has
+known queue-fitting feature-eligible hosts. They can be allocated already:
+queue eligibility does not promise a free node. Without a verified eligible
+view, a phase stays shared with =awaiting_shared_admission=.
+
+Each real phase gains =placement= (=shared= or =node-local=) and =storage=:
+=phase_id=, =decision=, =compile_target=, the exact =request=,
+=execution_route=, =requires_real_disk=, =requires_node_local_disk=,
+=admission_required=true=, =admission_bypass=false= and
+=execution_storage_verification_required=true=. The plan-level
+=storage_policy= records captured policy/snapshot hashes, observed budget,
+capacity advice and deterministic phase order. Existing dependency/phase
+ordering remains required; these annotations do not authorize parallelizing
+CPU prerequisites with their consumers.
+
+Footprint JSON accepts numeric rows and metadata rows, for example:
+
+#+begin_src json
+{"default":60000,"footprints":{"Large":{"inodes":123456,"requires_real_disk":true}}}
+#+end_src
+
+Numbers, storage hints and their reported footprint digest come from the
+same captured bytes. A pathname update cannot change one without changing
+the others. Real-disk requirements are propagated to every affected phase.
+
+* Execution contract
+
+A planning string never disables shared quota admission. The execution
+adapter verifies SHA256 of the final =plan.json= file, phase ID, exact
+request/route, allocation/job identity, separate host/compiler identities,
+and the selected storage domain before choosing its normal admission pool.
+The plan's =inputs.sha256= is an input digest, not a substitute for hashing
+the final plan file.
+
+Build, temporary, source-index and isolated guest-home roots belong on the
+verified node-local disk for node-local phases. Final installation prefixes
+and declared durable work/log roots remain on their configured persistent
+filesystems. Source archives remain in approved durable caches; there is no
+redundant recipe-tree or source extraction. Any remaining mutable path in a
+shared scratch quota domain still requires that domain's admission.
+
+The adapter binds mount/device/backing facts and all mutable-root roles in
+an execution receipt. A guest needs a host backing proof and the existing
+kernel-bound execution identity; a guest filesystem name alone cannot prove
+NVMe backing. Disk requirements reject RAM-backed execution. Only validated
+observations select domain-scoped available-inode counters, reservations
+and live writers for the ordinary =stack admit= gate. The receipt/domain
+identity is retained in execution records. This interface adds no bypass
+flag and performs no installation relocation.

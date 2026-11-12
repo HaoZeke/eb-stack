@@ -1,0 +1,96 @@
+{
+  "capacity_sha256": "aaa0baa0e64a1b06d4aeb27960ceae593e16f6c417d6392a501e9367c7dc112b",
+  "capacity_snapshot": "snapshot.json",
+  "max_age_seconds": 60,
+  "node_local_feature": "scratch-node",
+  "profiles": {
+    "cpu_prerequisites": {
+      "compile_target": "example/host",
+      "node_local": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [
+          "scratch-node"
+        ],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "local"
+      },
+      "node_local_route": "native",
+      "shared": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "compute"
+      },
+      "shared_route": "native"
+    },
+    "prelude": {
+      "compile_target": "example/host",
+      "node_local": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [
+          "scratch-node"
+        ],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "local"
+      },
+      "node_local_route": "native",
+      "shared": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "compute"
+      },
+      "shared_route": "native"
+    },
+    "shards": {
+      "compile_target": "example/host",
+      "node_local": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [
+          "scratch-node"
+        ],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "local"
+      },
+      "node_local_route": "native",
+      "shared": {
+        "cpus": 4,
+        "exclusive_node": true,
+        "features": [],
+        "gpus": 0,
+        "host_target": "example/host",
+        "max_slots_per_node": 1,
+        "memory_mib": 4096,
+        "partition": "compute"
+      },
+      "shared_route": "native"
+    }
+  },
+  "schema_version": 1,
+  "shared_budget": {
+    "available_inodes": 105000,
+    "margin_inodes": 100000,
+    "observed_at": "2026-01-01T12:00:00Z",
+    "reserved_inodes": 1000
+  }
+}

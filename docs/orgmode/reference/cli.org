@@ -42,6 +42,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack gap~ | Route each site module the stack lacks, name the recipe that closes it, and write one TSV per route |
 | ~stack batch~ | Plan software-layer pull requests whose builds do not overlap |
 | ~stack shard~ | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies, capped by a scratch inode quota |
+| ~stack capacity~ | Read timestamped advisory scheduler capacity with exact partition, host profile and resource constraints |
 | ~stack footprints~ | Write the peak build-tree inode count per software name from ledger records, a static table, and a class table |
 | ~stack admit~ | Admit one build job under the scratch inode quota, counting the reservations of the jobs still running |
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
@@ -2363,3 +2364,7 @@ takes ~changes~ as an optional path array. ~eb_recipe_check~'s
 ~easyconfigs~ array has ~minItems~ 1. ~eb_recipe_read~, ~eb_recipe_list~,
 ~eb_recipe_edit~, and ~eb_recipe_write~ edit files only inside the workspace
 root.
+
+* Scheduler capacity and phase storage
+
+See [[file:planning-capacity.org][the captured capacity and storage-policy interface]] for schema, synthetic examples and the execution/admission contract. The optional ~stack shard --storage-policy~ path does not change default execution or grant admission.
