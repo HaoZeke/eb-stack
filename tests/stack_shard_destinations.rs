@@ -88,6 +88,10 @@ fn explicit_destination_controls_root_closure_cost_and_row_retention() {
                     .unwrap()
                     .contains("--installpath-modules")
             );
+            if lifted {
+                assert_eq!(missing["cpu_prerequisites"]["weight"], 2);
+                assert!(missing["cpu_prerequisites"]["inode_footprint"].as_u64().unwrap() > 2000);
+            }
             if !lifted {
                 assert_eq!(missing["shards"][0]["weight"], 2);
                 assert!(missing["shards"][0]["inode_footprint"].as_u64().unwrap() > 1000);
@@ -98,6 +102,10 @@ fn explicit_destination_controls_root_closure_cost_and_row_retention() {
             assert_eq!(present["lines"][0]["closure"], serde_json::json!([]));
             assert_ne!(missing["inputs"]["sha256"], present["inputs"]["sha256"]);
             assert_eq!(present["lines"][0]["text"], row);
+            if lifted {
+                assert_eq!(present["cpu_prerequisites"]["weight"], 0);
+                assert_eq!(present["cpu_prerequisites"]["inode_footprint"], 1000);
+            }
         }
     }
 }

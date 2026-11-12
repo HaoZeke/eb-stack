@@ -4103,7 +4103,15 @@ pub fn run_stack_shard_with_sources(
             .cpu_prerequisites
             .iter()
             .cloned()
-            .chain(cpu_root_lines.iter().map(|&i| closures[i].root.clone()))
+            .chain(cpu_root_lines.iter().filter_map(|&i| {
+                let closure = &closures[i];
+                closure
+                    .to_build
+                    .contains(&closure.root)
+                    .then(|| closure.root.clone())
+            }))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         let cpu_footprint = crate::inode_budget::shard_footprint(
             &cpu_modules,
@@ -4117,7 +4125,7 @@ pub fn run_stack_shard_with_sources(
             } else {
                 json!("cpu-prerequisites.list")
             },
-            "weight": planned.cpu_prerequisites_weight,
+            "weight": cpu_modules.iter().map(|module| weight(module)).sum::<u64>(),
             "inode_footprint": cpu_footprint.inodes,
             "inode_peak_module": cpu_footprint.peak_module,
             "modules": module_meta(&planned.cpu_prerequisites),
