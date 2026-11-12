@@ -18,7 +18,10 @@ fn fixture() -> (TempDir, Value, Value) {
 }
 fn write(dir: &Path, snapshot: &Value, mut policy: Value) -> StoragePolicy {
     let bytes = serde_json::to_vec(snapshot).unwrap();
-    policy["capacity_sha256"] = json!(format!("{:x}", Sha256::digest(&bytes)));
+    policy["capacity_sha256"] = json!(Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>());
     std::fs::write(dir.join("snapshot.json"), bytes).unwrap();
     std::fs::write(
         dir.join("policy.json"),
@@ -247,7 +250,10 @@ fn shard_cli_preserves_defaults_and_binds_every_opt_in_list_to_its_bytes() {
         assert_eq!(phase["storage"]["list_file"], filename);
         assert_eq!(
             phase["storage"]["list_sha256"],
-            format!("{:x}", Sha256::digest(bytes))
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         );
         assert_eq!(phase["storage"]["admission_required"], true);
         assert_eq!(phase["storage"]["admission_bypass"], false);
@@ -271,7 +277,10 @@ fn shard_cli_preserves_defaults_and_binds_every_opt_in_list_to_its_bytes() {
         let bytes = std::fs::read(dir.path().join("materialized").join(name)).unwrap();
         assert_eq!(
             phase["storage"]["execution_list_sha256"],
-            format!("{:x}", Sha256::digest(bytes))
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         );
     }
     let conflict = run("conflict", true, true);

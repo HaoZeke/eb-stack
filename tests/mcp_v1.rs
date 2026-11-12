@@ -148,6 +148,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_stack_shadow",
         "eb_stack_batch",
         "eb_stack_shard",
+        "eb_stack_capacity",
         "eb_stack_footprints",
         "eb_stack_admit",
         "eb_stack_arch",
@@ -180,7 +181,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 59, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 60, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2578,6 +2579,7 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_stack_shadow", "stack shadow"),
         ("eb_stack_batch", "stack batch"),
         ("eb_stack_shard", "stack shard"),
+        ("eb_stack_capacity", "stack capacity"),
         ("eb_stack_footprints", "stack footprints"),
         ("eb_stack_admit", "stack admit"),
         ("eb_stack_arch", "stack arch"),
@@ -3850,6 +3852,7 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         ("eb_stack_shadow", &["stack", "shadow"]),
         ("eb_stack_batch", &["stack", "batch"]),
         ("eb_stack_shard", &["stack", "shard"]),
+        ("eb_stack_capacity", &["stack", "capacity"]),
         ("eb_stack_footprints", &["stack", "footprints"]),
         ("eb_stack_admit", &["stack", "admit"]),
         ("eb_stack_arch", &["stack", "arch"]),
