@@ -461,7 +461,7 @@ fn tool_catalog() -> Vec<Value> {
             "eb_stack_capacity",
             "Report timestamped advisory scheduler capacity from a normalized snapshot, as stack capacity does. Partition, physical host target and literal AND features stay exact. Reports per-node resource fits without node names, queue-wait predictions, placement guarantees or admission changes. Missing partition/pending observations remain unknown.",
             &[("snapshot","string"),("partition","string"),("target","string"),("cpus","integer"),("memory_mib","integer")],
-            &[("feature","array"),("gpus","integer"),("gpu_type","string"),("generated_at","string"),("max_age_seconds","integer")],
+            &[("feature","array"),("gpus","integer"),("gpu_type","string"),("generated_at","string"),("max_age_seconds","integer"),("exclusive_node","boolean"),("max_slots_per_node","integer")],
         ),
         tool_with_optional(
             "eb_stack_shard",
@@ -3298,6 +3298,11 @@ fn stack_capacity_tool(arguments: &Value) -> Result<Value, String> {
         memory_mib: optional_u64(arguments, "memory_mib")?.ok_or("memory_mib is required")?,
         gpus: optional_u64(arguments, "gpus")?.unwrap_or(0),
         gpu_type: optional_string(arguments, "gpu_type"),
+        exclusive_node: arguments
+            .get("exclusive_node")
+            .map(|value| value.as_bool().ok_or("exclusive_node must be boolean"))
+            .transpose()?,
+        max_slots_per_node: optional_u64(arguments, "max_slots_per_node")?,
     };
     let evaluated_at =
         crate::site_commands::generated_at(optional_string(arguments, "generated_at"), false)

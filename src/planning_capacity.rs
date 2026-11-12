@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct CapacityRequest {
     /// Exact partition; no fallback partition is selected.
     pub partition: String,
-    /// Physical host target, independent of any guest compiler target.
+    /// Maintained physical-host profile label, not a runtime ISA attestation.
     pub host_target: String,
     /// Literal features required together, without expression rewriting.
     #[serde(default)]
@@ -30,6 +30,12 @@ pub struct CapacityRequest {
     /// Optional homogeneous GPU type required by the request.
     #[serde(default)]
     pub gpu_type: Option<String>,
+    /// Resolved whole-node policy; absent means partition policy is unknown.
+    #[serde(default)]
+    pub exclusive_node: Option<bool>,
+    /// Explicit per-node slot ceiling, independent of free resource totals.
+    #[serde(default)]
+    pub max_slots_per_node: Option<u64>,
 }
 
 impl CapacityRequest {
@@ -43,6 +49,9 @@ impl CapacityRequest {
         }
         if self.gpu_type.is_some() && self.gpus == 0 {
             bail!("gpu_type requires a nonzero GPU request");
+        }
+        if self.max_slots_per_node == Some(0) {
+            bail!("max_slots_per_node must be positive");
         }
         validate_features(&self.features)?;
         Ok(())
@@ -114,11 +123,18 @@ struct Resources {
 impl Resources {
     fn slots(self, request: &CapacityRequest) -> u64 {
         let slots = (self.cpus / request.cpus).min(self.memory_mib / request.memory_mib);
-        if request.gpus == 0 {
+        let slots = if request.gpus == 0 {
             slots
         } else {
             slots.min(self.gpus / request.gpus)
-        }
+        };
+        slots
+            .min(request.max_slots_per_node.unwrap_or(u64::MAX))
+            .min(if request.exclusive_node == Some(true) {
+                1
+            } else {
+                u64::MAX
+            })
     }
 
     fn add(&mut self, other: Self) -> Result<()> {
@@ -375,6 +391,10 @@ pub fn inspect(
             gpu_unknown_nodes += 1;
         }
         free.add(remaining)?;
+        if request.exclusive_node == Some(true) && state != "IDLE" {
+            *excluded.entry("exclusive_node_busy".into()).or_default() += 1;
+            continue;
+        }
         let slots = remaining.slots(request);
         if slots > 0 {
             free_fitting += 1;
@@ -443,10 +463,13 @@ pub fn inspect(
               "snapshot":{"observed_at":snapshot.observed_at,"observed_until":snapshot.observed_until,
                           "evaluated_at":evaluated_at,"age_seconds":age.num_milliseconds() as f64 / 1000.0,
                           "max_age_seconds":max_age_seconds,"sha256":digest,"raw_sha256":snapshot.raw_sha256},
-              "status":"known","usable_for_placement":true,
+              "status":"known","usable_for_placement":request.exclusive_node.is_some(),
               "request":request,"partition_target_nodes":partition_target_nodes,
               "feature_eligible_nodes":eligible,"queue_fitting_nodes":queue_fitting,
-              "idle_nodes":idle_nodes,"free_fitting_nodes":free_fitting,"free_slots":free_slots,
+              "idle_nodes":idle_nodes,
+              "free_fitting_nodes":request.exclusive_node.map(|_| free_fitting),
+              "free_slots":request.exclusive_node.map(|_| free_slots),
+              "partition_policy_known":request.exclusive_node.is_some(),
               "known_free_resources":{"cpus":free.cpus,"memory_mib":free.memory_mib,
                  "gpus":if gpu_unknown_nodes == 0 {Some(free.gpus)} else {None}},
               "gpu_capacity_unknown_nodes":gpu_unknown_nodes,"state_counts":states,"excluded":excluded,"pending":pending}),

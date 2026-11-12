@@ -15,7 +15,7 @@ fn snapshot(nodes: Vec<Value>) -> Value {
 }
 fn request() -> CapacityRequest {
     serde_json::from_value(json!({"partition":"compute","host_target":"example/host",
-        "features":["scratch-node"],"cpus":8,"memory_mib":8192,"gpus":1,"gpu_type":"example-gpu"}))
+        "features":["scratch-node"],"cpus":8,"memory_mib":8192,"gpus":1,"gpu_type":"example-gpu","exclusive_node":false}))
     .unwrap()
 }
 fn report(value: &Value) -> Value {
@@ -199,4 +199,44 @@ fn cpu_requests_do_not_require_gpu_observations() {
         60
     )
     .is_err());
+}
+
+#[test]
+fn whole_node_and_unknown_partition_policies_do_not_multiply_slots() {
+    let mut n = node("large", &["IDLE"]);
+    n["cpus_total"] = json!(192);
+    n["cpus_allocatable"] = json!(192);
+    let bytes = serde_json::to_vec(&snapshot(vec![n.clone()])).unwrap();
+    let mut req = request();
+    req.cpus = 64;
+    req.gpus = 0;
+    req.gpu_type = None;
+    req.exclusive_node = Some(true);
+    assert_eq!(
+        inspect(&bytes, &req, "2026-01-01T12:00:10Z", 60).unwrap()["free_slots"],
+        1
+    );
+    req.exclusive_node = Some(false);
+    req.max_slots_per_node = Some(1);
+    assert_eq!(
+        inspect(&bytes, &req, "2026-01-01T12:00:10Z", 60).unwrap()["free_slots"],
+        1
+    );
+    req.exclusive_node = None;
+    let unknown = inspect(&bytes, &req, "2026-01-01T12:00:10Z", 60).unwrap();
+    assert!(unknown["free_slots"].is_null());
+    assert_eq!(unknown["usable_for_placement"], false);
+    n["state_flags"] = json!(["MIXED"]);
+    n["cpus_allocated"] = json!(64);
+    req.exclusive_node = Some(true);
+    assert_eq!(
+        inspect(
+            &serde_json::to_vec(&snapshot(vec![n])).unwrap(),
+            &req,
+            "2026-01-01T12:00:10Z",
+            60
+        )
+        .unwrap()["free_slots"],
+        0
+    );
 }

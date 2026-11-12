@@ -1206,6 +1206,12 @@ struct CapacityArgs {
     /// Required GPU type.
     #[arg(long)]
     gpu_type: Option<String>,
+    /// Resolved partition/job exclusivity: true or false; absent is unknown.
+    #[arg(long, action = clap::ArgAction::Set)]
+    exclusive_node: Option<bool>,
+    /// Positive explicit per-node slot cap.
+    #[arg(long)]
+    max_slots_per_node: Option<u64>,
     /// RFC3339 evaluation time for deterministic replay; absent is now.
     #[arg(long)]
     generated_at: Option<String>,
@@ -3642,6 +3648,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 memory_mib: args.memory_mib,
                 gpus: args.gpus,
                 gpu_type: args.gpu_type,
+                exclusive_node: args.exclusive_node,
+                max_slots_per_node: args.max_slots_per_node,
             };
             let report = eb_stack::planning_capacity::inspect(
                 &bytes,
