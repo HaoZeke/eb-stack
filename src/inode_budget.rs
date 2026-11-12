@@ -32,7 +32,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Build-tree inodes assumed for a package no record, table, or class names.
@@ -659,6 +659,18 @@ pub fn check_job(job: &str) -> Result<()> {
     Ok(())
 }
 
+/// A forecast describes setup; a waiting candidate performs no build writes.
+/// Missing lifecycle metadata denotes an admitted legacy writer.
+fn reservation_phase(value: &Value) -> Result<&str> {
+    match value.get("phase") {
+        None => Ok("admitted"),
+        Some(Value::String(phase)) if matches!(phase.as_str(), "forecast" | "waiting" | "admitted") => {
+            Ok(phase)
+        }
+        _ => bail!("reservation phase must be forecast, waiting, or admitted"),
+    }
+}
+
 /// Read every `*.json` reservation under `dir`. A missing directory is no
 /// reservations. A file that is not a reservation is an error, because a
 /// reservation that cannot be read hides inodes.
@@ -678,6 +690,7 @@ pub fn read_reservations(dir: &Path) -> Result<Vec<Reservation>> {
             .with_context(|| format!("read reservation {}", path.display()))?;
         let value: Value = serde_json::from_str(&text)
             .with_context(|| format!("reservation {} is not JSON", path.display()))?;
+        reservation_phase(&value)?;
         let job = value
             .get("job")
             .and_then(Value::as_str)
@@ -748,6 +761,26 @@ pub fn decide(
     margin: u64,
     unknown_reserve: u64,
 ) -> Decision {
+    decide_with_waiting(
+        available,
+        (reservations, &BTreeSet::new()),
+        job,
+        live,
+        footprint,
+        margin,
+        unknown_reserve,
+    )
+}
+
+fn decide_with_waiting(
+    available: u64,
+    (reservations, waiting): (&[Reservation], &BTreeSet<String>),
+    job: &str,
+    live: Option<&[String]>,
+    footprint: u64,
+    margin: u64,
+    unknown_reserve: u64,
+) -> Decision {
     let mut counted = Vec::new();
     let mut stale = Vec::new();
     for reservation in reservations {
@@ -758,6 +791,7 @@ pub fn decide(
             Some(live) if !live.iter().any(|id| id == &reservation.job) => {
                 stale.push(reservation.clone());
             }
+            _ if waiting.contains(&reservation.job) => {}
             _ => counted.push(reservation.clone()),
         }
     }
@@ -989,6 +1023,19 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         }
         None => None,
     };
+    // A candidate relinquishes its setup forecast only while the common lock
+    // prevents another controller from admitting against an intermediate state.
+    read_reservations(&args.reservations)?;
+    let current_path = args.reservations.join(format!("{}.json", args.job));
+    let mut lifecycle = false;
+    if args.lock.is_some() && current_path.is_file() {
+        let mut current: Value = serde_json::from_str(&std::fs::read_to_string(&current_path)?)?;
+        lifecycle = current.get("phase").is_some();
+        if matches!(reservation_phase(&current)?, "forecast" | "waiting") {
+            current["phase"] = json!("waiting");
+            crate::write_json_pretty(&current_path, &current)?;
+        }
+    }
     let (quota, mut refusal) = match observe_quota(args) {
         Ok(quota) => (quota, None),
         Err(error) if args.quota_cmd.is_some() => (
@@ -1017,9 +1064,19 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
     };
     let stamp = crate::site_commands::generated_at(args.ts.clone(), true)?;
     let reservations = read_reservations(&args.reservations)?;
-    let mut decision = decide(
+    let mut waiting = BTreeSet::new();
+    if args.lock.is_some() {
+        for record in &reservations {
+            let path = args.reservations.join(format!("{}.json", record.job));
+            let value: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+            if reservation_phase(&value)? == "waiting" {
+                waiting.insert(record.job.clone());
+            }
+        }
+    }
+    let mut decision = decide_with_waiting(
         quota.available,
-        &reservations,
+        (&reservations, &waiting),
         &args.job,
         live_jobs.as_deref(),
         args.footprint,
@@ -1045,18 +1102,21 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         std::fs::create_dir_all(&args.reservations)
             .with_context(|| format!("create {}", args.reservations.display()))?;
         let path = args.reservations.join(format!("{}.json", args.job));
-        let record = json!({
+        let mut record = json!({
             "job": args.job,
             "footprint": args.footprint,
             "margin": args.margin,
             "ts": stamp,
         });
+        if lifecycle {
+            record["phase"] = json!("admitted");
+        }
         crate::write_json_pretty(&path, &record)?;
         Some(path)
     } else {
         None
     };
-    let line = serde_json::to_string(&json!({
+    let mut report = json!({
         "job": args.job,
         "admitted": decision.admitted,
         "available": decision.available,
@@ -1085,7 +1145,11 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
         "refusal": refusal,
         "reservation": reservation.as_ref().map(|p| p.display().to_string()),
         "ts": stamp,
-    }))?;
+    });
+    if !waiting.is_empty() {
+        report["waiting_forecasts"] = json!(waiting);
+    }
+    let line = serde_json::to_string(&report)?;
     Ok(AdmitReport {
         decision,
         reservation,
