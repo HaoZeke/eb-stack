@@ -14,6 +14,7 @@ targets = [
   "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
   "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
   "x86_64-pc-windows-msvc",
 ]
 # Publish the binary as eb-stack; crate package is eb_stack.
@@ -23,3 +24,6 @@ pr-run-mode = "plan"
 # label the second it is created, so the target builds on macos-15.
 [dist.github-custom-runners]
 aarch64-apple-darwin = "macos-15"
+
+[dist.dependencies.apt]
+musl-tools = { version = "*", stage = ["build"], targets = ["x86_64-unknown-linux-musl"] }

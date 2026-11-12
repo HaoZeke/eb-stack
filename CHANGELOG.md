@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## 0.7.3 - 2026-11-11
 
+### Distribution
+
+- Static x86-64 Linux archives are published by the standard release workflow.
+
 ### Fixed
 
 - Failed scheduler observations retain every reservation even when stale-record
