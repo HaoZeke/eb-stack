@@ -2744,11 +2744,11 @@ pub fn run_stack_shard_with_sources(
     }
     let (footprints, footprints_sha256) = match &args.inode_footprints {
         Some(path) => {
-            let bytes = std::fs::read(path)
+            let text = std::fs::read_to_string(path)
                 .with_context(|| format!("--inode-footprints {}: not readable", path.display()))?;
             (
-                crate::inode_budget::read_footprints(path)?,
-                Some(sha256_hex(&bytes)),
+                crate::inode_budget::parse_footprints(&text, path)?,
+                Some(sha256_hex(text.as_bytes())),
             )
         }
         None => (crate::inode_budget::Footprints::builtin(), None),

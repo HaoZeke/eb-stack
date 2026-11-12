@@ -387,7 +387,12 @@ pub fn run_stack_footprints(args: &FootprintsRequest) -> Result<FootprintsRun> {
 pub fn read_footprints(path: &Path) -> Result<Footprints> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("--inode-footprints {}: not readable", path.display()))?;
-    let value: Value = serde_json::from_str(&text)
+    parse_footprints(&text, path)
+}
+
+/// Parse captured footprint text, using the path only for diagnostics.
+pub(crate) fn parse_footprints(text: &str, path: &Path) -> Result<Footprints> {
+    let value: Value = serde_json::from_str(text)
         .with_context(|| format!("--inode-footprints {}: not JSON", path.display()))?;
     Footprints::from_json(&value).with_context(|| format!("--inode-footprints {}", path.display()))
 }
@@ -1272,6 +1277,20 @@ mod tests {
         assert_eq!(flat.packages["CP2K"], 400_000);
         assert!(Footprints::from_json(&json!({"CP2K": "lots"})).is_err());
         assert!(Footprints::from_json(&json!([1])).is_err());
+    }
+
+    #[test]
+    fn captured_footprints_do_not_reopen_the_diagnostic_path() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("footprints.json");
+        std::fs::write(&path, r#"{"default":11111,"footprints":{"Demo":22222}}"#).unwrap();
+        let captured = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, r#"{"default":33333,"footprints":{"Demo":44444}}"#).unwrap();
+
+        let parsed = parse_footprints(&captured, &path).unwrap();
+        assert_eq!(parsed.default, 11111);
+        assert_eq!(parsed.packages["Demo"], 22222);
+        assert_eq!(read_footprints(&path).unwrap().default, 33333);
     }
 
     #[test]
