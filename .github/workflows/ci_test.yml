@@ -201,6 +201,7 @@ jobs:
             --test stack_shard \
             --test inode_footprints_snapshot \
             --test planning_capacity \
+            --test planning_storage \
             --test stack_shard_destinations \
             --test stack_admit \
             --test admission_forecast_lifecycle \
