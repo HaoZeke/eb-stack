@@ -148,9 +148,24 @@ impl Footprints {
             if flat && matches!(name.as_str(), "default" | "schema_version" | "generated_at") {
                 continue;
             }
-            let inodes = inodes
-                .as_u64()
-                .ok_or_else(|| anyhow!("footprint of {name} is not an integer"))?;
+            let inodes = if let Value::Object(fields) = inodes {
+                if fields
+                    .keys()
+                    .any(|key| key != "inodes" && key != "requires_real_disk")
+                {
+                    bail!("unsupported footprint metadata for {name}");
+                }
+                if fields
+                    .get("requires_real_disk")
+                    .is_some_and(|value| !value.is_boolean())
+                {
+                    bail!("requires_real_disk of {name} is not a boolean");
+                }
+                fields.get("inodes").and_then(Value::as_u64)
+            } else {
+                inodes.as_u64()
+            }
+            .ok_or_else(|| anyhow!("footprint of {name} is not an integer"))?;
             packages.insert(name.clone(), inodes);
         }
         Ok(Self { default, packages })
@@ -392,9 +407,35 @@ pub fn read_footprints(path: &Path) -> Result<Footprints> {
 
 /// Parse captured footprint text, using the path only for diagnostics.
 pub(crate) fn parse_footprints(text: &str, path: &Path) -> Result<Footprints> {
+    Ok(parse_footprint_document(text, path)?.footprints)
+}
+
+/// Footprint estimates and storage hints captured from the same document.
+pub(crate) struct FootprintDocument {
+    pub footprints: Footprints,
+    pub requires_real_disk: BTreeSet<String>,
+}
+
+/// Parse all planning metadata without reopening its diagnostic path.
+pub(crate) fn parse_footprint_document(text: &str, path: &Path) -> Result<FootprintDocument> {
     let value: Value = serde_json::from_str(text)
         .with_context(|| format!("--inode-footprints {}: not JSON", path.display()))?;
-    Footprints::from_json(&value).with_context(|| format!("--inode-footprints {}", path.display()))
+    let footprints = Footprints::from_json(&value)
+        .with_context(|| format!("--inode-footprints {}", path.display()))?;
+    let table = value
+        .get("footprints")
+        .unwrap_or(&value)
+        .as_object()
+        .expect("validated footprint object");
+    let requires_real_disk = table
+        .iter()
+        .filter(|(_, row)| row.get("requires_real_disk").and_then(Value::as_bool) == Some(true))
+        .map(|(name, _)| name.clone())
+        .collect();
+    Ok(FootprintDocument {
+        footprints,
+        requires_real_disk,
+    })
 }
 
 /// The inodes one shard holds on scratch while it runs.
@@ -1277,6 +1318,29 @@ mod tests {
         assert_eq!(flat.packages["CP2K"], 400_000);
         assert!(Footprints::from_json(&json!({"CP2K": "lots"})).is_err());
         assert!(Footprints::from_json(&json!([1])).is_err());
+    }
+
+    #[test]
+    fn footprint_storage_hints_share_the_captured_document() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("footprints.json");
+        let original = r#"{"footprints":{"Demo":{"inodes":123,"requires_real_disk":true}}}"#;
+        std::fs::write(&path, original).unwrap();
+        let captured = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"footprints":{"Demo":{"inodes":999,"requires_real_disk":false}}}"#,
+        )
+        .unwrap();
+        let parsed = parse_footprint_document(&captured, &path).unwrap();
+        assert_eq!(parsed.footprints.packages["Demo"], 123);
+        assert!(parsed.requires_real_disk.contains("Demo"));
+        assert_eq!(read_footprints(&path).unwrap().packages["Demo"], 999);
+        assert!(parse_footprint_document(
+            r#"{"footprints":{"Demo":{"inodes":1,"requires_real_disk":"yes"}}}"#,
+            &path
+        )
+        .is_err());
     }
 
     #[test]
