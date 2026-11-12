@@ -3278,6 +3278,7 @@ pub fn run_stack_shard_with_sources(
         let by_key: BTreeMap<ModuleKey, &Candidate> =
             universe.iter().map(|c| (ModuleKey::of(c), c)).collect();
         let mut universe_starts = Vec::new();
+        let mut universe_missing = BTreeSet::new();
         for (i, line) in lines.iter().enumerate() {
             if universe_for[i] != Some(u) || opaque[i].is_some() {
                 continue;
@@ -3371,6 +3372,7 @@ pub fn run_stack_shard_with_sources(
                     }
                 }
             }
+            universe_missing.extend(closure.to_build.iter().cloned());
             universe_starts.push(start.clone());
             closures[i] = Some(LineClosure {
                 root: module_name(start),
@@ -3380,7 +3382,9 @@ pub fn run_stack_shard_with_sources(
         // One closure over every line of the universe gives a dependency
         // order for the prelude.
         orders.push(
-            closure_against_installed(&universe, &universe_starts, Choice::Newest, &is_installed)
+            closure_against_installed(&universe, &universe_starts, Choice::Newest, &|key| {
+                !universe_missing.contains(key) && is_installed(key)
+            })
                 .to_build
                 .iter()
                 .map(module_name)
