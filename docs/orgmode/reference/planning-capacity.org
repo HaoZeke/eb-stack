@@ -156,3 +156,8 @@ observations select domain-scoped available-inode counters, reservations
 and live writers for the ordinary =stack admit= gate. The receipt/domain
 identity is retained in execution records. This interface adds no bypass
 flag and performs no installation relocation.
+
+Each emitted phase =storage= object binds =list_file= and =list_sha256= to the
+exact generated list bytes. Execution verifies these fields together with the
+final plan file digest; =inputs.sha256= is an input fingerprint, not the final
+plan digest.

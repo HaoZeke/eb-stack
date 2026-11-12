@@ -123,11 +123,10 @@ struct Resources {
 impl Resources {
     fn slots(self, request: &CapacityRequest) -> u64 {
         let slots = (self.cpus / request.cpus).min(self.memory_mib / request.memory_mib);
-        let slots = if request.gpus == 0 {
-            slots
-        } else {
-            slots.min(self.gpus / request.gpus)
-        };
+        let slots = self
+            .gpus
+            .checked_div(request.gpus)
+            .map_or(slots, |gpu_slots| slots.min(gpu_slots));
         slots
             .min(request.max_slots_per_node.unwrap_or(u64::MAX))
             .min(if request.exclusive_node == Some(true) {

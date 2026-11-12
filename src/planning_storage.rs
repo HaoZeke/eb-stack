@@ -156,7 +156,7 @@ impl StoragePolicy {
     #[must_use]
     pub fn fingerprint(&self) -> String {
         format!(
-            "storage_policy={}\\ncapacity_snapshot={}\\n",
+            "storage_policy={}\ncapacity_snapshot={}\n",
             self.policy_sha256, self.snapshot_sha256
         )
     }
