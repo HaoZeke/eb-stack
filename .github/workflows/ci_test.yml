@@ -350,7 +350,7 @@ jobs:
           root = pathlib.Path("target/portable-candidate")
           name = "eb-stack-" + source + "-x86_64-unknown-linux-musl"
           payload = root / name
-          payload.mkdir(parents=True)
+          payload.mkdir(parents=True, exist_ok=True)
           shutil.copy2(binary, payload / "eb-stack")
           shutil.copy2("LICENSE", payload / "LICENSE")
           receipt = {

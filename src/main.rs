@@ -1692,6 +1692,9 @@ enum StackCommand {
     )]
     Shard(Box<ShardArgs>),
     /// Inspect timestamped advisory scheduler capacity without placing jobs.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack capacity --snapshot capacity.json --partition compute --target example/host --feature scratch-node --cpus 4 --memory-mib 4096 --exclusive-node true --max-slots-per-node 1 --generated-at 2026-01-01T12:00:10Z --max-age-seconds 60"
+    )]
     Capacity(Box<CapacityArgs>),
     /// Write the peak build-tree inode footprint per software name.
     ///
