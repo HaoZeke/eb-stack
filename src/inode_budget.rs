@@ -1484,7 +1484,13 @@ mod tests {
         );
         let unbounded = place(&sizes, &[false, false, true, false], None, true);
         assert_eq!(unbounded[2], Placement::NodeLocal);
-        assert_eq!(unbounded.iter().filter(|p| **p == Placement::Shared).count(), 3);
+        assert_eq!(
+            unbounded
+                .iter()
+                .filter(|p| **p == Placement::Shared)
+                .count(),
+            3
+        );
     }
 
     #[test]
