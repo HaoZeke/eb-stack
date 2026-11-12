@@ -2390,10 +2390,13 @@ fn shard_root_destination(line: &crate::shard::ShardLine) -> Result<Option<PathB
 
 fn shard_root_module_exists(destination: &Path, module: &str) -> bool {
     let path = destination.join("all").join(module);
-    path.is_file() || path.with_file_name(format!(
-        "{}.lua",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    )).is_file()
+    path.is_file()
+        || path
+            .with_file_name(format!(
+                "{}.lua",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ))
+            .is_file()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

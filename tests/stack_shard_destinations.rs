@@ -47,7 +47,11 @@ fn run(root: &Path, row: &str, label: &str, lifted: bool) -> std::process::Outpu
 
 fn plan(root: &Path, row: &str, label: &str, lifted: bool) -> Value {
     let output = run(root, row, label, lifted);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     serde_json::from_slice(&fs::read(root.join(label).join("plan.json")).unwrap()).unwrap()
 }
 
@@ -69,10 +73,21 @@ fn explicit_destination_controls_root_closure_cost_and_row_retention() {
             assert!(closure.contains(&Value::from("Need/1")));
             assert!(!closure.contains(&Value::from("Reuse/1")));
             assert_eq!(closure.len(), 2);
-            let filename = if lifted { "cpu-prerequisites.list" } else { "shard-01.list" };
-            assert!(fs::read_to_string(root.join("missing").join(filename)).unwrap().lines().any(|l| l == row));
+            let filename = if lifted {
+                "cpu-prerequisites.list"
+            } else {
+                "shard-01.list"
+            };
+            assert!(fs::read_to_string(root.join("missing").join(filename))
+                .unwrap()
+                .lines()
+                .any(|l| l == row));
             let local_filename = filename.replace(".list", ".local.list");
-            assert!(fs::read_to_string(root.join("missing").join(local_filename)).unwrap().contains("--installpath-modules"));
+            assert!(
+                fs::read_to_string(root.join("missing").join(local_filename))
+                    .unwrap()
+                    .contains("--installpath-modules")
+            );
             if !lifted {
                 assert_eq!(missing["shards"][0]["weight"], 2);
                 assert!(missing["shards"][0]["inode_footprint"].as_u64().unwrap() > 1000);
@@ -97,7 +112,10 @@ fn default_roots_reuse_global_modules_but_explicit_roots_do_not_require_global_p
     fs::rename(root.join("cpu/Foo"), root.join("unrelated")).unwrap();
     fs::create_dir_all(root.join("noarch/all/Foo")).unwrap();
     fs::write(root.join("noarch/all/Foo/1"), "# Tcl module\n").unwrap();
-    let row = format!("Foo-1.eb --installpath-modules={}", root.join("noarch").display());
+    let row = format!(
+        "Foo-1.eb --installpath-modules={}",
+        root.join("noarch").display()
+    );
     let explicit = plan(root, &row, "explicit", false);
     assert_eq!(explicit["lines"][0]["closure"], serde_json::json!([]));
 }
