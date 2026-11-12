@@ -24,4 +24,3 @@ pr-run-mode = "plan"
 # label the second it is created, so the target builds on macos-15.
 [dist.github-custom-runners]
 aarch64-apple-darwin = "macos-15"
-
