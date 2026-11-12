@@ -88,6 +88,18 @@ fn phase_requires_disk(value: &Value, required: &BTreeSet<String>) -> bool {
     })
 }
 
+fn shard_requires_disk(value: &Value, lines: &Value, required: &BTreeSet<String>) -> bool {
+    phase_requires_disk(value, required)
+        || lines.as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["shard"] == value["name"]
+                    && row["easyconfig"]
+                        .as_str()
+                        .is_some_and(|name| requires_disk(name, required))
+            })
+        })
+}
+
 impl StoragePolicy {
     /// Capture a policy and its expected scheduler snapshot once.
     ///
@@ -227,7 +239,7 @@ impl StoragePolicy {
                 inodes: value["inode_footprint"]
                     .as_u64()
                     .context("shard inode footprint is missing")?,
-                real_disk: phase_requires_disk(value, required),
+                real_disk: shard_requires_disk(value, &document["lines"], required),
             });
         }
         phases.sort_by(|a, b| (a.inodes, &a.id).cmp(&(b.inodes, &b.id)));
@@ -305,5 +317,27 @@ impl StoragePolicy {
             "capacity":advice,"phase_order":phases.iter().map(|phase| phase.id.clone()).collect::<Vec<_>>(),
             "execution_receipt_required":true,"admission_unchanged":true});
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opaque_shard_roots_retain_captured_storage_requirements() {
+        let required = BTreeSet::from(["DiskTool".to_owned()]);
+        let phase = json!({"name":"shard-01","modules":[]});
+        let lines = json!([
+            {"shard":"shard-01","easyconfig":"DiskTool-1.0.eb"},
+            {"shard":"shard-02","easyconfig":"OtherTool-1.0.eb"}
+        ]);
+        assert!(shard_requires_disk(&phase, &lines, &required));
+        assert!(!shard_requires_disk(
+            &json!({"name":"shard-02","modules":[]}),
+            &lines,
+            &required
+        ));
+        assert!(!shard_requires_disk(&phase, &json!([]), &required));
     }
 }
