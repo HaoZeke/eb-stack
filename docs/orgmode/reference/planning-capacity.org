@@ -6,6 +6,9 @@
 
 * Capacity is an observation
 
+This page describes the =main= source interface. The =0.7.3= release binary
+does not provide =stack capacity= or =stack shard --storage-policy=.
+
 =stack capacity= reads one normalized JSON snapshot. It does not query the
 scheduler, probe hosts, predict a queue wait, reserve a node or grant storage
 admission. The collector owns a bounded cached scheduler query and its
