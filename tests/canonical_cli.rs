@@ -612,20 +612,31 @@ fn recipe_check_file_roots_match_directories_and_preserve_later_precedence() {
     std::fs::write(
         first.join("Dep-1.eb"),
         "name = 'Dep'\nversion = '1'\ntoolchain = SYSTEM\n",
-    ).unwrap();
+    )
+    .unwrap();
     let run = |roots: &[&std::path::Path]| {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
-        cmd.current_dir(&first).args(["recipe", "check", "--strict", "--recipe"]).arg(&recipe);
+        cmd.current_dir(&first)
+            .args(["recipe", "check", "--strict", "--recipe"])
+            .arg(&recipe);
         for root in roots {
             cmd.arg("--easyconfigs").arg(root);
         }
         cmd.output().unwrap()
     };
     let directory = run(&[&first]);
-    assert!(directory.status.success(), "{}", String::from_utf8_lossy(&directory.stderr));
+    assert!(
+        directory.status.success(),
+        "{}",
+        String::from_utf8_lossy(&directory.stderr)
+    );
     for root in [recipe.as_path(), std::path::Path::new("Widget-1.eb")] {
         let file = run(&[root]);
-        assert!(file.status.success(), "{}", String::from_utf8_lossy(&file.stderr));
+        assert!(
+            file.status.success(),
+            "{}",
+            String::from_utf8_lossy(&file.stderr)
+        );
         assert_eq!(file.stdout, directory.stdout);
         assert_eq!(file.stderr, directory.stderr);
     }
@@ -642,7 +653,11 @@ fn recipe_check_file_roots_match_directories_and_preserve_later_precedence() {
         assert_eq!(files.stdout, directories.stdout);
         assert_eq!(files.stderr, directories.stderr);
         let reversed = run(&[roots[1], roots[0]]);
-        assert!(reversed.status.success(), "{}", String::from_utf8_lossy(&reversed.stderr));
+        assert!(
+            reversed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reversed.stderr)
+        );
         assert_eq!(reversed.stdout, directory.stdout);
     }
 }
