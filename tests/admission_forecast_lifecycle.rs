@@ -18,19 +18,32 @@ impl Fixture {
         let lock = directory.path().join("lock");
         std::fs::create_dir(&reservations).unwrap();
         std::fs::write(&quota, r#"{"inodes_available":500}"#).unwrap();
-        Self { _directory: directory, quota, reservations, lock }
+        Self {
+            _directory: directory,
+            quota,
+            reservations,
+            lock,
+        }
     }
 
     fn record(&self, job: &str, phase: Option<&str>) {
-        let mut record = json!({"job":job,"footprint":300,"margin":100,"ts":"2026-11-12T00:00:00Z"});
+        let mut record =
+            json!({"job":job,"footprint":300,"margin":100,"ts":"2026-11-12T00:00:00Z"});
         if let Some(phase) = phase {
             record["phase"] = json!(phase);
         }
-        std::fs::write(self.reservations.join(format!("{job}.json")), record.to_string()).unwrap();
+        std::fs::write(
+            self.reservations.join(format!("{job}.json")),
+            record.to_string(),
+        )
+        .unwrap();
     }
 
     fn read(&self, job: &str) -> Value {
-        serde_json::from_slice(&std::fs::read(self.reservations.join(format!("{job}.json"))).unwrap()).unwrap()
+        serde_json::from_slice(
+            &std::fs::read(self.reservations.join(format!("{job}.json"))).unwrap(),
+        )
+        .unwrap()
     }
 
     fn command(&self, job: &str, lock: bool) -> Command {
@@ -38,10 +51,23 @@ impl Fixture {
         command.args(["stack", "admit", "--quota-json"]);
         command.arg(&self.quota);
         command.args(["--reservations"]).arg(&self.reservations);
-        command.args(["--job", job, "--footprint", "300", "--margin", "100",
-                      "--unknown-reserve", "200", "--live-jobs", "11,12"]);
+        command.args([
+            "--job",
+            job,
+            "--footprint",
+            "300",
+            "--margin",
+            "100",
+            "--unknown-reserve",
+            "200",
+            "--live-jobs",
+            "11,12",
+        ]);
         if lock {
-            command.arg("--lock").arg(&self.lock).args(["--lock-kind", "posix"]);
+            command
+                .arg("--lock")
+                .arg(&self.lock)
+                .args(["--lock-kind", "posix"]);
         }
         command
     }
@@ -84,7 +110,10 @@ fn legacy_and_setup_records_keep_their_full_forecasts() {
         assert_eq!(output.status.code(), Some(78), "{report}");
         assert_eq!(report["reserved"], 300);
         assert_eq!(fixture.read("11")["footprint"], 300);
-        assert_eq!(fixture.read("11").get("phase").and_then(Value::as_str), phase);
+        assert_eq!(
+            fixture.read("11").get("phase").and_then(Value::as_str),
+            phase
+        );
     }
 }
 
@@ -108,7 +137,10 @@ fn invalid_lifecycle_refuses_without_mutating_records() {
     let output = fixture.command("12", true).output().unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("reservation phase"));
-    assert_eq!(std::fs::read(fixture.reservations.join("12.json")).unwrap(), before);
+    assert_eq!(
+        std::fs::read(fixture.reservations.join("12.json")).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -119,9 +151,19 @@ fn a_failed_quota_observation_never_admits_a_waiting_candidate() {
     let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .args(["stack", "admit", "--quota-cmd", "exit 9", "--reservations"])
         .arg(&fixture.reservations)
-        .args(["--job", "12", "--footprint", "300", "--margin", "100", "--lock"])
-        .arg(&fixture.lock).args(["--lock-kind", "posix", "--live-jobs", "11,12"])
-        .output().unwrap();
+        .args([
+            "--job",
+            "12",
+            "--footprint",
+            "300",
+            "--margin",
+            "100",
+            "--lock",
+        ])
+        .arg(&fixture.lock)
+        .args(["--lock-kind", "posix", "--live-jobs", "11,12"])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(78));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["admitted"], false);
@@ -136,11 +178,16 @@ fn independent_processes_cannot_commit_both_large_writers() {
         fixture.record("12", Some("forecast"));
         let mut left = fixture.command("11", true).spawn().unwrap();
         let mut right = fixture.command("12", true).spawn().unwrap();
-        let mut codes = [left.wait().unwrap().code().unwrap(), right.wait().unwrap().code().unwrap()];
+        let mut codes = [
+            left.wait().unwrap().code().unwrap(),
+            right.wait().unwrap().code().unwrap(),
+        ];
         codes.sort_unstable();
         assert_eq!(codes, [0, 78]);
-        let admitted = ["11", "12"].into_iter()
-            .filter(|job| fixture.read(job)["phase"] == "admitted").count();
+        let admitted = ["11", "12"]
+            .into_iter()
+            .filter(|job| fixture.read(job)["phase"] == "admitted")
+            .count();
         assert_eq!(admitted, 1);
         assert_eq!(fixture.read("11")["footprint"], 300);
         assert_eq!(fixture.read("12")["footprint"], 300);
@@ -153,11 +200,30 @@ fn stale_waiting_records_follow_the_explicit_stale_removal_policy() {
     fixture.record("11", Some("waiting"));
     fixture.record("12", Some("forecast"));
     let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
-        .args(["stack", "admit", "--quota-json"]).arg(&fixture.quota)
-        .arg("--reservations").arg(&fixture.reservations)
-        .args(["--job", "12", "--footprint", "300", "--margin", "100", "--live-jobs", "12",
-               "--drop-stale", "--lock"]).arg(&fixture.lock)
-        .args(["--lock-kind", "posix"]).output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        .args(["stack", "admit", "--quota-json"])
+        .arg(&fixture.quota)
+        .arg("--reservations")
+        .arg(&fixture.reservations)
+        .args([
+            "--job",
+            "12",
+            "--footprint",
+            "300",
+            "--margin",
+            "100",
+            "--live-jobs",
+            "12",
+            "--drop-stale",
+            "--lock",
+        ])
+        .arg(&fixture.lock)
+        .args(["--lock-kind", "posix"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(!fixture.reservations.join("11.json").exists());
 }

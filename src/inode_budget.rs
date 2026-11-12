@@ -664,7 +664,9 @@ pub fn check_job(job: &str) -> Result<()> {
 fn reservation_phase(value: &Value) -> Result<&str> {
     match value.get("phase") {
         None => Ok("admitted"),
-        Some(Value::String(phase)) if matches!(phase.as_str(), "forecast" | "waiting" | "admitted") => {
+        Some(Value::String(phase))
+            if matches!(phase.as_str(), "forecast" | "waiting" | "admitted") =>
+        {
             Ok(phase)
         }
         _ => bail!("reservation phase must be forecast, waiting, or admitted"),
