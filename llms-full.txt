@@ -225,6 +225,20 @@ After installation, the [get started](https://eb-stack.rgoswami.me/get-started.h
 inspect, shard, and admit on the fixtures in a checkout. Contributor
 builds are on the [contributing](https://eb-stack.rgoswami.me/contributing.html.md) page.
 
+# Static Linux archive
+
+The `x86_64-unknown-linux-musl` release archive contains a statically linked
+x86-64 binary. It does not require the host's glibc, so one archive supports
+hosts with different glibc releases. The GNU Linux archive remains available
+for hosts whose glibc satisfies its linkage requirements.
+
+```bash
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
+sha256sum -c eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
+tar -xf eb_stack-x86_64-unknown-linux-musl.tar.xz
+```
+
 # Linux and macOS
 
 The shell installer picks the archive for the host:
