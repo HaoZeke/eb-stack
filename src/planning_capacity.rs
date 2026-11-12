@@ -32,6 +32,23 @@ pub struct CapacityRequest {
     pub gpu_type: Option<String>,
 }
 
+impl CapacityRequest {
+    /// Validate resolved resource demands rather than raw scheduler syntax.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.partition.trim().is_empty() || self.host_target.trim().is_empty() {
+            bail!("capacity partition and physical host target are required");
+        }
+        if self.cpus == 0 || self.memory_mib == 0 {
+            bail!("capacity CPUs and memory_mib must be positive");
+        }
+        if self.gpu_type.is_some() && self.gpus == 0 {
+            bail!("gpu_type requires a nonzero GPU request");
+        }
+        validate_features(&self.features)?;
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
@@ -212,16 +229,7 @@ pub fn inspect(
     if snapshot.schema_version != 1 {
         bail!("capacity snapshot schema_version must be 1");
     }
-    if request.partition.trim().is_empty() || request.host_target.trim().is_empty() {
-        bail!("capacity partition and physical host target are required");
-    }
-    if request.cpus == 0 || request.memory_mib == 0 {
-        bail!("capacity CPUs and memory_mib must be positive");
-    }
-    if request.gpu_type.is_some() && request.gpus == 0 {
-        bail!("gpu_type requires a nonzero GPU request");
-    }
-    validate_features(&request.features)?;
+    request.validate()?;
     let observed = chrono::DateTime::parse_from_rfc3339(&snapshot.observed_at)
         .context("invalid capacity observed_at")?;
     let evaluated = chrono::DateTime::parse_from_rfc3339(evaluated_at)

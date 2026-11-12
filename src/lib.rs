@@ -73,6 +73,7 @@ pub mod package_sources;
 pub mod package_workflow;
 pub mod patch_evolution;
 pub mod planning_capacity;
+pub mod planning_storage;
 pub mod pr_overlap;
 pub mod provided;
 pub mod provides;
