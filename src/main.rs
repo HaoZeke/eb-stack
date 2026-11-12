@@ -1181,6 +1181,40 @@ struct BatchArgs {
 }
 
 #[derive(clap::Args, Debug)]
+struct CapacityArgs {
+    /// Captured normalized capacity snapshot; no scheduler calls are made.
+    #[arg(long)]
+    snapshot: PathBuf,
+    /// Exact partition whose inventory must be complete.
+    #[arg(long)]
+    partition: String,
+    /// Physical host target, independent of the compiler target.
+    #[arg(long = "target")]
+    host_target: String,
+    /// Literal required feature; repeated features are combined with AND.
+    #[arg(long = "feature")]
+    features: Vec<String>,
+    /// CPUs required on one node.
+    #[arg(long)]
+    cpus: u64,
+    /// Scheduler memory required on one node, in MiB.
+    #[arg(long)]
+    memory_mib: u64,
+    /// GPUs required on one node.
+    #[arg(long, default_value_t = 0)]
+    gpus: u64,
+    /// Required GPU type.
+    #[arg(long)]
+    gpu_type: Option<String>,
+    /// RFC3339 evaluation time for deterministic replay; absent is now.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Maximum age of the observation, in seconds.
+    #[arg(long, default_value_t = 300)]
+    max_age_seconds: u64,
+}
+
+#[derive(clap::Args, Debug)]
 struct ShardArgs {
     /// Jenkins build list of one node type: `Name-version-toolchain.eb
     /// [eb options]` per line, `#` comments skipped.
@@ -1648,6 +1682,8 @@ enum StackCommand {
         after_long_help = "Examples:\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs site-easyconfigs --installed-modules-dir /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen2/modules/all --installed-modules-dir site-modules/all --shards 4 --weights build-seconds.tsv --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --commit-cache /scratch-shared/$USER/eb-stack-commit-trees --shards 4 --out-dir shards\n  eb-stack stack shard --build-list rome.list --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --easyconfigs-repo easybuild-easyconfigs --materialize --build-robot-path /sw/easybuild/easyconfigs --shards 4 --out-dir shards"
     )]
     Shard(Box<ShardArgs>),
+    /// Inspect timestamped advisory scheduler capacity without placing jobs.
+    Capacity(Box<CapacityArgs>),
     /// Write the peak build-tree inode footprint per software name.
     ///
     /// The peak of `build.inodes_peak` over the records of each `--ledger`,
@@ -3590,6 +3626,30 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 },
             )?;
             println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Capacity(args) => {
+            let bytes = std::fs::read(&args.snapshot)
+                .with_context(|| format!("--snapshot {}: not readable", args.snapshot.display()))?;
+            let evaluated_at = args
+                .generated_at
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let request = eb_stack::planning_capacity::CapacityRequest {
+                partition: args.partition,
+                host_target: args.host_target,
+                features: args.features.into_iter().collect(),
+                cpus: args.cpus,
+                memory_mib: args.memory_mib,
+                gpus: args.gpus,
+                gpu_type: args.gpu_type,
+            };
+            let report = eb_stack::planning_capacity::inspect(
+                &bytes,
+                &request,
+                &evaluated_at,
+                args.max_age_seconds,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
         StackCommand::Shard(args) => {

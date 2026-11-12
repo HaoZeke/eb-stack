@@ -458,6 +458,12 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_capacity",
+            "Report timestamped advisory scheduler capacity from a normalized snapshot, as stack capacity does. Partition, physical host target and literal AND features stay exact. Reports per-node resource fits without node names, queue-wait predictions, placement guarantees or admission changes. Missing partition/pending observations remain unknown.",
+            &[("snapshot","string"),("partition","string"),("target","string"),("cpus","integer"),("memory_mib","integer")],
+            &[("feature","array"),("gpus","integer"),("gpu_type","string"),("generated_at","string"),("max_age_seconds","integer")],
+        ),
+        tool_with_optional(
             "eb_stack_shard",
             "Split one Jenkins build list into shards that can build at the same time, as `stack shard` does. Each line's closure is computed over easyconfigs minus the modules in installed lists and installed_modules_dir Lmod trees. Lines whose own easyconfig another line needs share a shard; any other module two or more shards need goes to prelude.list. Groups are packed into at most shards shards by weight (weights TSV, else default_weight). Writes prelude.list, shard-NN.list (input lines verbatim) and plan.json to out_dir. A line with --from-commit or --from-pr takes the easyconfig it names from that tree, and its dependencies from easyconfigs first and that tree second, as EasyBuild appends the fetched files to its robot path. Trees come from commit_tree (COMMIT=DIR), easyconfigs_repo (a git repository whose objects hold the commits, read in place), pr_tree (N=DIR), or commit_cache, a directory a missing tree is downloaded into from GitHub; a prelude module only such a tree provides keeps the line's source options. With materialize, also writes sources/v1/<commit>/ (the files the plan reads from each commit, with a SHA-256 manifest) and prelude.local.list and shard-NN.local.list, whose --from-commit lines read that directory through --robot-paths set to build_robot_path (the build host's robot paths, in EasyBuild's order) and then the directory; a line that cannot run that way is copied unchanged. A fetched line that still cannot be resolved, or an easyconfig that does not parse, is planned on its own and listed under warnings. Any other line that cannot be resolved is a tool error and nothing is written.",
             &[
@@ -934,6 +940,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_shadow" => stack_shadow_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_shard" => stack_shard_tool(arguments),
+        "eb_stack_capacity" => stack_capacity_tool(arguments),
         "eb_stack_footprints" => stack_footprints_tool(arguments),
         "eb_stack_admit" => stack_admit_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
@@ -3277,6 +3284,31 @@ fn stack_provided_tool(arguments: &Value) -> Result<Value, String> {
         "family": report.family.len(),
         "licensed": report.licensed.len(),
     }))
+}
+
+fn stack_capacity_tool(arguments: &Value) -> Result<Value, String> {
+    let path = required_path(arguments, "snapshot")?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("snapshot {}: {error}", path.display()))?;
+    let request = crate::planning_capacity::CapacityRequest {
+        partition: required_string(arguments, "partition")?,
+        host_target: required_string(arguments, "target")?,
+        features: string_array(arguments, "feature")?.into_iter().collect(),
+        cpus: optional_u64(arguments, "cpus")?.ok_or("cpus is required")?,
+        memory_mib: optional_u64(arguments, "memory_mib")?.ok_or("memory_mib is required")?,
+        gpus: optional_u64(arguments, "gpus")?.unwrap_or(0),
+        gpu_type: optional_string(arguments, "gpu_type"),
+    };
+    let evaluated_at =
+        crate::site_commands::generated_at(optional_string(arguments, "generated_at"), false)
+            .map_err(workflow_error)?;
+    crate::planning_capacity::inspect(
+        &bytes,
+        &request,
+        &evaluated_at,
+        optional_u64(arguments, "max_age_seconds")?.unwrap_or(300),
+    )
+    .map_err(workflow_error)
 }
 
 fn stack_shard_tool(arguments: &Value) -> Result<Value, String> {

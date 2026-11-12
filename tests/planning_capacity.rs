@@ -59,6 +59,7 @@ fn mixed_resources_are_subtracted_and_unavailable_states_are_excluded() {
     assert_eq!(result["pending"]["status"], "unknown");
     assert!(result["pending"]["known_demand"].is_null());
     assert!(!result.to_string().contains("example-gpu-private-host"));
+    assert!(!result.to_string().contains("\"name\":"));
 }
 
 #[test]
