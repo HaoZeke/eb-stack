@@ -2709,6 +2709,21 @@ pub fn run_stack_shard_sources(
 ) -> Result<StackShardRun> {
     run_stack_shard_with_sources(args, sources, &pr_overlap::UreqGet)
 }
+/// Bind storage advice to the exact generated list bytes held by the planner.
+fn bind_storage_list(phase: &mut serde_json::Value, files: &[(String, String)]) -> Result<()> {
+    let name = phase["file"]
+        .as_str()
+        .context("storage phase list file is missing")?
+        .to_owned();
+    let text = files
+        .iter()
+        .find(|(file, _)| file == &name)
+        .map(|(_, text)| text)
+        .context("storage phase list is not generated")?;
+    phase["storage"]["list_file"] = json!(name);
+    phase["storage"]["list_sha256"] = json!(sha256_hex(text.as_bytes()));
+    Ok(())
+}
 
 /// [`run_stack_shard_sources`] with downloads through `http`.
 pub fn run_stack_shard_with_sources(
@@ -4174,6 +4189,17 @@ pub fn run_stack_shard_with_storage(
 
     if let Some(policy) = &storage_policy {
         policy.annotate(&mut document, &required_disk, &stamp)?;
+        for phase in ["cpu_prerequisites", "prelude"] {
+            if document[phase].get("storage").is_some() {
+                bind_storage_list(&mut document[phase], &files)?;
+            }
+        }
+        for phase in document["shards"]
+            .as_array_mut()
+            .context("plan shards are missing")?
+        {
+            bind_storage_list(phase, &files)?;
+        }
     }
 
     std::fs::create_dir_all(&args.out_dir)
