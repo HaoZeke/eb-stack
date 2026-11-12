@@ -227,3 +227,35 @@ fn stale_waiting_records_follow_the_explicit_stale_removal_policy() {
     );
     assert!(!fixture.reservations.join("11.json").exists());
 }
+
+#[test]
+fn failed_scheduler_snapshot_preserves_every_reservation_even_with_drop_stale() {
+    for phase in [None, Some("forecast"), Some("waiting"), Some("admitted")] {
+        let fixture = Fixture::new();
+        fixture.record("11", phase);
+        fixture.record("12", Some("forecast"));
+        let path = fixture.reservations.join("11.json");
+        let mut first = fixture.read("11");
+        first["footprint"] = json!(351000);
+        std::fs::write(&path, first.to_string()).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        std::fs::write(&fixture.quota, r#"{"inodes_available":1000000}"#).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+            .args(["stack", "admit", "--quota-json"]).arg(&fixture.quota)
+            .arg("--reservations").arg(&fixture.reservations)
+            .args(["--job", "12", "--footprint", "300", "--margin", "100",
+                   "--drop-stale", "--live-jobs-cmd", "exit 2", "--lock"])
+            .arg(&fixture.lock).args(["--lock-kind", "posix"]).output().unwrap();
+        assert_eq!(output.status.code(), Some(78));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["admitted"], false);
+        assert_eq!(report["live_jobs"], Value::Null);
+        assert_eq!(report["reserved"], 351000);
+        assert_eq!(report["stale"], json!([]));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(fixture.read("12")["phase"], "waiting");
+        let (retry, report) = fixture.admit("12", true);
+        assert!(retry.status.success(), "{report}");
+        assert_eq!(fixture.read("12")["phase"], "admitted");
+    }
+}

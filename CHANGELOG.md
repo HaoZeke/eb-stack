@@ -6,6 +6,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Failed scheduler observations retain every reservation even when stale-record
+  removal is requested.
 - Explicit waiting forecasts arbitrate admission under the shared lock without
   charging each other's build peaks; setup, admitted, legacy and unknown writers
   retain their reservations.
