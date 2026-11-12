@@ -1067,7 +1067,7 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
     let stamp = crate::site_commands::generated_at(args.ts.clone(), true)?;
     let reservations = read_reservations(&args.reservations)?;
     let mut waiting = BTreeSet::new();
-    if args.lock.is_some() {
+    if args.lock.is_some() && refusal.is_none() {
         for record in &reservations {
             let path = args.reservations.join(format!("{}.json", record.job));
             let value: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
