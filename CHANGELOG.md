@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## 0.7.3 - 2026-11-11
+
+### Fixed
+
+- Explicit root module destinations govern installed-state checks, dependency
+  traversal, shard weight and inode estimates without borrowing a same-named
+  root from another module tree.
+- Lifted CPU roots contribute build cost only when their destination needs
+  installation; requested rows remain in the emitted lists.
+- Mixed destination roots retain every dependency needed by another row's
+  closure, while installed CPU and CVMFS dependencies remain reusable.
+- Plan digests include the installed state of explicitly located roots.
+
 ## 0.7.2 - 2026-11-11
 
 ### Fixed

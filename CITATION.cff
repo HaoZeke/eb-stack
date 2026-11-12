@@ -10,7 +10,7 @@ authors:
 license: MIT
 repository-code: "https://github.com/HaoZeke/eb-stack"
 url: "https://eb-stack.rgoswami.me"
-version: 0.7.2
+version: 0.7.3
 keywords:
   - EasyBuild
   - HPC

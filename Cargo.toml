@@ -1,6 +1,6 @@
 [package]
 name = "eb_stack"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 # Floor is 1.90: `ordered-float` 5.5.1 sets rust-version 1.90.
 # `uuid` 1.29.0 sets 1.89.0. Edition 2024 dependencies need Cargo 1.85.

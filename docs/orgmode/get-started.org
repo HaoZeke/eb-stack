@@ -2,13 +2,13 @@
 #+OPTIONS: toc:t num:nil author:nil
 
 This path is for a site administrator. It uses a checkout of the
-repository and ~eb-stack~ 0.7.2 on ~PATH~. The fixtures in the checkout
+repository and ~eb-stack~ 0.7.3 on ~PATH~. The fixtures in the checkout
 are the inputs. [[file:install.org][Installation]] is how the binary
 gets onto ~PATH~. A full EasyBuild campaign is the
 [[file:tutorial.org][tutorial]]. People changing the tool start at
 [[file:contributing.org][Contributing]].
 
-The commands below were run with the 0.7.2 binary. ~--version~ prints
+The commands below were run with the 0.7.3 binary. ~--version~ prints
 the version the binary was built as.
 
 * Confirm the binary
@@ -18,7 +18,7 @@ eb-stack --version
 #+end_src
 
 #+begin_example
-eb-stack 0.7.2
+eb-stack 0.7.3
 #+end_example
 
 * Inspect a conda-forge recipe

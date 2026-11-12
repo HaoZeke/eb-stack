@@ -33,10 +33,10 @@ This file is the manual in one document. The short index is llms.txt.
   Site administrators building a stack start with
   [Installation](https://eb-stack.rgoswami.me/install.html.md) and [Get started](https://eb-stack.rgoswami.me/get-started.html.md),
   then the how-to guides in the sidebar (annual bump, new package, shard,
-  campaign repair). The GitHub release is 0.7.2, with archives for Linux
+  campaign repair). The GitHub release is 0.7.3, with archives for Linux
   (x86-64, aarch64), macOS, and Windows. `cargo install eb_stack --locked`
-  builds that same 0.7.2 from crates.io. `eb-stack --version` prints
-  `eb-stack 0.7.2`.
+  builds that same 0.7.3 from crates.io. `eb-stack --version` prints
+  `eb-stack 0.7.3`.
 
   Contributors start at [Contributing](https://eb-stack.rgoswami.me/contributing.html.md): Rust 1.90,
   `cargo test --locked`, and the Org-to-Sphinx build. The generated Rust API
@@ -101,13 +101,13 @@ pixi run -e docs docbld
 # Get started
 
 This path is for a site administrator. It uses a checkout of the
-repository and `eb-stack` 0.7.2 on `PATH`. The fixtures in the checkout
+repository and `eb-stack` 0.7.3 on `PATH`. The fixtures in the checkout
 are the inputs. [Installation](https://eb-stack.rgoswami.me/install.html.md) is how the binary
 gets onto `PATH`. A full EasyBuild campaign is the
 [tutorial](https://eb-stack.rgoswami.me/tutorial.html.md). People changing the tool start at
 [Contributing](https://eb-stack.rgoswami.me/contributing.html.md).
 
-The commands below were run with the 0.7.2 binary. `--version` prints
+The commands below were run with the 0.7.3 binary. `--version` prints
 the version the binary was built as.
 
 # Confirm the binary
@@ -117,7 +117,7 @@ eb-stack --version
 ```
 
 ```
-eb-stack 0.7.2
+eb-stack 0.7.3
 ```
 
 # Inspect a conda-forge recipe
@@ -215,8 +215,8 @@ The exit status is 78. Exit statuses for the rest of the CLI are in the
 
 # Installation
 
-`eb-stack` 0.7.2 is the crates.io package `eb_stack` and the GitHub
-release `v0.7.2`. The binary name is `eb-stack`. A release archive is a prebuilt binary. Building from a checkout, or
+`eb-stack` 0.7.3 is the crates.io package `eb_stack` and the GitHub
+release `v0.7.3`. The binary name is `eb-stack`. A release archive is a prebuilt binary. Building from a checkout, or
 `cargo install eb_stack --locked`, needs Rust 1.90 or newer: that floor is `rust-version` in
 the root `Cargo.toml`. `rustup toolchain install stable` provides a
 new enough compiler.
@@ -238,18 +238,18 @@ The shell installer picks the archive for the host:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.2/eb_stack-installer.sh \
+  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-installer.sh \
   | sh
 eb-stack --version
 ```
 
-The script prints `downloading eb_stack 0.7.2` and the target triple,
+The script prints `downloading eb_stack 0.7.3` and the target triple,
 then `installing to` the Cargo bin directory (`$CARGO_HOME/bin`, or
 ~`/.cargo/bin` when `CARGO_HOME` is unset), then `everything's installed!`.
 `eb-stack --version` prints:
 
 ```
-eb-stack 0.7.2
+eb-stack 0.7.3
 ```
 
 Add that bin directory to `PATH` when it is absent from the shell's `PATH`.
@@ -260,8 +260,8 @@ The checksum file from the release is a `sha256sum` line. The archive
 contains `eb-stack`, `LICENSE`, `README.md`, and `CHANGELOG.md`.
 
 ```bash
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.2/eb_stack-x86_64-unknown-linux-gnu.tar.xz
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.2/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz
+curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 sha256sum -c eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
 ./eb_stack-x86_64-unknown-linux-gnu/eb-stack --version
@@ -269,7 +269,7 @@ tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
 
 ```
 eb_stack-x86_64-unknown-linux-gnu.tar.xz: OK
-eb-stack 0.7.2
+eb-stack 0.7.3
 ```
 
 The checksum file records the SHA-256 of the archive for the selected release.
@@ -285,7 +285,7 @@ that directory to the user `Path`.
 
 ```bash
 curl -fsSL -o eb_stack-x86_64-pc-windows-msvc.zip \
-  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.2/eb_stack-x86_64-pc-windows-msvc.zip
+  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-pc-windows-msvc.zip
 unzip -l eb_stack-x86_64-pc-windows-msvc.zip
 ```
 
@@ -308,8 +308,8 @@ cargo install eb_stack --locked
 eb-stack --version
 ```
 
-`cargo install` builds the 0.7.2 crate. The resulting `eb-stack --version`
-prints `eb-stack 0.7.2`, the same string as the GitHub release binary.
+`cargo install` builds the 0.7.3 crate. The resulting `eb-stack --version`
+prints `eb-stack 0.7.3`, the same string as the GitHub release binary.
 `cargo binstall` is a separate program. Stock Cargo on this host
 answers:
 
@@ -334,7 +334,7 @@ eb-stack --version
 A release build of this tree prints:
 
 ```
-eb-stack 0.7.2
+eb-stack 0.7.3
 ```
 
 `=`/.local/bin` has to be on `PATH`. The test suite is `cargo test
@@ -12347,7 +12347,7 @@ eb-stack --version
 ```
 
 ```text
-eb-stack 0.7.2
+eb-stack 0.7.3
 ```
 
 The how-tos name the flags for each command:
@@ -13475,7 +13475,7 @@ layer. Public files contain reusable package intent and target topology.
 
 # Releasing
 
-Version source of truth is `version` in root `Cargo.toml` (currently **0.7.2**).
+Version source of truth is `version` in root `Cargo.toml` (currently **0.7.3**).
 Keep these aligned:
 
 1. `Cargo.toml` / `pixi.toml` `version`
@@ -13494,8 +13494,8 @@ to crates.io.
 
 # Changelog
 
-Cargo, CITATION, and Sphinx report **0.7.2**. The notes for every release
-since 0.3.0, 0.4.0 through 0.7.2, are the sections of
+Cargo, CITATION, and Sphinx report **0.7.3**. The notes for every release
+since 0.3.0, 0.4.0 through 0.7.3, are the sections of
 [CHANGELOG.md](https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md).
 
 The version-one design provides:

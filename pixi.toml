@@ -2,7 +2,7 @@
 channels = ["conda-forge"]
 name = "eb-stack"
 platforms = ["linux-64"]
-version = "0.7.2"
+version = "0.7.3"
 
 [dependencies]
 
