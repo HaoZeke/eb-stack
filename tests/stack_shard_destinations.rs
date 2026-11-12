@@ -163,7 +163,8 @@ fn destination_installed_root_does_not_hide_another_rows_missing_dependency() {
     fs::write(
         root.join("robot/Bar-1.eb"),
         "name = 'Bar'\nversion = '1'\ntoolchain = SYSTEM\ndependencies = [('Foo', '1')]\n",
-    ).unwrap();
+    )
+    .unwrap();
     let rows = format!(
         "Foo-1.eb --installpath-modules={}\nBar-1.eb",
         root.join("noarch").display()
