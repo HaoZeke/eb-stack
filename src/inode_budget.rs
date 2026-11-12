@@ -1060,7 +1060,7 @@ pub fn run_stack_admit(args: &AdmitRequest) -> Result<AdmitReport> {
                 if refusal.is_none() {
                     refusal = Some(format!("scheduler observation failed: {error:#}"));
                 }
-                Some(Vec::new())
+                None
             }
         },
     };
