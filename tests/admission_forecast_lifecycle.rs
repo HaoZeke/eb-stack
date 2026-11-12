@@ -241,11 +241,26 @@ fn failed_scheduler_snapshot_preserves_every_reservation_even_with_drop_stale() 
         let original = std::fs::read(&path).unwrap();
         std::fs::write(&fixture.quota, r#"{"inodes_available":1000000}"#).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
-            .args(["stack", "admit", "--quota-json"]).arg(&fixture.quota)
-            .arg("--reservations").arg(&fixture.reservations)
-            .args(["--job", "12", "--footprint", "300", "--margin", "100",
-                   "--drop-stale", "--live-jobs-cmd", "exit 2", "--lock"])
-            .arg(&fixture.lock).args(["--lock-kind", "posix"]).output().unwrap();
+            .args(["stack", "admit", "--quota-json"])
+            .arg(&fixture.quota)
+            .arg("--reservations")
+            .arg(&fixture.reservations)
+            .args([
+                "--job",
+                "12",
+                "--footprint",
+                "300",
+                "--margin",
+                "100",
+                "--drop-stale",
+                "--live-jobs-cmd",
+                "exit 2",
+                "--lock",
+            ])
+            .arg(&fixture.lock)
+            .args(["--lock-kind", "posix"])
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(78));
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["admitted"], false);
