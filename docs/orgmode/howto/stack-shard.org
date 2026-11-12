@@ -13,6 +13,22 @@ one job, and a naive split rebuilds HDF5 in every shard. The prelude
 holds the shared dependencies once. The footprint model and exit 78 are
 [[file:../explanation/sharding-admission.org][Sharding and inode admission]].
 
+* Explicit module destinations
+
+A row with ~--installpath-modules=/absolute/module-root~ is installed only
+when its exact module exists under ~/absolute/module-root/all~. Both
+~--installpath-modules=PATH~ and ~--installpath-modules PATH~ are accepted.
+A same-named module in the ordinary installed CPU or CVMFS paths does not
+satisfy this root. Dependencies still reuse those installed paths.
+
+The requested row stays in the emitted lists even when installed. Missing
+roots contribute their dependency closure, weight and inode footprint;
+installed roots contribute only the retained line's overhead. This also
+applies to CPU roots in ~cpu-prerequisites.list~ when lifting is enabled.
+Changes in the declared root's installed state change the plan digest.
+Use one literal absolute destination: missing values, relative paths and
+shell-expanded destinations are refused rather than treated as installed.
+
 * Split the fixture wave
 
 ~tests/stack_shard_fixtures/wave1.list~ is four lines: OpenFOAM,

@@ -151,3 +151,31 @@ fn malformed_or_unresolved_explicit_destinations_cannot_reuse_global_roots() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("literal absolute path"));
     }
 }
+
+#[test]
+fn destination_installed_root_does_not_hide_another_rows_missing_dependency() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fixture(root);
+    fs::rename(root.join("cpu/Foo"), root.join("other-view")).unwrap();
+    fs::create_dir_all(root.join("noarch/all/Foo")).unwrap();
+    fs::write(root.join("noarch/all/Foo/1.lua"), "-- module\n").unwrap();
+    fs::write(
+        root.join("robot/Bar-1.eb"),
+        "name = 'Bar'\nversion = '1'\ntoolchain = SYSTEM\ndependencies = [('Foo', '1')]\n",
+    ).unwrap();
+    let rows = format!(
+        "Foo-1.eb --installpath-modules={}\nBar-1.eb",
+        root.join("noarch").display()
+    );
+    let planned = plan(root, &rows, "mixed", false);
+    assert_eq!(planned["lines"][0]["closure"], serde_json::json!([]));
+    let closure = planned["lines"][1]["closure"].as_array().unwrap();
+    for module in ["Foo/1", "Need/1", "Bar/1"] {
+        assert!(closure.contains(&Value::from(module)));
+    }
+    assert!(!closure.contains(&Value::from("Reuse/1")));
+    assert_eq!(planned["shards"][0]["weight"], 3);
+    let list = fs::read_to_string(root.join("mixed/shard-01.list")).unwrap();
+    assert!(list.find("Foo-1.eb").unwrap() < list.find("Bar-1.eb").unwrap());
+}
