@@ -179,3 +179,76 @@ fn absent_phase_profile_and_dropped_feature_are_rejected() {
     .unwrap();
     assert!(StoragePolicy::capture(&dir.path().join("policy.json"), 100000).is_err());
 }
+
+#[test]
+fn shard_cli_preserves_defaults_and_binds_every_opt_in_list_to_its_bytes() {
+    use std::process::Command;
+    let (dir, snapshot, policy) = fixture();
+    let _captured = write(dir.path(), &snapshot, policy);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/stack_shard_fixtures");
+    let run = |out: &str, policy: bool, quota: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
+        cmd.env_remove("EASYBUILD_FILTER_DEPS")
+            .args([
+                "stack",
+                "shard",
+                "--shards",
+                "4",
+                "--generated-at",
+                TIME,
+                "--build-list",
+            ])
+            .arg(fixtures.join("wave1.list"))
+            .arg("--easyconfigs")
+            .arg(fixtures.join("easyconfigs"))
+            .arg("--installed")
+            .arg(fixtures.join("installed.txt"))
+            .arg("--installed-modules-dir")
+            .arg(fixtures.join("modules/all"))
+            .arg("--out-dir")
+            .arg(dir.path().join(out));
+        if policy {
+            cmd.arg("--storage-policy")
+                .arg(dir.path().join("policy.json"));
+        }
+        if quota {
+            cmd.args(["--inode-quota", "4000000"]);
+        }
+        cmd.output().unwrap()
+    };
+    let baseline = run("baseline", false, false);
+    assert!(
+        baseline.status.success(),
+        "{}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let baseline: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("baseline/plan.json")).unwrap())
+            .unwrap();
+    assert!(baseline.get("storage_policy").is_none());
+    assert!(baseline["prelude"].get("placement").is_none());
+    let opted = run("opted", true, false);
+    assert!(
+        opted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&opted.stderr)
+    );
+    let plan: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("opted/plan.json")).unwrap())
+            .unwrap();
+    for phase in std::iter::once(&plan["prelude"]).chain(plan["shards"].as_array().unwrap()) {
+        let filename = phase["file"].as_str().unwrap();
+        let bytes = std::fs::read(dir.path().join("opted").join(filename)).unwrap();
+        assert_eq!(phase["storage"]["list_file"], filename);
+        assert_eq!(
+            phase["storage"]["list_sha256"],
+            format!("{:x}", Sha256::digest(bytes))
+        );
+        assert_eq!(phase["storage"]["admission_required"], true);
+        assert_eq!(phase["storage"]["admission_bypass"], false);
+        assert_eq!(phase["placement"], "node-local");
+    }
+    let conflict = run("conflict", true, true);
+    assert!(!conflict.status.success());
+    assert!(!dir.path().join("conflict").exists());
+}
