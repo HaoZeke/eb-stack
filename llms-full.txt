@@ -6702,6 +6702,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack gap` | Route each site module the stack lacks, name the recipe that closes it, and write one TSV per route |
 | `stack batch` | Plan software-layer pull requests whose builds do not overlap |
 | `stack shard` | Split a Jenkins build list into shards that build at once, with a prelude of shared dependencies, capped by a scratch inode quota |
+| `stack capacity` | Read timestamped advisory scheduler capacity with exact partition, host profile and resource constraints |
 | `stack footprints` | Write the peak build-tree inode count per software name from ledger records, a static table, and a class table |
 | `stack admit` | Admit one build job under the scratch inode quota, counting the reservations of the jobs still running |
 | `stack easystack` | Write a lock as the YAML `eb --easystack` reads |
@@ -8868,7 +8869,7 @@ plus sandboxed recipe and easyblock tools:
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
   `eb_stack_easystack`, `eb_stack_gap`, `eb_stack_provided`,
-  `eb_stack_shadow`, `eb_stack_batch`, `eb_stack_shard`,
+  `eb_stack_shadow`, `eb_stack_batch`, `eb_stack_shard`, `eb_stack_capacity`,
   `eb_stack_arch`, `eb_stack_files`,
   `eb_stack_generation`, `eb_stack_cuda_cc`, `eb_stack_known_failures`,
   `eb_stack_oom`, `eb_stack_bot_classify`, `eb_stack_sections`,
@@ -9023,6 +9024,176 @@ takes `changes` as an optional path array. `eb_recipe_check`'s
 `easyconfigs` array has `minItems` 1. `eb_recipe_read`, `eb_recipe_list`,
 `eb_recipe_edit`, and `eb_recipe_write` edit files only inside the workspace
 root.
+
+# Scheduler capacity and phase storage
+
+See [the captured capacity and storage-policy interface](https://eb-stack.rgoswami.me/planning-capacity.html.md) for schema, synthetic examples and the execution/admission contract. The optional `stack shard --storage-policy` path does not change default execution or grant admission.
+
+# Scheduler capacity and phase storage
+
+# Capacity is an observation
+
+`stack capacity` reads one normalized JSON snapshot. It does not query the
+scheduler, probe hosts, predict a queue wait, reserve a node or grant storage
+admission. The collector owns a bounded cached scheduler query and its
+provenance. The report contains aggregates and input hashes, not node names.
+Account, QOS, priority, reservations and intervening scheduler changes can
+prevent a reported fit from starting.
+
+The node `target` is an explicit maintained physical-host profile label.
+It is not a CPUID, guest or compiler-ISA attestation. Execution identity and
+compiler-target checks remain authoritative. Available and active features
+are distinct. Required features are literal names combined with AND;
+expressions are rejected rather than simplified.
+
+The synthetic input is [snapshot.json](https://eb-stack.rgoswami.me/../../../tests/planning_capacity_fixtures/snapshot.json.html.md). Its schema version is 1:
+
+- `observed_at` is the observation start; `observed_until` optionally records
+  its end. `raw_sha256` optionally binds the original scheduler response.
+- `partition_inventory_complete` must establish full requested-partition
+  visibility. `selected_partitions` can explicitly name a known empty view.
+  An incomplete or missing view produces unknown/null advice, never a
+  measured zero or automatic storage route.
+- `nodes` contains unique `name`/`target` pairs, exact `partitions`,
+  `available_features`, `active_features` and `state_flags`.
+- `cpus_allocatable` is scheduler-effective CPU capacity before subtracting
+  `cpus_allocated`. Memory and GPU fields have the same meaning, with
+  `memory_mib_**` and `gpus_**` names. Optional `*_total` fields bound them.
+  Missing values are null/unknown. Inconsistent allocations are excluded.
+- Scheduler memory uses usable configured memory minus allocated memory.
+  OS `FreeMem` and `cpu_load` do not decide fit. The collector normalizes
+  scheduler-specific units and unknown sentinels; CPU load is informational.
+- `pending_jobs` is optional. Each row has an ID, state, partitions, optional
+  physical target and feature constraints, and total job CPU/memory/GPU
+  demand. Missing constraints/resources remain visible as possible demand;
+  absent pending data is unknown. `pending_complete` must not claim absent
+  data is complete.
+
+The [scheduler field reference](https://slurm.schedmd.com/scontrol.html) defines allocated memory and node states;
+[the node-state reference](https://slurm.schedmd.com/sinfo.html) identifies drained, reserved and down resources.
+The normalized schema avoids depending on one scheduler JSON plugin version.
+Collectors must include hidden configured partitions when establishing a
+complete view, and minimize scheduler RPCs.
+
+```sh
+eb-stack stack capacity \\
+  --snapshot tests/planning_capacity_fixtures/snapshot.json \\
+  --partition local --target example/host --feature scratch-node \\
+  --cpus 4 --memory-mib 4096 --exclusive-node true --max-slots-per-node 1 \\
+  --generated-at 2026-01-01T12:00:10Z
+```
+
+The example reports one queue-fitting node and one free slot. These are
+advice, not an allocation. `ALLOCATED` can count as a future queue fit but
+has no free slot; drained, reserved, down and unknown states do not count.
+Per-node CPU, memory and GPU fits are computed before totals are added, so
+fragments on different nodes cannot create a fictitious fitting node.
+
+Requests contain resolved demands. Raw scheduler `--mem`0= means whole-node
+memory; it is not a zero-memory request. Resolve it, and partition defaults,
+before supplying a positive `memory_mib`. A CPU-only request does not require
+known GPU capacity; the GPU aggregate stays null when unknown.
+
+`exclusive_node`true= limits a node to one slot and excludes busy nodes from
+free exclusive fits. Explicit `false` permits resource-based sharing;
+`max_slots_per_node` can impose a stricter positive limit. Unknown
+exclusivity yields null free-slot advice and disables automatic placement.
+A configurable maximum observation age rejects stale or future snapshots.
+`--generated-at` makes replay deterministic. SHA256 covers the exact input
+bytes, including whitespace.
+
+# Storage advice is opt-in on stack shard
+
+The synthetic [storage-policy.json](https://eb-stack.rgoswami.me/../../../tests/planning_capacity_fixtures/storage-policy.json.html.md) selects one captured snapshot by path and
+expected SHA256. Its fields are:
+
+- `schema_version`1`, `capacity_snapshot`, `capacity_sha256=,
+  `max_age_seconds` and the literal `node_local_feature`.
+- `shared_budget` with `observed_at`, live `available_inodes`,
+  `reserved_inodes` and `margin_inodes`. Its margin must equal the caller's
+  configured `--inode-margin`; stale shared observations are refused.
+- `profiles` for `cpu_prerequisites`, `prelude` and `shards`.
+  Each specifies `compile_target`, `shared_route`, `node_local_route`,
+  and `shared`/`node_local` resolved capacity requests. Physical host labels
+  and compile targets are independent, including emulated execution routes.
+  The node-local request must retain the configured feature exactly.
+
+```sh
+eb-stack stack shard \\
+  --build-list tests/stack_shard_fixtures/wave1.list \\
+  --easyconfigs tests/stack_shard_fixtures/easyconfigs \\
+  --installed tests/stack_shard_fixtures/installed.txt \\
+  --installed-modules-dir tests/stack_shard_fixtures/modules/all \\
+  --shards 4 \\
+  --storage-policy tests/planning_capacity_fixtures/storage-policy.json \\
+  --generated-at 2026-01-01T12:00:10Z --out-dir build/capacity-demo
+```
+
+`--storage-policy` and `--inode-quota` are mutually exclusive planning budget
+sources. Without a policy, existing constructors, fields and execution
+behavior remain unchanged. The opt-in path annotates every nonempty CPU
+prerequisite, prelude and shard phase. It orders phases by inode footprint,
+then phase ID; smallest phases spend the observed shared budget first.
+Overflow phases select `node-local` only when the exact configured route has
+known queue-fitting feature-eligible hosts. They can be allocated already:
+queue eligibility does not promise a free node. Without a verified eligible
+view, a phase stays shared with `awaiting_shared_admission`.
+
+Each real phase gains `placement` (`shared` or `node-local`) and `storage`:
+`phase_id`, `decision`, `compile_target`, the exact `request`,
+`execution_route`, `requires_real_disk`, `requires_node_local_disk`,
+`admission_required`true`, `admission_bypass`false` and
+`execution_storage_verification_required`true=. The plan-level
+`storage_policy` records captured policy/snapshot hashes, observed budget,
+capacity advice and deterministic phase order. Existing dependency/phase
+ordering remains required; these annotations do not authorize parallelizing
+CPU prerequisites with their consumers.
+
+Footprint JSON accepts numeric rows and metadata rows, for example:
+
+```json
+{"default":60000,"footprints":{"Large":{"inodes":123456,"requires_real_disk":true}}}
+```
+
+Numbers, storage hints and their reported footprint digest come from the
+same captured bytes. A pathname update cannot change one without changing
+the others. Real-disk requirements are propagated to every affected phase.
+
+# Execution contract
+
+A planning string never disables shared quota admission. The execution
+adapter verifies SHA256 of the final `plan.json` file, phase ID, exact
+request/route, allocation/job identity, separate host/compiler identities,
+and the selected storage domain before choosing its normal admission pool.
+The plan's `inputs.sha256` is an input digest, not a substitute for hashing
+the final plan file.
+
+Build, temporary, source-index and isolated guest-home roots belong on the
+verified node-local disk for node-local phases. Final installation prefixes
+and declared durable work/log roots remain on their configured persistent
+filesystems. Source archives remain in approved durable caches; there is no
+redundant recipe-tree or source extraction. Any remaining mutable path in a
+shared scratch quota domain still requires that domain's admission.
+
+The adapter binds mount/device/backing facts and all mutable-root roles in
+an execution receipt. A guest needs a host backing proof and the existing
+kernel-bound execution identity; a guest filesystem name alone cannot prove
+NVMe backing. Disk requirements reject RAM-backed execution. Only validated
+observations select domain-scoped available-inode counters, reservations
+and live writers for the ordinary `stack admit` gate. The receipt/domain
+identity is retained in execution records. This interface adds no bypass
+flag and performs no installation relocation.
+
+Each emitted phase `storage` object binds `list_file` and `list_sha256` to the
+exact generated list bytes. Execution verifies these fields together with the
+final plan file digest; `inputs.sha256` is an input fingerprint, not the final
+plan digest.
+
+With `--materialize`, `execution_list_file` and `execution_list_sha256` bind
+the generated `*.local.list` bytes actually consumed by the build driver.
+Without materialization these fields bind the ordinary list. The original
+`list_file` and `list_sha256` remain available in both modes. An executor
+accepts only the explicitly bound execution list, not a filename alias.
 
 # Model Context Protocol server
 

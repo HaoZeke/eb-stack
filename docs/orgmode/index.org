@@ -127,6 +127,7 @@ Version 0.7.3 is the crates.io package and the GitHub release. ``package plan`` 
 
    reference/glossary
    reference/cli
+   reference/planning-capacity
    reference/mcp
    reference/package-bundles
    reference/targets
