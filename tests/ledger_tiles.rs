@@ -139,9 +139,9 @@ fn append_plain(fixture: &Fixture, value: &Value) -> Output {
 fn three(fixture: &Fixture) -> [PathBuf; 3] {
     let heads = [1, 2, 3].map(|n| fixture.work.join(format!("head-{n}.json")));
     for (n, (module, route, job)) in [
-        ("PETSc/3.25.0-foss-2026.1", "kvm", "snellius/4411"),
-        ("PETSc/3.25.1-foss-2026.1", "native", "snellius/4412"),
-        ("zlib/1.3.1-GCCcore-15.2.0", "native", "snellius/4413"),
+        ("PETSc/3.25.0-foss-2026.1", "kvm", "site/4411"),
+        ("PETSc/3.25.1-foss-2026.1", "native", "site/4412"),
+        ("zlib/1.3.1-GCCcore-15.2.0", "native", "site/4413"),
     ]
     .iter()
     .enumerate()
@@ -309,7 +309,7 @@ fn append_writes_the_tile_log_and_find_answers_keys() {
         &["--key", "module=zlib/1.3.1-GCCcore-15.2.0"],
     ));
     assert!(module.starts_with("2\t"), "{module}");
-    let job = ok(&find(&fixture, &["--key", "job=snellius/4412"]));
+    let job = ok(&find(&fixture, &["--key", "job=site/4412"]));
     assert!(job.starts_with("1\t"), "{job}");
     let by_id = ok(&find(&fixture, &["--key", &format!("id={}", ids[2])]));
     assert!(by_id.starts_with("2\t"), "{by_id}");
@@ -375,7 +375,7 @@ fn records_past_the_checkpoint_are_counted_and_not_shown() {
     three(&fixture);
     let out = ok(&append_plain(
         &fixture,
-        &record("PETSc/3.25.2-foss-2026.1", "kvm", "snellius/4414"),
+        &record("PETSc/3.25.2-foss-2026.1", "kvm", "site/4414"),
     ));
     assert!(out.contains("tile log size 4 root "), "{out}");
     assert!(!out.contains("checkpoint "), "no key, no checkpoint: {out}");
@@ -638,9 +638,9 @@ fn a_tile_log_of_another_ledger_fails_verify() {
     let heads = three(&fixture);
     let other = fixture_with_key(11);
     for (module, route, job) in [
-        ("HDF5/1.14.6-gompi-2026.1", "kvm", "snellius/5000"),
-        ("HDF5/1.14.7-gompi-2026.1", "kvm", "snellius/5001"),
-        ("zlib/1.3.1-GCCcore-15.2.0", "native", "snellius/5002"),
+        ("HDF5/1.14.6-gompi-2026.1", "kvm", "site/5000"),
+        ("HDF5/1.14.7-gompi-2026.1", "kvm", "site/5001"),
+        ("zlib/1.3.1-GCCcore-15.2.0", "native", "site/5002"),
     ] {
         ok(&append_plain(&other, &record(module, route, job)));
     }
@@ -690,7 +690,7 @@ fn a_record_with_an_unknown_route_is_refused() {
     let head = fixture.work.join("head.json");
     let error = failed(&append_signed(
         &fixture,
-        &record("zlib/1.3.1-GCCcore-15.2.0", "docker", "snellius/1"),
+        &record("zlib/1.3.1-GCCcore-15.2.0", "docker", "site/1"),
         &head,
     ));
     assert!(
@@ -704,7 +704,7 @@ fn a_record_with_an_unknown_route_is_refused() {
     assert!(!fixture.tiles.exists(), "no tile log is written");
 }
 
-/// A backfill record as the Snellius build jobs write it: a staged install
+/// A backfill record as a site's build jobs write it: a staged install
 /// through KVM on an accelerator target, with the build and easyconfig
 /// references.
 fn backfill_record(module: &str, route: &str, target: &str, job: &str) -> Value {
@@ -726,7 +726,7 @@ fn backfill_record(module: &str, route: &str, target: &str, job: &str) -> Value 
             "status": "succeeded",
             "summary_log": format!("{job}/summary.log"),
             "summary_sha256": "11".repeat(32),
-            "node": "gcn42",
+            "node": "node42",
             "duration_s": 5311,
         },
         "easyconfig": {"file": format!("{}.eb", module.replace('/', "-"))},
@@ -744,25 +744,25 @@ fn backfill_records_with_route_and_accelerator_targets_are_found() {
             "GROMACS/2026.1-foss-2026.1-CUDA-13.0.2",
             "kvm",
             icelake,
-            "snellius/4411",
+            "site/4411",
         ),
         (
             "GROMACS/2026.1-foss-2026.1",
             "native",
             "x86_64/intel/icelake",
-            "snellius/4412",
+            "site/4412",
         ),
         (
             "LAMMPS/2Aug2025-foss-2026.1-kokkos-CUDA-13.0.2",
             "kvm",
             icelake,
-            "snellius/4413",
+            "site/4413",
         ),
         (
             "LAMMPS/2Aug2025-foss-2026.1-kokkos",
             "kvm",
             "x86_64/amd/zen4",
-            "snellius/4414",
+            "site/4414",
         ),
     ] {
         ok(&append_signed(
@@ -783,7 +783,7 @@ fn backfill_records_with_route_and_accelerator_targets_are_found() {
     assert!(rows[0].contains("\"route\":\"kvm\""), "{hits}");
     let kvm = ok(&find(&fixture, &["--key", "route=kvm"]));
     assert!(kvm.contains("\n3 of 4 records match;"), "{kvm}");
-    let job = ok(&find(&fixture, &["--key", "job=snellius/4414", "--json"]));
+    let job = ok(&find(&fixture, &["--key", "job=site/4414", "--json"]));
     let found: Value = serde_json::from_str(&job).unwrap();
     assert_eq!(found[0]["module"], "LAMMPS/2Aug2025-foss-2026.1-kokkos");
     assert_eq!(found[0]["build"]["status"], "succeeded");

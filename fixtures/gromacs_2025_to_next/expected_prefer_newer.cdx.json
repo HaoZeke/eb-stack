@@ -136,7 +136,7 @@
     "tools": [
       {
         "name": "eb-stack",
-        "vendor": "SURF",
+        "vendor": "stackhands",
         "version": "resolvo+eb_stack-0.2.0"
       }
     ]

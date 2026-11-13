@@ -842,7 +842,7 @@ mod tests {
             "location": "/cvmfs/software.eessi.io/PETSc/3.25.0-foss-2026.1",
             "action": "install",
             "route": "kvm",
-            "build": {"job": "snellius/4411", "log": "sha256:00"},
+            "build": {"job": "site/4411", "log": "sha256:00"},
         })
     }
 
@@ -864,7 +864,7 @@ mod tests {
             "action=install",
             "route=kvm",
             "actor=jenkins/run/7",
-            "job=snellius/4411",
+            "job=site/4411",
         ] {
             assert!(
                 keys.contains(&expected.to_string()),

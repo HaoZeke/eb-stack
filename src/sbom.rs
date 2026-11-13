@@ -384,7 +384,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         metadata.timestamp = Some(dt);
     }
     metadata.tools = Some(Tools::List(vec![Tool::new(
-        "SURF",
+        "stackhands",
         "eb-stack",
         &lock.solver.engine_version,
     )]));

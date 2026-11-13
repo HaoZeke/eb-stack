@@ -1759,7 +1759,7 @@ mod tests {
     #[test]
     fn build_inodes_peak_is_a_whole_number() {
         let mut with_peak = record("CP2K/2025.2-foss-2025a", "2026-11-03T10:00:00Z");
-        with_peak["build"] = json!({"job": "snellius/4411", "inodes_peak": 412_345});
+        with_peak["build"] = json!({"job": "site/4411", "inodes_peak": 412_345});
         let entry = seal_record(&with_peak, 0, "unused").unwrap();
         assert_eq!(entry.record["build"]["inodes_peak"], 412_345);
         let mut negative = with_peak.clone();

@@ -1230,7 +1230,7 @@ mod tests {
             "action": "install",
         });
         if let Some(inodes) = inodes {
-            record["build"] = json!({"job": "snellius/4411", "inodes_peak": inodes});
+            record["build"] = json!({"job": "site/4411", "inodes_peak": inodes});
         }
         seal_record(&record, index, "unused").unwrap()
     }

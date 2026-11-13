@@ -3,7 +3,7 @@
 //! Eigen 3.4.1 and Eigen 5.0.0 are the versions in
 //! `a_runtime_dependency_still_takes_one_version_per_stack`: a runtime
 //! dependency has to agree on one version, so `stack solve` rejects the
-//! closure. The names are the Snellius 2026 site-layer pair, LAMMPS and
+//! closure. The names are a 2026 site-layer pair, LAMMPS and
 //! SciPy-bundle. `stack order` must refuse that closure and name both
 //! requesters, rather than writing an order `stack solve` cannot install.
 

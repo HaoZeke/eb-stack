@@ -159,7 +159,7 @@ purpose is SBOM emission.
   "version": 1,
   "metadata": {
     "timestamp": "2026-01-01T00:00:00Z",
-    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.4.0"}],
+    "tools": [{"vendor": "stackhands", "name": "eb-stack", "version": "resolvo+eb_stack-0.4.0"}],
     "component": {
       "type": "application",
       "name": "easybuild-stack-foss-2025b",
