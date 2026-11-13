@@ -325,12 +325,8 @@ fn drop_system_when_non_system_exists(cands: Vec<Candidate>) -> Vec<Candidate> {
     cands
         .into_iter()
         .filter(|c| {
-            if is_system_toolchain(&c.toolchain)
-                && has_non_sys.get(&c.name).copied().unwrap_or(false)
-            {
-                return false;
-            }
-            true
+            !(is_system_toolchain(&c.toolchain)
+                && has_non_sys.get(&c.name).copied().unwrap_or(false))
         })
         .collect()
 }
