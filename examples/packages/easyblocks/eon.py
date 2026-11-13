@@ -30,7 +30,7 @@ of options changes between releases. This easyblock turns on every option whose
 dependencies are present, and passes only options the unpacked source declares,
 so an easyconfig builds as much of eOn as its dependency list allows.
 
-@author: Rohit Goswami (SURF)
+@author: Rohit Goswami
 """
 import os
 import re

@@ -31,7 +31,7 @@ so it has to match the build host rather than be left at the portable default.
 The same value names the installed binary, which is why the sanity check is
 derived here rather than written into the easyconfig.
 
-@author: Rohit Goswami (SURF)
+@author: Rohit Goswami
 """
 from easybuild.easyblocks.generic.cmakemake import CMakeMake
 from easybuild.framework.easyconfig import CUSTOM
