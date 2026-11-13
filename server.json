@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.HaoZeke/eb-stack",
+  "name": "io.github.stackhands/eb-stack",
   "title": "eb-stack",
   "description": "Plan EasyBuild recipes, CycloneDX SBOMs, and Resolvo stack locks.",
   "version": "0.7.3",
   "websiteUrl": "https://eb-stack.rgoswami.me/",
   "repository": {
-    "url": "https://github.com/HaoZeke/eb-stack",
+    "url": "https://github.com/stackhands/eb-stack",
     "source": "github"
   },
   "packages": [

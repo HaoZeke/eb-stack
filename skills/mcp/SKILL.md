@@ -85,4 +85,4 @@ Bump does not: it requires `toolchain`, or both `toolchain_name` and `toolchain_
 
 # Registry manifest and client configuration
 
-`server.json` names this server `io.github.HaoZeke/eb-stack` for the cargo package `eb_stack`. Client files for Claude Desktop, Visual Studio Code, and Copilot are on the manual page `docs/orgmode/reference/mcp.org`. `eb-stack mcp --help` prints `--workspace` and exits 0. The 0.3.0 release binary's `mcp` command has no `--workspace`. Build from main for this server.
+`server.json` names this server `io.github.stackhands/eb-stack` for the cargo package `eb_stack`. Client files for desktop and editor MCP clients, Visual Studio Code and Copilot among them, are on the manual page `docs/orgmode/reference/mcp.org`. `eb-stack mcp --help` prints `--workspace` and exits 0. The 0.3.0 release binary's `mcp` command has no `--workspace`. Build from main for this server.

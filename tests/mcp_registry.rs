@@ -117,7 +117,7 @@ fn server_json_matches_the_registry_schema() {
     assert_eq!(manifest["version"].as_str(), Some(version.as_str()));
     assert_eq!(
         manifest["name"].as_str(),
-        Some("io.github.HaoZeke/eb-stack")
+        Some("io.github.stackhands/eb-stack")
     );
     let description = manifest["description"].as_str().expect("description");
     assert!(
@@ -148,7 +148,7 @@ fn server_json_matches_the_registry_schema() {
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
     assert!(
-        readme.contains("mcp-name: io.github.HaoZeke/eb-stack"),
+        readme.contains("mcp-name: io.github.stackhands/eb-stack"),
         "README must contain the visible registry name"
     );
 }

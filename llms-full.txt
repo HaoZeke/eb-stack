@@ -9229,7 +9229,7 @@ prints those flags and exits 0.
 The registry manifest is `server.json` at the repository root. The file
 uses the 2025-12-11 server schema
 ([server.schema.json](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json)).
-The server name is `io.github.HaoZeke/eb-stack`. The package is the cargo
+The server name is `io.github.stackhands/eb-stack`. The package is the cargo
 crate `eb_stack` at the version in `Cargo.toml`, from `https://crates.io`,
 with transport `stdio`. One positional argument is `mcp`. `--workspace`
 is an optional named argument. Cargo installs the binary named

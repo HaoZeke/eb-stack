@@ -1,0 +1,40 @@
+# Publish server.json to the MCP Registry as io.github.stackhands/eb-stack.
+#
+# GitHub Actions OIDC proves the workflow runs in a stackhands repository,
+# which is what the registry checks for the io.github.stackhands/ namespace;
+# no token is stored. The registry also reads the crates.io README of the
+# version in server.json for its mcp-name line, so this runs after that
+# version is on crates.io: on a published release, or by hand.
+name: mcp-registry
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: server.json names the crate version on crates.io
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json; print(json.load(open("server.json"))["version"])')
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$version" = "$cargo_version"
+          curl -fsS -A 'stackhands/eb-stack mcp-registry workflow' \
+            "https://crates.io/api/v1/crates/eb_stack/$version" > /dev/null
+      - name: Install mcp-publisher v1.8.9
+        run: |
+          set -euo pipefail
+          curl -fsSLo mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.9/mcp-publisher_linux_amd64.tar.gz
+          echo "4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8  mcp-publisher.tar.gz" | sha256sum --check -
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+      - run: ./mcp-publisher validate server.json
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish server.json
