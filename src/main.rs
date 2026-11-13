@@ -1653,18 +1653,6 @@ enum StackCommand {
     #[command(
         after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
     )]
-    /// Plan software-layer pull requests whose builds do not overlap.
-    ///
-    /// Each root's new-module set is its closure over the robot path minus the
-    /// installed modules, as `pr-overlap` computes it for one easystack line.
-    /// Roots whose sets meet ship in one pull request; a root whose set meets
-    /// an open pull request's waits for it. The rest are packed `--size` per
-    /// pull request. Each batch directory gets the EESSI easystacks, a lock, a
-    /// CycloneDX SBOM, `reproduce.sh` with this exact command and the
-    /// `eb --dry-run` lines, `batch.json`, and a pull-request body.
-    #[command(
-        after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
-    )]
     Batch(Box<BatchArgs>),
     /// Split one Jenkins build list into shards that can build at once.
     ///
