@@ -1705,7 +1705,7 @@ enum StackCommand {
     /// reservation is never counted. Prints one JSON line. Exits 0 when
     /// admitted, 78 when refused.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack admit --quota-json quota.json --footprint 351000 --job 4411 --reservations reservations --live-jobs 4401,4402\n  mmlsquota-json | eb-stack stack admit --quota-json - --footprint 61000 --job 4412 --reservations reservations --live-jobs \"$(squeue -h -o %i -u jenkins | paste -sd,)\""
+        after_long_help = "Examples:\n  eb-stack stack admit --quota-json quota.json --footprint 351000 --job 4411 --reservations reservations --live-jobs 4401,4402\n  mmlsquota-json | eb-stack stack admit --quota-json - --footprint 61000 --job 4412 --reservations reservations --live-jobs \"$(squeue --all -h -o %i -u jenkins | paste -sd,)\""
     )]
     Admit(Box<AdmitArgs>),
     /// Refuse a plan an architecture cannot build, and flag shared entries
