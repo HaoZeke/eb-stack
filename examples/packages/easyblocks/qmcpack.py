@@ -45,7 +45,7 @@ easyconfig parameters. Options follow the QMCPACK v4.3.0 top-level CMakeLists.tx
 Nexus installs to <prefix>/lib/nexus (install(DIRECTORY nexus/nexus DESTINATION lib) guarded by
 QMC_INSTALL_NEXUS in the top-level CMakeLists.txt), so PYTHONPATH gets <prefix>/lib.
 
-@author: Rohit Goswami (SURF)
+@author: Rohit Goswami
 """
 from easybuild.easyblocks.generic.cmakeninja import CMakeNinja
 from easybuild.framework.easyconfig import CUSTOM

@@ -11,7 +11,7 @@
 
 A plan is not a build. `package plan` and `package bump` can establish only **resolves**. `campaign run` owns **builds** and **binary-verified**.
 
-The GitHub release and the crates.io package are 0.7.3 and carry every command here.
+The GitHub release and the crates.io package are 0.7.4 and carry every command here.
 
 The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation, baseline, and reachability. The longer path is the [tutorial](docs/orgmode/tutorial.org).
 
@@ -74,10 +74,10 @@ stops while reading the crate index: the Cargo feature `edition2024` is
 not stabilized. `rustup toolchain install stable` and `rustup default
 stable` provide a new enough compiler.
 
-The GitHub release is 0.7.3, with installers and archives for Linux
+The GitHub release is 0.7.4, with installers and archives for Linux
 (x86-64, aarch64), macOS and Windows, and `eb-stack --version` prints
-`0.7.3` for it, as a build of this tree does. `cargo install eb_stack
---locked` builds the same 0.7.3 from crates.io.
+`0.7.4` for it, as a build of this tree does. `cargo install eb_stack
+--locked` builds the same 0.7.4 from crates.io.
 
 `cargo binstall` is not part of a Rust install. `cargo binstall
 eb_stack` fails with `no such command: binstall` until that program is
@@ -93,7 +93,7 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
 Add `~/.local/bin` to `PATH`. `eb-stack --version` then prints
-`eb-stack 0.7.3`. The test suite is `cargo test --locked`, in
+`eb-stack 0.7.4`. The test suite is `cargo test --locked`, in
 [Tests](#tests). It is not required before the first solve.
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.

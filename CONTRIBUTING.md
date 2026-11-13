@@ -77,7 +77,7 @@ layer. The public files contain reusable package intent and target topology.
 
 ## Releasing
 
-Version source of truth: `version` in root `Cargo.toml` (currently **0.7.3**).
+Version source of truth: `version` in root `Cargo.toml` (currently **0.7.4**).
 Keep these in lockstep on every release:
 
 1. `Cargo.toml` / `pixi.toml` `version`
@@ -100,13 +100,16 @@ stays absent until the test is updated for a published citation.
 Then:
 
 ```bash
-git tag -a v0.7.3 -m "eb-stack 0.7.3"
-git push origin v0.7.3
+git tag -a v0.7.4 -m "eb-stack 0.7.4"
+git push origin v0.7.4
 # .github/workflows/release.yml (cargo-dist) builds the installers
-# and publishes the GitHub Release. It does not publish to crates.io:
+# and publishes the GitHub Release.
+# .github/workflows/publish.yml publishes eb_stack to crates.io with Trusted
+# Publishing and then registers the MCP server (mcp_registry.yml). It skips a
+# version already on crates.io. Until crates.io lists stackhands/eb-stack as a
+# Trusted Publisher, publish by hand from the tagged checkout, then run the
+# mcp-registry workflow:
 cargo publish --locked
-# runs on a host with a crates.io token scoped to publish eb_stack, from the
-# tagged checkout (0.7.1 was published this way).
 ```
 
 Verify the binary surface:
@@ -114,5 +117,5 @@ Verify the binary surface:
 ```bash
 cargo build --release
 ./target/release/eb-stack --version
-# prints eb-stack 0.7.3
+# prints eb-stack 0.7.4
 ```

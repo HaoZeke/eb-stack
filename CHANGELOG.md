@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here.
 
+## 0.7.4 - 2026-11-13
+
+### Added
+
+- `stack capacity` reads a captured scheduler snapshot and reports, per node and
+  for an exact request, the eligible nodes, the nodes that can fit it and the
+  free fitting slots; missing data stays unknown. The same advice is available
+  through MCP.
+- `stack shard` takes an optional storage policy and attaches storage advice to
+  every build phase: phases that fit the shared inode budget keep shared
+  scratch, the rest go to node-local disk where the captured capacity allows.
+  Footprint tables can mark packages that need a real disk.
+- The MCP server is described for the MCP Registry as
+  `io.github.stackhands/eb-stack`, and a workflow publishes it with GitHub
+  Actions OIDC.
+
+### Fixed
+
+- Materialized execution lists are bound to their exact bytes, and phase advice
+  to the generated list.
+- Opaque shard roots keep their disk requirements.
+- GPU slot division is checked, and CPU advice survives unknown GPU data.
+- The footprint buffer used for estimates is the one hashed into the plan.
+- File robot roots are normalized in `recipe check`.
+
+### Changed
+
+- The repository is `stackhands/eb-stack`; links, docs and the SBOM tool vendor
+  name the stackhands organisation.
+
 ## 0.7.3 - 2026-11-11
 
 ### Distribution

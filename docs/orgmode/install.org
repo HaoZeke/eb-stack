@@ -1,8 +1,8 @@
 #+TITLE: Installation
 #+OPTIONS: toc:t num:nil author:nil
 
-~eb-stack~ 0.7.3 is the crates.io package ~eb_stack~ and the GitHub
-release ~v0.7.3~. The binary name is ~eb-stack~. A release archive is a prebuilt binary. Building from a checkout, or
+~eb-stack~ 0.7.4 is the crates.io package ~eb_stack~ and the GitHub
+release ~v0.7.4~. The binary name is ~eb-stack~. A release archive is a prebuilt binary. Building from a checkout, or
 ~cargo install eb_stack --locked~, needs Rust 1.90 or newer: that floor is ~rust-version~ in
 the root ~Cargo.toml~. ~rustup toolchain install stable~ provides a
 new enough compiler.
@@ -19,8 +19,8 @@ hosts with different glibc releases. The GNU Linux archive remains available
 for hosts whose glibc satisfies its linkage requirements.
 
 #+begin_src bash
-curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz
-curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-x86_64-unknown-linux-musl.tar.xz
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
 sha256sum -c eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
 tar -xf eb_stack-x86_64-unknown-linux-musl.tar.xz
 #+end_src
@@ -38,18 +38,18 @@ The shell installer picks the archive for the host:
 
 #+begin_src bash
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-installer.sh \
+  https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-installer.sh \
   | sh
 eb-stack --version
 #+end_src
 
-The script prints ~downloading eb_stack 0.7.3~ and the target triple,
+The script prints ~downloading eb_stack 0.7.4~ and the target triple,
 then ~installing to~ the Cargo bin directory (~$CARGO_HOME/bin~, or
 ~~/.cargo/bin~ when ~CARGO_HOME~ is unset), then ~everything's installed!~.
 ~eb-stack --version~ prints:
 
 #+begin_example
-eb-stack 0.7.3
+eb-stack 0.7.4
 #+end_example
 
 Add that bin directory to ~PATH~ when it is absent from the shell's ~PATH~.
@@ -60,8 +60,8 @@ The checksum file from the release is a ~sha256sum~ line. The archive
 contains ~eb-stack~, ~LICENSE~, ~README.md~, and ~CHANGELOG.md~.
 
 #+begin_src bash
-curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz
-curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-x86_64-unknown-linux-gnu.tar.xz
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 sha256sum -c eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
 ./eb_stack-x86_64-unknown-linux-gnu/eb-stack --version
@@ -69,7 +69,7 @@ tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
 
 #+begin_example
 eb_stack-x86_64-unknown-linux-gnu.tar.xz: OK
-eb-stack 0.7.3
+eb-stack 0.7.4
 #+end_example
 
 The checksum file records the SHA-256 of the archive for the selected release.
@@ -85,7 +85,7 @@ that directory to the user ~Path~.
 
 #+begin_src bash
 curl -fsSL -o eb_stack-x86_64-pc-windows-msvc.zip \
-  https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-pc-windows-msvc.zip
+  https://github.com/stackhands/eb-stack/releases/download/v0.7.4/eb_stack-x86_64-pc-windows-msvc.zip
 unzip -l eb_stack-x86_64-pc-windows-msvc.zip
 #+end_src
 
@@ -108,8 +108,8 @@ cargo install eb_stack --locked
 eb-stack --version
 #+end_src
 
-~cargo install~ builds the 0.7.3 crate. The resulting ~eb-stack --version~
-prints ~eb-stack 0.7.3~, the same string as the GitHub release binary.
+~cargo install~ builds the 0.7.4 crate. The resulting ~eb-stack --version~
+prints ~eb-stack 0.7.4~, the same string as the GitHub release binary.
 ~cargo binstall~ is a separate program. Stock Cargo on this host
 answers:
 
@@ -134,7 +134,7 @@ eb-stack --version
 A release build of this tree prints:
 
 #+begin_example
-eb-stack 0.7.3
+eb-stack 0.7.4
 #+end_example
 
 ~=~/.local/bin~ has to be on ~PATH~. The test suite is ~cargo test

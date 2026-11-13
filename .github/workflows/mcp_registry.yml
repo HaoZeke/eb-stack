@@ -4,11 +4,11 @@
 # which is what the registry checks for the io.github.stackhands/ namespace;
 # no token is stored. The registry also reads the crates.io README of the
 # version in server.json for its mcp-name line, so this runs after that
-# version is on crates.io: on a published release, or by hand.
+# version is on crates.io: called by publish.yml after the crate is out,
+# or by hand.
 name: mcp-registry
 on:
-  release:
-    types: [published]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: server.json names the crate version on crates.io
         run: |
           set -euo pipefail
