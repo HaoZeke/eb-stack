@@ -22,7 +22,7 @@ if search 'href="[^"]+\.rst([?#][^"]*)?"'; then
   exit 1
 fi
 
-if search 'github\.com/HaoZeke/eb-stack/blob/[^"]+/docs/orgmode/[^"]+\.rst'; then
+if search 'github\.com/stackhands/eb-stack/blob/[^"]+/docs/orgmode/[^"]+\.rst'; then
   echo "rendered documentation edit links target generated RST instead of org sources" >&2
   exit 1
 fi
