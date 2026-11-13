@@ -12,7 +12,7 @@ First commands, before any `package bump`:
 
 ```sh
 PACKSET_URL=http://127.0.0.1:8761
-PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack
+PACKSET_WORKSPACE=git:github.com/stackhands/eb-stack
 packset pin
 ljos search bump
 ```

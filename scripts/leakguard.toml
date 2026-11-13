@@ -1,6 +1,6 @@
 # The public document manifest for the generated llms files.
 #
-# A link into this repository (github.com/HaoZeke/eb-stack/blob/main/...) in
+# A link into this repository (github.com/stackhands/eb-stack/blob/main/...) in
 # llms.txt or llms-full.txt must name a file listed under `public_repo_paths`
 # or one under a `public_repo_prefixes` directory; any other repository link is
 # refused by scripts/llms_leakguard.py before the files are written, so the

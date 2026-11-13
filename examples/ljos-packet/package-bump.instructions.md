@@ -1,6 +1,6 @@
 # packset set `package-bump`
 
-Pin with `PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack packset pin package-bump`.
+Pin with `PACKSET_WORKSPACE=git:github.com/stackhands/eb-stack packset pin package-bump`.
 Atoms are `package-bump.jsonl`. This file is the set's instructions card.
 
 packset and ljos run on the laptop. Do not ssh them to the builder.

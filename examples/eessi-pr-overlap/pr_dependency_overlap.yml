@@ -63,7 +63,7 @@ jobs:
           set -euo pipefail
           tarball=eb_stack-x86_64-unknown-linux-gnu.tar.xz
           curl -fsSL -o "$tarball" \
-            "https://github.com/HaoZeke/eb-stack/releases/download/${EB_STACK_VERSION}/${tarball}"
+            "https://github.com/stackhands/eb-stack/releases/download/${EB_STACK_VERSION}/${tarball}"
           echo "${EB_STACK_SHA256}  ${tarball}" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/eb-stack"
           tar -xJf "$tarball" -C "$RUNNER_TEMP/eb-stack" --strip-components=1

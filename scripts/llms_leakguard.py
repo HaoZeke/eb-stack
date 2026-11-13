@@ -23,7 +23,7 @@ CHECKED = ("llms.txt", "llms-full.txt")
 # Where a URL names a file of this repository, at any ref: the manifest governs
 # the file, not the ref it is read at. Host and owner/repository compare
 # case-insensitively (GitHub treats them so); the document path keeps its case.
-REPO_OWNER = "haozeke"
+REPO_OWNER = "stackhands"
 REPO_NAME = "eb-stack"
 GITHUB_HOSTS = ("github.com", "www.github.com")
 GITHUB_VIEWS = ("blob", "raw", "tree")

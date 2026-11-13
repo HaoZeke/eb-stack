@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import llms_leakguard as guard  # noqa: E402
 
-REPO = "https://github.com/HaoZeke/eb-stack"
+REPO = "https://github.com/stackhands/eb-stack"
 
 
 class ManifestTest(unittest.TestCase):
@@ -57,19 +57,19 @@ class ManifestTest(unittest.TestCase):
         self.assertFalse(allow.allows(f"{REPO}/raw/main/.private/notes.md"))
         self.assertFalse(allow.allows(f"{REPO}/blob/feature-x/.private/notes.md"))
         self.assertFalse(allow.allows(f"{REPO}/tree/main/.private"))
-        self.assertFalse(allow.allows("https://raw.githubusercontent.com/HaoZeke/eb-stack/main/.private/notes.md"))
-        self.assertTrue(allow.allows("https://raw.githubusercontent.com/HaoZeke/eb-stack/main/README.md"))
-        self.assertFalse(allow.allows("https://www.github.com/HaoZeke/eb-stack/blob/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://raw.githubusercontent.com/stackhands/eb-stack/main/.private/notes.md"))
+        self.assertTrue(allow.allows("https://raw.githubusercontent.com/stackhands/eb-stack/main/README.md"))
+        self.assertFalse(allow.allows("https://www.github.com/stackhands/eb-stack/blob/main/.private/notes.md"))
 
     def test_host_port_userinfo_and_case_do_not_change_the_repository(self):
         allow = self.manifest()
-        self.assertFalse(allow.allows("https://github.com/haozeke/eb-stack/blob/main/.private/notes.md"))
-        self.assertFalse(allow.allows("https://GitHub.com/HaoZeke/EB-STACK/blob/main/.private/notes.md"))
-        self.assertFalse(allow.allows("https://github.com:443/HaoZeke/eb-stack/blob/main/.private/notes.md"))
-        self.assertFalse(allow.allows("https://reader@github.com/HaoZeke/eb-stack/blob/main/.private/notes.md"))
-        self.assertFalse(allow.allows("https://reader:token@github.com:443/HaoZeke/eb-stack/raw/main/.private/notes.md"))
-        self.assertFalse(allow.allows("https://RAW.githubusercontent.com/haozeke/eb-stack/main/.private/notes.md"))
-        self.assertTrue(allow.allows("https://github.com:443/haozeke/eb-stack/blob/main/README.md"))
+        self.assertFalse(allow.allows("https://github.com/stackhands/eb-stack/blob/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://GitHub.com/stackhands/EB-STACK/blob/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://github.com:443/stackhands/eb-stack/blob/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://reader@github.com/stackhands/eb-stack/blob/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://reader:token@github.com:443/stackhands/eb-stack/raw/main/.private/notes.md"))
+        self.assertFalse(allow.allows("https://RAW.githubusercontent.com/STACKHANDS/eb-stack/main/.private/notes.md"))
+        self.assertTrue(allow.allows("https://github.com:443/stackhands/eb-stack/blob/main/README.md"))
         # The document path keeps its case: a differently cased name is another file.
         self.assertFalse(allow.allows(f"{REPO}/blob/main/readme.md"))
         self.assertTrue(allow.allows(f"{REPO}/blob/main/docs/Orgmode/Index.org"))

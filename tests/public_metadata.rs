@@ -258,7 +258,7 @@ fn unpublished_endpoints_are_excluded_from_external_link_checks() {
         "https://crates.io/crates/eb_stack",
         "https://docs.rs/eb_stack",
         "https://eb-stack.rgoswami.me/tutorial.html",
-        "https://github.com/HaoZeke/eb-stack",
+        "https://github.com/stackhands/eb-stack",
         "https://github.com/example/project/commit/example.patch",
     ] {
         assert!(

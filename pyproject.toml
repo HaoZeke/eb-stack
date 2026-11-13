@@ -22,5 +22,5 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://eb-stack.rgoswami.me"
-Repository = "https://github.com/HaoZeke/eb-stack"
+Repository = "https://github.com/stackhands/eb-stack"
 Documentation = "https://eb-stack.rgoswami.me"

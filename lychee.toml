@@ -14,7 +14,7 @@ exclude = [
   '^https://crates\.io/',
   '^https://docs\.rs/',
   '^https://eb-stack\.rgoswami\.me/',
-  '^https://github\.com/HaoZeke/eb-stack',
+  '^https://github\.com/stackhands/eb-stack',
   '^https://github\.com/example/',
   # Easyconfig and API templates, not documents. A placeholder in angle
   # brackets is dropped when the URL is read back out of HTML, and the
