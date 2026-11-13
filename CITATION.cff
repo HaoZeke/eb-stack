@@ -8,7 +8,7 @@ authors:
     email: rgoswami@ieee.org
     orcid: "https://orcid.org/0000-0002-2393-8056"
 license: MIT
-repository-code: "https://github.com/HaoZeke/eb-stack"
+repository-code: "https://github.com/stackhands/eb-stack"
 url: "https://eb-stack.rgoswami.me"
 version: 0.7.3
 keywords:

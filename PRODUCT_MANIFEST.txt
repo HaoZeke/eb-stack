@@ -1,5 +1,5 @@
 product=eb-stack
-repo=https://github.com/HaoZeke/eb-stack
+repo=https://github.com/stackhands/eb-stack
 package=eb_stack
 binary=eb-stack
 engine=resolvo_cdcl_sat

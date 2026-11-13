@@ -15,8 +15,8 @@ The GitHub release and the crates.io package are 0.7.3 and carry every command h
 
 The [glossary](docs/orgmode/reference/glossary.org) defines closure, generation, baseline, and reachability. The longer path is the [tutorial](docs/orgmode/tutorial.org).
 
-[![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
-[![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
+[![CI](https://github.com/stackhands/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/stackhands/eb-stack/actions/workflows/ci_test.yml)
+[![Docs](https://github.com/stackhands/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/stackhands/eb-stack/actions/workflows/ci_docs.yml)
 [![crates.io](https://img.shields.io/crates/v/eb_stack.svg)](https://crates.io/crates/eb_stack)
 [![docs](https://img.shields.io/badge/docs-eb--stack.rgoswami.me-blue)](https://eb-stack.rgoswami.me)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -86,7 +86,7 @@ installed on its own; it then installs the release binary.
 From this checkout:
 
 ```sh
-git clone https://github.com/HaoZeke/eb-stack.git
+git clone https://github.com/stackhands/eb-stack.git
 cd eb-stack
 cargo build --locked --release
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack

@@ -68,14 +68,14 @@ html_css_files = ["custom.css"]
 
 html_context = {
     "source_type": "github",
-    "source_user": "HaoZeke",
+    "source_user": "stackhands",
     "source_repo": "eb-stack",
     "source_version": "main",
     "source_docs_path": "/docs/orgmode/",
 }
 
 html_theme_options = {
-    "github_url": "https://github.com/HaoZeke/eb-stack",
+    "github_url": "https://github.com/stackhands/eb-stack",
     "accent_color": "teal",
     "dark_code": True,
     "show_ai_links": False,
@@ -105,7 +105,7 @@ html_theme_options = {
         },
         {
             "title": "GitHub",
-            "url": "https://github.com/HaoZeke/eb-stack",
+            "url": "https://github.com/stackhands/eb-stack",
             "external": True,
         },
     ],

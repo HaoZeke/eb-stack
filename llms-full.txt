@@ -63,28 +63,28 @@ This file is the manual in one document. The short index is llms.txt.
 # Citation
 
   For unreleased source, cite the repository revision you used. The
-  [CITATION.cff](https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff) file provides structured author and project metadata.
+  [CITATION.cff](https://github.com/stackhands/eb-stack/blob/main/CITATION.cff) file provides structured author and project metadata.
 
 ```text
-Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/eb-stack
+Rohit Goswami, eb-stack (source revision <commit>), https://github.com/stackhands/eb-stack
 ```
 
 # License
 
-  MIT License. See [LICENSE](https://github.com/HaoZeke/eb-stack/blob/main/LICENSE) in the repository.
+  MIT License. See [LICENSE](https://github.com/stackhands/eb-stack/blob/main/LICENSE) in the repository.
 
 # Discovery
 
-  [llms.txt](https://github.com/HaoZeke/eb-stack/blob/main/llms.txt) indexes
+  [llms.txt](https://github.com/stackhands/eb-stack/blob/main/llms.txt) indexes
   this manual.
-  [llms-full.txt](https://github.com/HaoZeke/eb-stack/blob/main/llms-full.txt)
+  [llms-full.txt](https://github.com/stackhands/eb-stack/blob/main/llms-full.txt)
   repeats every page in one file.
-  [Contributing](https://github.com/HaoZeke/eb-stack/blob/main/CONTRIBUTING.md) describes
+  [Contributing](https://github.com/stackhands/eb-stack/blob/main/CONTRIBUTING.md) describes
   contribution and validation requirements. The skills for inspect, plan,
   bump, a stack SBOM, pull-request overlap, and the stdio server are under
-  [skills/](https://github.com/HaoZeke/eb-stack/tree/main/skills). The Model
+  [skills/](https://github.com/stackhands/eb-stack/tree/main/skills). The Model
   Context Protocol manifest is
-  [server.json](https://github.com/HaoZeke/eb-stack/blob/main/server.json).
+  [server.json](https://github.com/stackhands/eb-stack/blob/main/server.json).
   Client configuration is the [server page](https://eb-stack.rgoswami.me/reference/mcp.html.md).
 
 # Build these docs
@@ -233,8 +233,8 @@ hosts with different glibc releases. The GNU Linux archive remains available
 for hosts whose glibc satisfies its linkage requirements.
 
 ```bash
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
 sha256sum -c eb_stack-x86_64-unknown-linux-musl.tar.xz.sha256
 tar -xf eb_stack-x86_64-unknown-linux-musl.tar.xz
 ```
@@ -252,7 +252,7 @@ The shell installer picks the archive for the host:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-installer.sh \
+  https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-installer.sh \
   | sh
 eb-stack --version
 ```
@@ -274,8 +274,8 @@ The checksum file from the release is a `sha256sum` line. The archive
 contains `eb-stack`, `LICENSE`, `README.md`, and `CHANGELOG.md`.
 
 ```bash
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz
-curl -fsSL -O https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz
+curl -fsSL -O https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 sha256sum -c eb_stack-x86_64-unknown-linux-gnu.tar.xz.sha256
 tar -xJf eb_stack-x86_64-unknown-linux-gnu.tar.xz
 ./eb_stack-x86_64-unknown-linux-gnu/eb-stack --version
@@ -299,7 +299,7 @@ that directory to the user `Path`.
 
 ```bash
 curl -fsSL -o eb_stack-x86_64-pc-windows-msvc.zip \
-  https://github.com/HaoZeke/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-pc-windows-msvc.zip
+  https://github.com/stackhands/eb-stack/releases/download/v0.7.3/eb_stack-x86_64-pc-windows-msvc.zip
 unzip -l eb_stack-x86_64-pc-windows-msvc.zip
 ```
 
@@ -338,7 +338,7 @@ error: no such command: `binstall`
 # From a git checkout
 
 ```bash
-git clone https://github.com/HaoZeke/eb-stack.git
+git clone https://github.com/stackhands/eb-stack.git
 cd eb-stack
 cargo build --locked --release
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
@@ -10172,8 +10172,8 @@ class-to-artifact troubleshooting table. The protocol is:
 
 Hermes owns this whole loop. OMP workers use finding ownership to divide
 residual diagnosis without racing on the state file. The executable procedures
-are [new package](https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md)
-and [annual bump](https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md).
+are [new package](https://github.com/stackhands/eb-stack/blob/main/skills/new-package/SKILL.md)
+and [annual bump](https://github.com/stackhands/eb-stack/blob/main/skills/annual-bump/SKILL.md).
 
 # Rust API
 
@@ -13705,7 +13705,7 @@ to crates.io.
 
 Cargo, CITATION, and Sphinx report **0.7.3**. The notes for every release
 since 0.3.0, 0.4.0 through 0.7.3, are the sections of
-[CHANGELOG.md](https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md).
+[CHANGELOG.md](https://github.com/stackhands/eb-stack/blob/main/CHANGELOG.md).
 
 The version-one design provides:
 

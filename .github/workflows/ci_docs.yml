@@ -116,7 +116,7 @@ jobs:
           path: docs/build
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'HaoZeke/eb-stack'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'stackhands/eb-stack'
     needs: build
     runs-on: ubuntu-latest
     permissions:

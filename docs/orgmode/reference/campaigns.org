@@ -199,5 +199,5 @@ class-to-artifact troubleshooting table. The protocol is:
 
 Hermes owns this whole loop. OMP workers use finding ownership to divide
 residual diagnosis without racing on the state file. The executable procedures
-are [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][new package]]
-and [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual bump]].
+are [[https://github.com/stackhands/eb-stack/blob/main/skills/new-package/SKILL.md][new package]]
+and [[https://github.com/stackhands/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual bump]].

@@ -223,28 +223,28 @@ Version 0.7.3 is the crates.io package and the GitHub release. ``package plan`` 
 * Citation
 
   For unreleased source, cite the repository revision you used. The
-  [[https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff][CITATION.cff]] file provides structured author and project metadata.
+  [[https://github.com/stackhands/eb-stack/blob/main/CITATION.cff][CITATION.cff]] file provides structured author and project metadata.
 
 #+begin_src text
-Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/eb-stack
+Rohit Goswami, eb-stack (source revision <commit>), https://github.com/stackhands/eb-stack
 #+end_src
 
 * License
 
-  MIT License. See [[https://github.com/HaoZeke/eb-stack/blob/main/LICENSE][LICENSE]] in the repository.
+  MIT License. See [[https://github.com/stackhands/eb-stack/blob/main/LICENSE][LICENSE]] in the repository.
 
 * Discovery
 
-  [[https://github.com/HaoZeke/eb-stack/blob/main/llms.txt][llms.txt]] indexes
+  [[https://github.com/stackhands/eb-stack/blob/main/llms.txt][llms.txt]] indexes
   this manual.
-  [[https://github.com/HaoZeke/eb-stack/blob/main/llms-full.txt][llms-full.txt]]
+  [[https://github.com/stackhands/eb-stack/blob/main/llms-full.txt][llms-full.txt]]
   repeats every page in one file.
-  [[https://github.com/HaoZeke/eb-stack/blob/main/CONTRIBUTING.md][Contributing]] describes
+  [[https://github.com/stackhands/eb-stack/blob/main/CONTRIBUTING.md][Contributing]] describes
   contribution and validation requirements. The skills for inspect, plan,
   bump, a stack SBOM, pull-request overlap, and the stdio server are under
-  [[https://github.com/HaoZeke/eb-stack/tree/main/skills][skills/]]. The Model
+  [[https://github.com/stackhands/eb-stack/tree/main/skills][skills/]]. The Model
   Context Protocol manifest is
-  [[https://github.com/HaoZeke/eb-stack/blob/main/server.json][server.json]].
+  [[https://github.com/stackhands/eb-stack/blob/main/server.json][server.json]].
   Client configuration is the [[file:reference/mcp.org][server page]].
 
 * Build these docs

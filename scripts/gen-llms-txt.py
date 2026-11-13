@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ORG_ROOT = ROOT / "docs" / "orgmode"
 LLM_ROOT = ROOT / "docs" / "llm"
 SITE = "https://eb-stack.rgoswami.me"
-REPO = "https://github.com/HaoZeke/eb-stack/blob/main"
+REPO = "https://github.com/stackhands/eb-stack/blob/main"
 INDEX_NAME = "llms.txt"
 FULL_NAME = "llms-full.txt"
 
